@@ -74,6 +74,16 @@ pub fn hints_text(pairs: &[(&str, &str)]) -> String {
         .join("   ")
 }
 
+/// What a row of buttons reads with round ends: each label, a blank and its
+/// key between caps, two blanks between one button and the next.
+pub fn buttons_text(buttons: &[(&str, &str)]) -> String {
+    buttons
+        .iter()
+        .map(|(label, key)| format!("{CAP_L}{label} {key}{CAP_R}"))
+        .collect::<Vec<_>>()
+        .join("  ")
+}
+
 /// What a strip running the whole of `row` holds between its two round ends,
 /// or `None` when the row doesn't start and end with them.
 pub fn strip_inside(row: &str) -> Option<&str> {

@@ -7,7 +7,7 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
-use harness::{HYDRA, ROWS, Tinkery};
+use harness::{HYDRA, ROWS, Tinkery, buttons_text};
 use tempfile::TempDir;
 use vt100::Color;
 
@@ -394,7 +394,10 @@ fn unsaved_files_ask_once_and_cancel_changes_nothing() {
     // One card for both files, naming them, with its three buttons.
     tinkery.wait_for_text("2 files have unsaved changes", WAIT);
     tinkery.wait_for_text("a.txt, b.txt", WAIT);
-    tinkery.wait_for_text(" Save all    Discard    Cancel ", WAIT);
+    tinkery.wait_for_text(
+        &buttons_text(&[("Save all", "S"), ("Discard", "D"), ("Cancel", "Esc")]),
+        WAIT,
+    );
     assert!(
         !tinkery
             .screen()

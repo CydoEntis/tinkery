@@ -1,6 +1,7 @@
 //! Creating, renaming and refusing names from the file tree, on a temp copy of the
 //! project fixture so the real one never changes. Delete goes to the OS trash, so
-//! it's covered by unit tests with a fake trash instead.
+//! what it does is covered by unit tests with a fake trash instead; here it is
+//! asked and cancelled.
 
 mod harness;
 
@@ -8,7 +9,7 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
-use harness::{CAP_L, CAP_R, COLS, HYDRA, ROWS, Tinkery};
+use harness::{CAP_L, CAP_R, COLS, HYDRA, ROWS, Tinkery, buttons_text};
 use vt100::Color;
 
 const START: Duration = Duration::from_secs(10);
@@ -426,4 +427,72 @@ fn mono_draws_the_prompt_bar_without_nerd_font_glyphs() {
     assert_eq!(tinkery.bold_text(row), "⏎esc");
     let word = COLS - 3;
     assert_ne!(tinkery.fg_at(word, row), tinkery.bg_at(word, row));
+}
+
+#[test]
+fn d_asks_before_trashing_with_a_red_button_and_cancel_keeps_the_file() {
+    // tinkery's `err`, `bg`, `btn` and `accent`.
+    const ERR: Color = Color::Rgb(0xff, 0x5d, 0x4d);
+    const GROUND: Color = Color::Rgb(0x11, 0x0f, 0x0e);
+    const WAITING: Color = Color::Rgb(0x33, 0x2a, 0x25);
+    const ACCENT: Color = Color::Rgb(0xff, 0x8a, 0x3d);
+    const QUESTION: &str = "Move notes.txt to the trash?";
+    // At 100x30 the card is a panel 49 wide (the 41-cell explanation + 8) from
+    // column 25 and row 10: its text from column 28, its buttons on row 16.
+    const TEXT_X: u16 = 28;
+    const BUTTON_ROW: u16 = 16;
+    const CANCEL_X: u16 = 47;
+
+    let (dir, mut tinkery) = open_copy_with("");
+    let notes = dir.path().join("notes.txt");
+    for _ in 0..3 {
+        tinkery.send_keys("down");
+    }
+    tinkery.send_keys("d");
+    tinkery.wait_for_text(QUESTION, WAIT);
+    let screen = tinkery.screen();
+    assert_eq!(tinkery.text_col(12, QUESTION), Some(TEXT_X), "{screen:#?}");
+    assert_eq!(
+        tinkery.text_col(13, "You can restore it from the system trash."),
+        Some(TEXT_X),
+        "{screen:#?}"
+    );
+    assert_eq!(
+        tinkery.text_col(
+            BUTTON_ROW,
+            &buttons_text(&[("Move to trash", "Y"), ("Cancel", "Esc")])
+        ),
+        Some(TEXT_X),
+        "{screen:#?}"
+    );
+    // Trashing removes the file, so the focused button is red, with text that
+    // reads on it; Cancel waits.
+    assert_eq!(tinkery.bg_text(BUTTON_ROW, ERR), "Move to trash Y");
+    assert_eq!(tinkery.fg_at(TEXT_X + 1, BUTTON_ROW), GROUND);
+    assert!(tinkery.bold_at(TEXT_X + 1, BUTTON_ROW));
+    assert_eq!(tinkery.bg_text(BUTTON_ROW, WAITING), "Cancel Esc");
+    assert_eq!(tinkery.bg_text(BUTTON_ROW, ACCENT), "");
+
+    // Tab to Cancel, which is the accent with the focus, and Enter: nothing
+    // is trashed.
+    tinkery.send_keys("tab");
+    tinkery.wait_for_bg(CANCEL_X + 1, BUTTON_ROW, ACCENT, WAIT);
+    assert_eq!(tinkery.bg_text(BUTTON_ROW, WAITING), "Move to trash Y");
+    tinkery.send_keys("enter");
+    tinkery.wait_for_text_gone(QUESTION, WAIT);
+    assert!(notes.exists());
+
+    // So do Esc, N, a click on Cancel and a click off the card.
+    for cancel in ["esc", "n", "button", "outside"] {
+        tinkery.send_keys("d");
+        tinkery.wait_for_text(QUESTION, WAIT);
+        match cancel {
+            "button" => tinkery.click(CANCEL_X + 3, BUTTON_ROW),
+            "outside" => tinkery.click(60, 25),
+            key => tinkery.send_keys(key),
+        }
+        tinkery.wait_for_text_gone(QUESTION, WAIT);
+        assert!(notes.exists(), "{cancel}");
+    }
+    assert!(tree_rows(&tinkery.screen()).contains(&"    notes.txt".to_string()));
 }

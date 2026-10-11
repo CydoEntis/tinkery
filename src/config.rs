@@ -85,12 +85,28 @@ pub struct UiConfig {
     /// Pill ends are the Nerd Font half-circles; off squares them, for a font
     /// that would show boxes instead.
     pub pill_caps: bool,
+    /// The edge cards and panels are drawn with.
+    pub corners: Corners,
 }
 
 impl Default for UiConfig {
     fn default() -> Self {
-        Self { pill_caps: true }
+        Self {
+            pill_caps: true,
+            corners: Corners::default(),
+        }
     }
+}
+
+/// `[ui] corners`: how the edge of a card is drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Corners {
+    /// Eighth blocks that meet the card's fill, with blank corners.
+    #[default]
+    Flush,
+    /// Box-drawing lines with round corners.
+    Rounded,
 }
 
 /// `[keys]`: action name to one key or a list of keys, in the spec's notation.
@@ -265,6 +281,8 @@ pub const TEMPLATE: &str = r#"# Tinkery's settings. Remove the `#` in front of a
 [ui]
 # Round pill ends need a Nerd Font; false squares them off.
 # pill_caps = true
+# The edge of cards and dialogs: "flush" or "rounded".
+# corners = "flush"
 
 [keys]
 # action = "key" or ["key", "key"]
@@ -570,6 +588,58 @@ pill_caps = false
         );
         assert!(TEMPLATE.contains(&line), "{line}");
         let shown = TEMPLATE.replace("# pill_caps", "pill_caps");
+        assert_eq!(parse(&shown).config.ui, UiConfig::default());
+    }
+
+    #[test]
+    fn corners_is_read_from_ui_and_listed_in_the_template_with_its_default() {
+        assert_eq!(UiConfig::default().corners, Corners::Flush);
+        assert_eq!(parse("").config.ui.corners, Corners::Flush);
+        for (written, corners) in [("flush", Corners::Flush), ("rounded", Corners::Rounded)] {
+            let text = format!(
+                "[ui]
+corners = \"{written}\"
+"
+            );
+            let loaded = parse(&text);
+            assert!(loaded.error.is_none(), "{:?}", loaded.error);
+            assert_eq!(loaded.config.ui.corners, corners);
+            // The other `[ui]` setting keeps its default beside it.
+            assert!(loaded.config.ui.pill_caps);
+            // Both readings of a file carry it: startup's and a save's.
+            let (settings, message) = Settings::startup(loaded);
+            assert_eq!(message, None);
+            assert_eq!(settings.ui.corners, corners);
+            assert_eq!(Settings::from_text(&text).unwrap().ui.corners, corners);
+        }
+        // Anything else is a mistake in the file, not a third kind of edge.
+        assert!(
+            parse(
+                "[ui]
+corners = \"square\"
+"
+            )
+            .error
+            .is_some()
+        );
+        assert!(
+            Settings::from_text(
+                "[ui]
+corners = \"square\"
+"
+            )
+            .is_err()
+        );
+        // The template shows the default under `[ui]`, commented out, and
+        // names both values.
+        assert!(TEMPLATE.contains(
+            "# corners = \"flush\"
+"
+        ));
+        assert!(TEMPLATE.contains("\"flush\" or \"rounded\""));
+        let shown = TEMPLATE
+            .replace("# pill_caps", "pill_caps")
+            .replace("# corners", "corners");
         assert_eq!(parse(&shown).config.ui, UiConfig::default());
     }
 

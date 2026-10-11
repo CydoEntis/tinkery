@@ -240,78 +240,37 @@ enum FocusStop {
     Debug,
 }
 
+/// The buttons of each confirm card, the action first and the way out last.
+/// An answer that loses work (unsaved edits, a backup, a file, every match in
+/// the project) is the danger button.
 const UNSAVED: &[Choice] = &[
-    Choice {
-        key: 's',
-        label: "Save",
-    },
-    Choice {
-        key: 'd',
-        label: "Discard",
-    },
-    Choice {
-        key: 'c',
-        label: "Cancel",
-    },
+    Choice::action('s', "Save"),
+    Choice::danger('d', "Discard"),
+    Choice::cancel('c', "Cancel"),
 ];
 
 const UNSAVED_SWITCH: &[Choice] = &[
-    Choice {
-        key: 's',
-        label: "Save all",
-    },
-    Choice {
-        key: 'd',
-        label: "Discard",
-    },
-    Choice {
-        key: 'c',
-        label: "Cancel",
-    },
+    Choice::action('s', "Save all"),
+    Choice::danger('d', "Discard"),
+    Choice::cancel('c', "Cancel"),
 ];
 
+/// No way out: Esc asks again (see `answer_prompt`).
 const RECOVER: &[Choice] = &[
-    Choice {
-        key: 'r',
-        label: "Recover",
-    },
-    Choice {
-        key: 'd',
-        label: "Discard",
-    },
+    Choice::action('r', "Recover"),
+    Choice::danger('d', "Discard"),
 ];
 
 const REPLACE: &[Choice] = &[
-    Choice {
-        key: 'r',
-        label: "Replace",
-    },
-    Choice {
-        key: 'c',
-        label: "Cancel",
-    },
+    Choice::danger('r', "Replace"),
+    Choice::cancel('c', "Cancel"),
 ];
 
-const MOVE_KEY: &[Choice] = &[
-    Choice {
-        key: 'y',
-        label: "Yes",
-    },
-    Choice {
-        key: 'n',
-        label: "No",
-    },
-];
+const MOVE_KEY: &[Choice] = &[Choice::action('y', "Yes"), Choice::cancel('n', "No")];
 
 const TRASH: &[Choice] = &[
-    Choice {
-        key: 'y',
-        label: "Move to trash",
-    },
-    Choice {
-        key: 'n',
-        label: "Cancel",
-    },
+    Choice::danger('y', "Move to trash"),
+    Choice::cancel('n', "Cancel"),
 ];
 
 /// A second left click on the same cell within this long selects a word.
@@ -4950,7 +4909,7 @@ impl App {
         }
         if let Some(prompt) = self.prompt {
             self.confirm(prompt)
-                .render(theme, frame, frame.area(), self.prompt_button);
+                .render(self.look, theme, frame, frame.area(), self.prompt_button);
         }
     }
 }
@@ -5116,7 +5075,7 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     use crate::clipboard::FakeClipboard;
-    use crate::config::{KeyBinding, KeysConfig};
+    use crate::config::{Corners, KeyBinding, KeysConfig};
     use crate::keymap::key_event;
 
     fn key(notation: &str) -> AppEvent {
@@ -5689,6 +5648,43 @@ pill_caps = false
             .is_err()
         );
         assert!(!app.look.pill_caps);
+    }
+
+    #[test]
+    fn saving_the_config_file_applies_corners() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = app_on_file(dir.path(), "config.toml", "");
+        assert_eq!(app.look.corners, Corners::Flush);
+        app.edit(|b| {
+            b.paste(
+                "[ui]
+corners = \"rounded\"
+",
+            )
+        });
+        assert!(app.save());
+        assert_eq!(app.message.as_deref(), Some("settings applied"));
+        assert_eq!(app.look.corners, Corners::Rounded);
+        // A value that isn't one of the two keeps the edge in use.
+        assert!(
+            app.apply_config_text(
+                "[ui]
+corners = \"square\"
+"
+            )
+            .is_err()
+        );
+        assert_eq!(app.look.corners, Corners::Rounded);
+        // Taking the line out brings the default back.
+        press(&mut app, &["ctrl+a"]);
+        app.edit(|b| {
+            b.paste(
+                "theme = \"nord\"
+",
+            )
+        });
+        assert!(app.save());
+        assert_eq!(app.look.corners, Corners::Flush);
     }
 
     #[test]

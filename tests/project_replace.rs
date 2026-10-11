@@ -4,7 +4,7 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
-use harness::{ROWS, Tinkery};
+use harness::{ROWS, Tinkery, buttons_text};
 
 const START: Duration = Duration::from_secs(10);
 const WAIT: Duration = Duration::from_secs(5);
@@ -27,8 +27,16 @@ const FOOTER: &str = "alt+a replace all   esc close";
 /// The selected row's glow at its left end: hydra's `raised` (`#0f1821`) lit 30 %
 /// towards its accent (`#c3f53c`).
 const GLOW: vt100::Color = vt100::Color::Rgb(0x45, 0x5a, 0x29);
-/// Hydra's accent, where a confirm card's focused button starts.
+/// Hydra's `accent`, `err` and `btn`: a confirm card's focused button, the
+/// same when pressing it loses work, and a button that waits.
 const ACCENT: vt100::Color = vt100::Color::Rgb(0xc3, 0xf5, 0x3c);
+const ERR: vt100::Color = vt100::Color::Rgb(0xff, 0x6b, 0x6b);
+const BTN: vt100::Color = vt100::Color::Rgb(0x1d, 0x2a, 0x37);
+/// The confirm card's button row at 100x30, where ` Replace R ` starts and
+/// where ` Cancel Esc ` does.
+const BUTTON_ROW: u16 = 16;
+const REPLACE_X: u16 = 11;
+const CANCEL_X: u16 = 24;
 
 fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
     for entry in fs::read_dir(from)? {
@@ -112,17 +120,31 @@ fn replace_todo(tinkery: &mut Tinkery) {
     tinkery.wait_for_text("Replace  done", WAIT);
     tinkery.send_keys("alt+a");
     tinkery.wait_for_text(QUESTION, WAIT);
-    // At 100x30 the card is 83 wide (the 75-cell explanation + 8), centred from
-    // column 8, with its text from column 11 (SPEC_V1_LAYOUT §7.4).
+    // At 100x30 the card is a panel 83 wide (the 75-cell explanation + 8) and
+    // 9 tall, centred from column 8 and row 10, with its text from column 11
+    // (tinkery-forge spec F16).
     let screen = tinkery.screen();
+    assert_eq!(
+        tinkery.text_col(10, &"▁".repeat(81)),
+        Some(9),
+        "{screen:#?}"
+    );
     assert_eq!(tinkery.text_col(12, QUESTION), Some(11), "{screen:#?}");
     assert_eq!(tinkery.text_col(13, EXPLANATION), Some(11), "{screen:#?}");
     assert_eq!(
-        tinkery.text_col(15, "Replace    Cancel"),
-        Some(12),
+        tinkery.text_col(
+            BUTTON_ROW,
+            &buttons_text(&[("Replace", "R"), ("Cancel", "Esc")])
+        ),
+        Some(REPLACE_X),
         "{screen:#?}"
     );
-    assert_eq!(tinkery.underlined_text(15), "RC");
+    // Replacing every match loses what was there, so the focused button is
+    // red; Cancel waits.
+    assert_eq!(tinkery.bg_text(BUTTON_ROW, ERR), "Replace R");
+    assert_eq!(tinkery.bg_text(BUTTON_ROW, BTN), "Cancel Esc");
+    assert_eq!(tinkery.bg_text(BUTTON_ROW, ACCENT), "");
+    assert_eq!(tinkery.underlined_text(BUTTON_ROW), "");
 }
 
 #[test]
@@ -168,7 +190,9 @@ fn cancel_closes_the_prompt_and_changes_nothing() -> std::io::Result<()> {
     tinkery.send_keys("alt+a");
     tinkery.wait_for_text(QUESTION, WAIT);
     tinkery.send_keys("tab");
-    tinkery.wait_for_bg(22, 15, ACCENT, WAIT);
+    tinkery.wait_for_bg(CANCEL_X + 1, BUTTON_ROW, ACCENT, WAIT);
+    assert_eq!(tinkery.bg_text(BUTTON_ROW, ACCENT), "Cancel Esc");
+    assert_eq!(tinkery.bg_text(BUTTON_ROW, BTN), "Replace R");
     tinkery.send_keys("enter");
     tinkery.wait_for_text_gone("Replace 4 matches", WAIT);
     wait_for_status(&tinkery, "4 matches in 2 files");

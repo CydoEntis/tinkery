@@ -1,5 +1,6 @@
 //! The drawing kit every screen's chrome is built from: pills, chips, strips,
-//! keycaps and hint lines (tinkery-forge spec F4, F6).
+//! keycaps and hint lines, buttons, cards, panels and the dimmed backdrop
+//! (tinkery-forge spec F4 to F7).
 //!
 //! A pill is a filled run of cells whose two ends are rounded by a Nerd Font
 //! half-circle drawn in the fill colour on the ground around the pill. A font
@@ -7,6 +8,11 @@
 //! ends off, and `mono`, which must work in any terminal, never rounds them:
 //! the end is then a blank of the fill colour, so a pill is the same width
 //! either way and nothing around it moves.
+//!
+//! A card is a filled box with an edge around it and its title set into the
+//! top edge; a panel is a card centred over a screen `dim` has darkened.
+//! `[ui] corners` picks the edge: flush, drawn with eighth blocks that meet
+//! the fill exactly, or rounded box-drawing lines.
 //!
 //! Nothing here reads a global. Each function takes the `Look` and the `Theme`
 //! it draws with, and the `ground` (the colour behind the pill) where an end
@@ -17,8 +23,8 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 
-use crate::config::UiConfig;
-use crate::theme::Theme;
+use crate::config::{Corners, UiConfig};
+use crate::theme::{Theme, mix};
 
 /// The half-circle that rounds a pill's left end (Nerd Font, U+E0B6).
 pub const CAP_L: &str = "\u{e0b6}";
@@ -30,6 +36,8 @@ pub const CAP_R: &str = "\u{e0b4}";
 pub struct Look {
     /// Round pill ends with `CAP_L` and `CAP_R`; off squares them.
     pub pill_caps: bool,
+    /// The edge of a card: flush eighth blocks or rounded lines.
+    pub corners: Corners,
 }
 
 impl Default for Look {
@@ -43,6 +51,7 @@ impl Look {
     pub fn of(ui: &UiConfig) -> Look {
         Look {
             pill_caps: ui.pill_caps,
+            corners: ui.corners,
         }
     }
 
@@ -252,12 +261,367 @@ pub fn hints(
     out
 }
 
+/// What a button is for, which decides how loud it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ButtonKind {
+    /// The one Enter presses: `acc_ink` on `accent`.
+    Primary,
+    /// The one that loses or removes something: on `err`, deepened until its
+    /// text reads.
+    Danger,
+    /// Any other: `strong` on `btn`, its key in `accent`.
+    Normal,
+    /// One that should recede: `text` on `surface`, its key in `accent`.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "no confirm card has one; the splash's buttons (F20) are its first use"
+        )
+    )]
+    Ghost,
+}
+
+/// A button on `ground`: a pill of `label`, a blank and `key`, both bold, as
+/// wide as `" label key "`; without a `key`, as wide as `" label "`. `hovered`
+/// turns a normal or ghost button's fill to `hov`. `mono` has no fills to tell
+/// the kinds apart, so there primary and danger are reverse video and the
+/// others only bold.
+pub fn button(
+    look: Look,
+    theme: &Theme,
+    label: &str,
+    key: &str,
+    kind: ButtonKind,
+    hovered: bool,
+    ground: Color,
+) -> Vec<Span<'static>> {
+    let loud = matches!(kind, ButtonKind::Primary | ButtonKind::Danger);
+    let bold = Style::new().add_modifier(Modifier::BOLD);
+    if theme.flat() {
+        let style = bold.fg(theme.strong).bg(ground);
+        let style = if loud {
+            style.add_modifier(Modifier::REVERSED)
+        } else {
+            style
+        };
+        let text = if key.is_empty() {
+            format!(" {label} ")
+        } else {
+            format!(" {label} {key} ")
+        };
+        return vec![Span::styled(text, style)];
+    }
+    let (fill, fg, key_fg) = match kind {
+        ButtonKind::Primary => (theme.accent, theme.acc_ink, theme.acc_ink),
+        ButtonKind::Danger => {
+            let (fill, ink) = danger(theme);
+            (fill, ink, ink)
+        }
+        ButtonKind::Normal => (theme.btn, theme.strong, theme.accent),
+        ButtonKind::Ghost => (theme.surface, theme.text, theme.accent),
+    };
+    let fill = if hovered && !loud { theme.hov } else { fill };
+    let spans = if key.is_empty() {
+        vec![Span::styled(label.to_string(), bold.fg(fg))]
+    } else {
+        vec![
+            Span::styled(format!("{label} "), bold.fg(fg)),
+            Span::styled(key.to_string(), bold.fg(key_fg)),
+        ]
+    };
+    pill(look, theme, spans, fill, ground)
+}
+
+/// The least contrast a danger button's text may have on its fill (WCAG AA).
+const DANGER_CONTRAST: f64 = 4.5;
+/// How far one step deepens `err` towards black, and how many steps at most.
+const DANGER_STEP: f64 = 0.08;
+const DANGER_STEPS: usize = 12;
+
+/// A danger button's fill and the text colour on it: `err`, deepened a step at
+/// a time until `bg` or `strong`, whichever reads better on it, reaches
+/// `DANGER_CONTRAST`.
+fn danger(theme: &Theme) -> (Color, Color) {
+    let ink = |fill: Color| {
+        if contrast(theme.bg, fill) >= contrast(theme.strong, fill) {
+            theme.bg
+        } else {
+            theme.strong
+        }
+    };
+    let mut fill = theme.err;
+    for _ in 0..DANGER_STEPS {
+        if contrast(ink(fill), fill) >= DANGER_CONTRAST {
+            break;
+        }
+        fill = mix(fill, Color::Rgb(0, 0, 0), DANGER_STEP);
+    }
+    (fill, ink(fill))
+}
+
+/// The WCAG 2 contrast ratio of two colours, 1..=21. A terminal colour has no
+/// known brightness and counts as mid grey.
+fn contrast(a: Color, b: Color) -> f64 {
+    let luminance = |c: Color| match c {
+        Color::Rgb(r, g, b) => {
+            let linear = |v: u8| {
+                let v = f64::from(v) / 255.0;
+                if v <= 0.03928 {
+                    v / 12.92
+                } else {
+                    ((v + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
+        }
+        _ => 0.2,
+    };
+    let (a, b) = (luminance(a), luminance(b));
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
+/// The glyphs a card's edge is drawn with.
+struct Edges {
+    top: &'static str,
+    bottom: &'static str,
+    left: &'static str,
+    right: &'static str,
+    /// Top left, top right, bottom left, bottom right.
+    corners: [&'static str; 4],
+}
+
+impl Edges {
+    /// A cell has one background, and a box-drawing line runs through its
+    /// middle, so a filled card inside such a line shows a strip of the ground
+    /// between the line and the fill. The flush glyphs are eighth blocks on
+    /// the side of the cell that faces the card, so the edge meets the fill;
+    /// its corners are blank, where the two lines would meet at a point.
+    fn of(look: Look) -> Edges {
+        match look.corners {
+            Corners::Flush => Edges {
+                top: "▁",
+                bottom: "▔",
+                left: "▕",
+                right: "▏",
+                corners: [" "; 4],
+            },
+            Corners::Rounded => Edges {
+                top: "─",
+                bottom: "─",
+                left: "│",
+                right: "│",
+                corners: ["╭", "╮", "╰", "╯"],
+            },
+        }
+    }
+}
+
+/// What a card looks like: its title, edge and fill.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Card<'a> {
+    /// Set into the top edge, bold; empty leaves the edge whole.
+    pub title: &'a str,
+    /// The edge's colour.
+    pub edge: Color,
+    /// The inside's colour.
+    pub fill: Color,
+    /// The card has the focus: the edge is bold and the title takes its colour.
+    pub lit: bool,
+}
+
+impl<'a> Card<'a> {
+    /// A resting card: a `line2` edge around `raised`, its title in `text`.
+    pub fn new(theme: &Theme, title: &'a str) -> Card<'a> {
+        Card {
+            title,
+            edge: theme.line2,
+            fill: theme.raised,
+            lit: false,
+        }
+    }
+
+    /// The same card with the focus: edge and title in `color`, bold.
+    pub fn lit(self, color: Color) -> Card<'a> {
+        Card {
+            edge: color,
+            lit: true,
+            ..self
+        }
+    }
+}
+
+/// Empties the cell at `(x, y)` of its glyph, colour and weight but keeps its
+/// background: what a card's edge is drawn on.
+fn bare(buf: &mut Buffer, x: u16, y: u16) -> &mut ratatui::buffer::Cell {
+    let cell = &mut buf[(x, y)];
+    let ground = cell.bg;
+    cell.reset();
+    cell.set_bg(ground)
+}
+
+/// Draws `card` over `area` and returns the inside, a cell in from each side,
+/// filled and emptied of what was there. The edge cells keep the background
+/// already drawn in them, so the card sits on whatever is behind it; draw
+/// that first. The title starts three cells in and is cut four short of the
+/// right edge. Smaller than 4 by 2, a card draws nothing and has no inside.
+pub fn card(look: Look, theme: &Theme, buf: &mut Buffer, area: Rect, card: &Card) -> Rect {
+    let area = area.intersection(buf.area);
+    if area.width < 4 || area.height < 2 {
+        return Rect {
+            width: 0,
+            height: 0,
+            ..area
+        };
+    }
+    let inside = Rect {
+        x: area.x + 1,
+        y: area.y + 1,
+        width: area.width - 2,
+        height: area.height - 2,
+    };
+    for y in inside.top()..inside.bottom() {
+        for x in inside.left()..inside.right() {
+            buf[(x, y)].reset();
+        }
+    }
+    buf.set_style(inside, Style::new().bg(card.fill).fg(theme.text));
+
+    let line = Style::new().fg(card.edge);
+    let line = if card.lit {
+        line.add_modifier(Modifier::BOLD)
+    } else {
+        line
+    };
+    let edges = Edges::of(look);
+    let (left, top, right, bottom) = (area.x, area.y, area.right() - 1, area.bottom() - 1);
+    let [top_left, top_right, bottom_left, bottom_right] = edges.corners;
+    for x in left..=right {
+        let (above, below) = match x {
+            x if x == left => (top_left, bottom_left),
+            x if x == right => (top_right, bottom_right),
+            _ => (edges.top, edges.bottom),
+        };
+        bare(buf, x, top).set_symbol(above).set_style(line);
+        bare(buf, x, bottom).set_symbol(below).set_style(line);
+    }
+    for y in top + 1..bottom {
+        bare(buf, left, y).set_symbol(edges.left).set_style(line);
+        bare(buf, right, y).set_symbol(edges.right).set_style(line);
+    }
+
+    let room = area.width.saturating_sub(6);
+    if !card.title.is_empty() && room > 2 {
+        let color = if card.lit { card.edge } else { theme.text };
+        let title = Style::new().fg(color).add_modifier(Modifier::BOLD);
+        buf.set_stringn(
+            left + 2,
+            top,
+            format!(" {} ", card.title),
+            usize::from(room),
+            title,
+        );
+    }
+    inside
+}
+
+/// Where a panel `width` by `height` goes in `area`: centred, and kept a cell
+/// inside it on every side.
+pub fn centred(area: Rect, width: u16, height: u16) -> Rect {
+    let width = width.min(area.width.saturating_sub(2));
+    let height = height.min(area.height.saturating_sub(2));
+    Rect {
+        x: area.x + (area.width - width) / 2,
+        y: area.y + (area.height - height) / 2,
+        width,
+        height,
+    }
+}
+
+/// A panel, the box a dialog is drawn in: a card `width` by `height` at
+/// `centred` in `area`, with an `accent` edge and title around `raised`.
+/// Returns the inside. `dim` the screen first.
+pub fn panel(
+    look: Look,
+    theme: &Theme,
+    buf: &mut Buffer,
+    area: Rect,
+    (width, height): (u16, u16),
+    title: &str,
+) -> Rect {
+    let lit = Card::new(theme, title).lit(theme.accent);
+    card(look, theme, buf, centred(area, width, height), &lit)
+}
+
+/// How far the text behind a panel moves towards its own ground, and then how
+/// far everything moves towards black.
+const BEHIND_TEXT: f64 = 0.6;
+const BEHIND_DARK: f64 = 0.45;
+
+/// Darkens everything already drawn in `area`, so a panel drawn after it
+/// stands out: text fades into its ground and then all of it goes towards
+/// black. A pill's cap is its fill, not text, so it only darkens and the pill
+/// keeps its shape. Where the theme's colours can't be blended (`mono`) the
+/// cells get the DIM modifier instead.
+pub fn dim(theme: &Theme, buf: &mut Buffer, area: Rect) {
+    const BLACK: Color = Color::Rgb(0, 0, 0);
+    let area = area.intersection(buf.area);
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            let cell = &mut buf[(x, y)];
+            if !theme.ramps() {
+                cell.modifier.insert(Modifier::DIM);
+                continue;
+            }
+            let bg = if cell.bg == Color::Reset {
+                theme.bg
+            } else {
+                cell.bg
+            };
+            let fg = if cell.fg == Color::Reset {
+                theme.fg
+            } else {
+                cell.fg
+            };
+            // Reverse video draws the text in `bg` on a ground of `fg`.
+            let reversed = cell.modifier.contains(Modifier::REVERSED);
+            let (ink, ground) = if reversed { (bg, fg) } else { (fg, bg) };
+            let cap = matches!(cell.symbol(), CAP_L | CAP_R);
+            let faded = if cap {
+                ink
+            } else {
+                mix(ink, ground, BEHIND_TEXT)
+            };
+            // A diagnostic's colour is its curly underline; left alone it
+            // would draw at full strength through the dim. `Reset` means no
+            // underline colour, not a colour.
+            if cell.underline_color != Color::Reset {
+                let faded = mix(cell.underline_color, ground, BEHIND_TEXT);
+                cell.underline_color = mix(faded, BLACK, BEHIND_DARK);
+            }
+            let ink = mix(faded, BLACK, BEHIND_DARK);
+            let ground = mix(ground, BLACK, BEHIND_DARK);
+            (cell.fg, cell.bg) = if reversed {
+                (ground, ink)
+            } else {
+                (ink, ground)
+            };
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const ROUND: Look = Look { pill_caps: true };
-    const SQUARE: Look = Look { pill_caps: false };
+    const ROUND: Look = Look {
+        pill_caps: true,
+        corners: Corners::Flush,
+    };
+    const SQUARE: Look = Look {
+        pill_caps: false,
+        corners: Corners::Flush,
+    };
     const FILL: Color = Color::Rgb(1, 2, 3);
     const GROUND: Color = Color::Rgb(9, 9, 9);
 
@@ -310,7 +674,13 @@ mod tests {
     #[test]
     fn the_look_follows_the_setting_and_mono_never_rounds() {
         assert!(Look::default().pill_caps);
-        assert!(!Look::of(&UiConfig { pill_caps: false }).pill_caps);
+        assert_eq!(Look::default().corners, Corners::Flush);
+        let asked = Look::of(&UiConfig {
+            pill_caps: false,
+            corners: Corners::Rounded,
+        });
+        assert!(!asked.pill_caps);
+        assert_eq!(asked.corners, Corners::Rounded);
         assert!(ROUND.round(&Theme::default()));
         assert!(!SQUARE.round(&Theme::default()));
         assert!(!ROUND.round(&mono()));
@@ -530,5 +900,510 @@ mod tests {
         assert_eq!(put(&mut buf, 1, 0, &spans, 5), 5);
         assert_eq!(row(&buf), " abcd   ");
         assert_eq!(put(&mut buf, 1, 0, &spans, 8), 7);
+    }
+
+    const ROUNDED: Look = Look {
+        pill_caps: true,
+        corners: Corners::Rounded,
+    };
+    const KINDS: [ButtonKind; 4] = [
+        ButtonKind::Primary,
+        ButtonKind::Danger,
+        ButtonKind::Normal,
+        ButtonKind::Ghost,
+    ];
+
+    fn is_rgb(color: Color) -> bool {
+        matches!(color, Color::Rgb(..))
+    }
+
+    /// A buffer `width` by `height` with every cell an underlined `x` on
+    /// `GROUND`: a screen with something already drawn on it.
+    fn screen(width: u16, height: u16) -> Buffer {
+        let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
+        let drawn = Style::new()
+            .fg(Color::Red)
+            .bg(GROUND)
+            .add_modifier(Modifier::UNDERLINED);
+        for y in 0..height {
+            buf.set_string(0, y, "x".repeat(usize::from(width)), drawn);
+        }
+        buf
+    }
+
+    fn line(buf: &Buffer, y: u16) -> String {
+        (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect()
+    }
+
+    /// Asserts the cell at `(x, y)` is a card's edge: `glyph` in `edge` on the
+    /// ground that was there, with nothing left of what it was drawn over.
+    fn assert_edge(buf: &Buffer, (x, y): (u16, u16), glyph: &str, edge: Color, lit: bool) {
+        let cell = &buf[(x, y)];
+        assert_eq!(cell.symbol(), glyph, "{x},{y}");
+        assert_eq!((cell.fg, cell.bg), (edge, GROUND), "{x},{y}");
+        let weight = if lit {
+            Modifier::BOLD
+        } else {
+            Modifier::empty()
+        };
+        assert_eq!(cell.modifier, weight, "{x},{y}");
+    }
+
+    #[test]
+    fn a_button_is_a_pill_of_its_label_and_key_in_its_kinds_colours() {
+        for (look, theme, round) in looks().into_iter().take(2) {
+            let (danger_fill, danger_ink) = danger(&theme);
+            let colours = [
+                (theme.accent, theme.acc_ink, theme.acc_ink),
+                (danger_fill, danger_ink, danger_ink),
+                (theme.btn, theme.strong, theme.accent),
+                (theme.surface, theme.text, theme.accent),
+            ];
+            for (kind, (fill, fg, key_fg)) in KINDS.into_iter().zip(colours) {
+                let button = button(look, &theme, "Save", "S", kind, false, GROUND);
+                // As wide as ` Save S `.
+                assert_eq!(width(&button), 8, "{kind:?}");
+                let buf = drawn(&button, 8);
+                assert_end(&buf, 0, CAP_L, round, fill, GROUND);
+                assert_end(&buf, 7, CAP_R, round, fill, GROUND);
+                let inside: String = (1..7).map(|x| buf[(x, 0)].symbol()).collect();
+                assert_eq!(inside, "Save S", "{kind:?}");
+                for x in 1..7 {
+                    let cell = &buf[(x, 0)];
+                    assert_eq!(cell.bg, fill, "{kind:?} {x}");
+                    assert!(cell.modifier.contains(Modifier::BOLD), "{kind:?} {x}");
+                    assert!(!cell.modifier.contains(Modifier::REVERSED), "{kind:?} {x}");
+                }
+                assert_eq!(buf[(1, 0)].fg, fg, "{kind:?}");
+                assert_eq!(buf[(6, 0)].fg, key_fg, "{kind:?}");
+                if !round {
+                    assert_no_caps(&buf);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_button_without_a_key_is_just_its_label() {
+        let theme = Theme::default();
+        for kind in KINDS {
+            let button = button(SQUARE, &theme, "Open", "", kind, false, GROUND);
+            assert_eq!(text(&button), " Open ", "{kind:?}");
+            assert_eq!(width(&button), 6, "{kind:?}");
+        }
+        let button = button(
+            ROUND,
+            &mono(),
+            "Open",
+            "",
+            ButtonKind::Normal,
+            false,
+            GROUND,
+        );
+        assert_eq!(text(&button), " Open ");
+    }
+
+    #[test]
+    fn hover_lights_a_normal_or_ghost_button_and_no_other() {
+        let theme = Theme::default();
+        let fill = |kind, hovered| {
+            let button = button(SQUARE, &theme, "Save", "S", kind, hovered, GROUND);
+            drawn(&button, 8)[(3, 0)].bg
+        };
+        assert_ne!(theme.hov, theme.btn);
+        assert_eq!(fill(ButtonKind::Normal, true), theme.hov);
+        assert_eq!(fill(ButtonKind::Ghost, true), theme.hov);
+        assert_eq!(fill(ButtonKind::Primary, true), theme.accent);
+        assert_eq!(fill(ButtonKind::Danger, true), danger(&theme).0);
+        // The text keeps its colours on the lit fill.
+        let button = button(
+            SQUARE,
+            &theme,
+            "Save",
+            "S",
+            ButtonKind::Normal,
+            true,
+            GROUND,
+        );
+        let buf = drawn(&button, 8);
+        assert_eq!(
+            (buf[(1, 0)].fg, buf[(6, 0)].fg),
+            (theme.strong, theme.accent)
+        );
+        assert_end(&buf, 0, CAP_L, false, theme.hov, GROUND);
+    }
+
+    #[test]
+    fn in_mono_a_loud_button_is_reverse_video_and_the_others_bold() {
+        let mono = mono();
+        let ground = mono.raised;
+        for look in [ROUND, SQUARE, ROUNDED] {
+            for (kind, loud) in KINDS.into_iter().zip([true, true, false, false]) {
+                for hovered in [false, true] {
+                    let button = button(look, &mono, "Save", "S", kind, hovered, ground);
+                    // The same width as with colours, so nothing moves.
+                    assert_eq!(width(&button), 8, "{kind:?}");
+                    let buf = drawn(&button, 8);
+                    assert_eq!(row(&buf), " Save S ", "{kind:?}");
+                    for x in 0..8 {
+                        let cell = &buf[(x, 0)];
+                        assert!(cell.modifier.contains(Modifier::BOLD), "{kind:?} {x}");
+                        assert_eq!(
+                            cell.modifier.contains(Modifier::REVERSED),
+                            loud,
+                            "{kind:?} {x}"
+                        );
+                        // Terminal colours only: nothing blended.
+                        assert_eq!((cell.fg, cell.bg), (mono.strong, ground), "{kind:?} {x}");
+                        assert!(!is_rgb(cell.fg) && !is_rgb(cell.bg), "{kind:?} {x}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_danger_buttons_text_reads_on_its_fill_in_every_theme() {
+        for name in crate::theme::NAMES.iter().filter(|name| **name != "mono") {
+            let theme = Theme::named(name).expect("a listed theme exists");
+            let (fill, ink) = danger(&theme);
+            assert!(
+                contrast(ink, fill) >= DANGER_CONTRAST,
+                "{name}: {ink:?} on {fill:?} is {}",
+                contrast(ink, fill)
+            );
+            assert!(ink == theme.bg || ink == theme.strong, "{name}");
+        }
+        // Neither Tinkery theme's `err` needs deepening.
+        for name in ["tinkery", "tinkery-light"] {
+            let theme = Theme::named(name).expect("a listed theme exists");
+            assert_eq!(danger(&theme), (theme.err, theme.bg), "{name}");
+        }
+        // A red neither ink reads on is deepened until one does.
+        let grey = Color::Rgb(0x76, 0x76, 0x76);
+        let theme = Theme {
+            err: grey,
+            ..Theme::default()
+        };
+        assert!(contrast(theme.bg, grey) < DANGER_CONTRAST);
+        assert!(contrast(theme.strong, grey) < DANGER_CONTRAST);
+        let (fill, ink) = danger(&theme);
+        assert_ne!(fill, grey);
+        assert_eq!(ink, theme.strong);
+        assert!(contrast(ink, fill) >= DANGER_CONTRAST);
+        // One step short of it, the text didn't read yet.
+        let steps = (1..=DANGER_STEPS)
+            .find(|steps| {
+                (0..*steps).fold(grey, |c, _| mix(c, Color::Rgb(0, 0, 0), DANGER_STEP)) == fill
+            })
+            .expect("the fill is `err` deepened a whole number of steps");
+        let before = (1..steps).fold(grey, |c, _| mix(c, Color::Rgb(0, 0, 0), DANGER_STEP));
+        assert!(contrast(theme.strong, before) < DANGER_CONTRAST);
+    }
+
+    #[test]
+    fn contrast_is_the_wcag_ratio() {
+        let (black, white) = (Color::Rgb(0, 0, 0), Color::Rgb(255, 255, 255));
+        assert!((contrast(black, white) - 21.0).abs() < 1e-9);
+        assert!((contrast(white, black) - 21.0).abs() < 1e-9);
+        assert!((contrast(white, white) - 1.0).abs() < 1e-9);
+        let grey = contrast(Color::Rgb(0x76, 0x76, 0x76), white);
+        assert!((grey - 4.54).abs() < 0.01, "{grey}");
+    }
+
+    #[test]
+    fn a_flush_card_is_eighth_blocks_on_the_ground_with_blank_corners() {
+        for theme in [Theme::default(), mono()] {
+            let mut buf = screen(14, 6);
+            let card_look = Card::new(&theme, "");
+            assert_eq!(
+                (card_look.edge, card_look.fill, card_look.lit),
+                (theme.line2, theme.raised, false)
+            );
+            let inside = card(ROUND, &theme, &mut buf, Rect::new(1, 1, 12, 4), &card_look);
+            assert_eq!(inside, Rect::new(2, 2, 10, 2));
+            assert_eq!(line(&buf, 0), "x".repeat(14));
+            assert_eq!(line(&buf, 1), format!("x {} x", "▁".repeat(10)));
+            assert_eq!(line(&buf, 2), format!("x▕{}▏x", " ".repeat(10)));
+            assert_eq!(line(&buf, 3), format!("x▕{}▏x", " ".repeat(10)));
+            assert_eq!(line(&buf, 4), format!("x {} x", "▔".repeat(10)));
+            assert_eq!(line(&buf, 5), "x".repeat(14));
+            // The edge sits on the ground: its cells keep the background that
+            // was there and nothing else of what they covered.
+            for x in 2..12 {
+                assert_edge(&buf, (x, 1), "▁", theme.line2, false);
+                assert_edge(&buf, (x, 4), "▔", theme.line2, false);
+            }
+            for y in 2..4 {
+                assert_edge(&buf, (1, y), "▕", theme.line2, false);
+                assert_edge(&buf, (12, y), "▏", theme.line2, false);
+            }
+            for at in [(1, 1), (12, 1), (1, 4), (12, 4)] {
+                assert_edge(&buf, at, " ", theme.line2, false);
+            }
+            // The inside is the fill, emptied.
+            for y in inside.top()..inside.bottom() {
+                for x in inside.left()..inside.right() {
+                    let cell = &buf[(x, y)];
+                    assert_eq!((cell.symbol(), cell.bg), (" ", theme.raised), "{x},{y}");
+                    assert_eq!(cell.fg, theme.text, "{x},{y}");
+                    assert!(cell.modifier.is_empty(), "{x},{y}");
+                }
+            }
+            // Outside it nothing changed.
+            assert!(buf[(0, 2)].modifier.contains(Modifier::UNDERLINED));
+            assert_eq!(buf[(13, 2)].fg, Color::Red);
+        }
+    }
+
+    #[test]
+    fn a_rounded_card_is_box_lines_with_round_corners() {
+        for theme in [Theme::default(), mono()] {
+            let mut buf = screen(14, 6);
+            let inside = card(
+                ROUNDED,
+                &theme,
+                &mut buf,
+                Rect::new(1, 1, 12, 4),
+                &Card::new(&theme, ""),
+            );
+            // The same inside as a flush card, so nothing in it moves.
+            assert_eq!(inside, Rect::new(2, 2, 10, 2));
+            assert_eq!(line(&buf, 1), format!("x╭{}╮x", "─".repeat(10)));
+            assert_eq!(line(&buf, 2), format!("x│{}│x", " ".repeat(10)));
+            assert_eq!(line(&buf, 4), format!("x╰{}╯x", "─".repeat(10)));
+            assert_edge(&buf, (1, 1), "╭", theme.line2, false);
+            assert_edge(&buf, (12, 4), "╯", theme.line2, false);
+            assert_edge(&buf, (1, 2), "│", theme.line2, false);
+            assert_eq!(buf[(5, 2)].bg, theme.raised);
+        }
+    }
+
+    #[test]
+    fn a_cards_title_sits_in_its_top_edge() {
+        let theme = Theme::default();
+        for (look, top, corner) in [(ROUND, "▁", " "), (ROUNDED, "─", "╭")] {
+            // Resting: the title in `text`, bold, on an edge that isn't.
+            let mut buf = screen(20, 4);
+            let area = Rect::new(0, 0, 20, 4);
+            card(look, &theme, &mut buf, area, &Card::new(&theme, "Find"));
+            let rest = top.repeat(11);
+            assert_eq!(
+                line(&buf, 0),
+                format!("{corner}{top} Find {rest}{}", {
+                    if corner == " " { " " } else { "╮" }
+                })
+            );
+            assert_edge(&buf, (1, 0), top, theme.line2, false);
+            for x in 2..8 {
+                let cell = &buf[(x, 0)];
+                assert_eq!((cell.fg, cell.bg), (theme.text, GROUND), "{x}");
+                assert_eq!(cell.modifier, Modifier::BOLD, "{x}");
+            }
+            assert_edge(&buf, (8, 0), top, theme.line2, false);
+
+            // Lit: edge and title in the colour asked for, both bold.
+            let mut buf = screen(20, 4);
+            let lit = Card::new(&theme, "Find").lit(theme.accent);
+            assert_eq!(
+                (lit.edge, lit.fill, lit.lit),
+                (theme.accent, theme.raised, true)
+            );
+            card(look, &theme, &mut buf, area, &lit);
+            assert_edge(&buf, (1, 0), top, theme.accent, true);
+            assert_eq!(buf[(3, 0)].symbol(), "F");
+            assert_eq!(buf[(3, 0)].fg, theme.accent);
+            assert_eq!(buf[(3, 0)].modifier, Modifier::BOLD);
+            assert_edge(
+                &buf,
+                (0, 1),
+                if corner == " " { "▕" } else { "│" },
+                theme.accent,
+                true,
+            );
+
+            // Too long, it is cut four cells short of the right edge.
+            let mut buf = screen(20, 4);
+            let long = Card::new(&theme, "Find in the whole project");
+            card(look, &theme, &mut buf, area, &long);
+            let drawn = line(&buf, 0);
+            let cells: Vec<char> = drawn.chars().collect();
+            assert_eq!(cells[2..16].iter().collect::<String>(), " Find in the w");
+            assert_eq!(cells[16..19].iter().collect::<String>(), top.repeat(3));
+        }
+        // A card with no room for a title has none; its edge is whole.
+        let mut buf = screen(8, 3);
+        card(
+            ROUND,
+            &theme,
+            &mut buf,
+            Rect::new(0, 0, 8, 3),
+            &Card::new(&theme, "Find"),
+        );
+        assert_eq!(line(&buf, 0), format!(" {} ", "▁".repeat(6)));
+    }
+
+    #[test]
+    fn a_card_too_small_to_have_an_inside_draws_nothing() {
+        let theme = Theme::default();
+        for area in [Rect::new(0, 0, 3, 4), Rect::new(0, 0, 8, 1)] {
+            let mut buf = screen(10, 5);
+            let inside = card(ROUND, &theme, &mut buf, area, &Card::new(&theme, "x"));
+            assert!(inside.is_empty(), "{area:?}");
+            assert_eq!(buf, screen(10, 5), "{area:?}");
+        }
+        // Hanging off the buffer, it is drawn where it shows.
+        let mut buf = screen(10, 5);
+        let inside = card(
+            ROUND,
+            &theme,
+            &mut buf,
+            Rect::new(4, 2, 20, 20),
+            &Card::new(&theme, ""),
+        );
+        assert_eq!(inside, Rect::new(5, 3, 4, 1));
+    }
+
+    #[test]
+    fn a_panel_goes_in_the_middle_a_cell_inside_the_screen() {
+        let screen = Rect::new(0, 0, 100, 30);
+        assert_eq!(centred(screen, 46, 9), Rect::new(27, 10, 46, 9));
+        assert_eq!(centred(screen, 44, 7), Rect::new(28, 11, 44, 7));
+        // Offset areas are centred in themselves.
+        assert_eq!(
+            centred(Rect::new(10, 5, 20, 10), 10, 4),
+            Rect::new(15, 8, 10, 4)
+        );
+        // Too big, it is clamped a cell inside on every side.
+        assert_eq!(
+            centred(Rect::new(0, 0, 40, 6), 46, 9),
+            Rect::new(1, 1, 38, 4)
+        );
+        assert!(centred(Rect::new(0, 0, 1, 1), 46, 9).is_empty());
+    }
+
+    #[test]
+    fn a_panel_is_a_centred_card_with_an_accent_edge_and_title_on_raised() {
+        for (theme, look) in [
+            (Theme::default(), ROUND),
+            (Theme::default(), ROUNDED),
+            (mono(), ROUND),
+            (mono(), ROUNDED),
+        ] {
+            let mut buf = screen(40, 12);
+            let area = buf.area;
+            let inside = panel(look, &theme, &mut buf, area, (20, 6), "Run");
+            let outer = centred(area, 20, 6);
+            assert_eq!(outer, Rect::new(10, 3, 20, 6));
+            assert_eq!(inside, Rect::new(11, 4, 18, 4));
+            let rounded = look.corners == Corners::Rounded;
+            let (top, side) = if rounded {
+                ("─", "│")
+            } else {
+                ("▁", "▕")
+            };
+            assert_edge(&buf, (11, 3), top, theme.accent, true);
+            assert_edge(&buf, (10, 5), side, theme.accent, true);
+            assert_edge(
+                &buf,
+                (10, 3),
+                if rounded { "╭" } else { " " },
+                theme.accent,
+                true,
+            );
+            let cells: Vec<char> = line(&buf, 3).chars().collect();
+            assert_eq!(cells[12..17].iter().collect::<String>(), " Run ");
+            assert_eq!(buf[(13, 3)].fg, theme.accent);
+            assert_eq!(buf[(13, 3)].modifier, Modifier::BOLD);
+            assert_eq!(buf[(20, 6)].bg, theme.raised);
+            assert_eq!(buf[(20, 6)].symbol(), " ");
+            // Around it the screen is as it was.
+            assert_eq!(buf[(9, 5)].symbol(), "x");
+            assert_eq!(buf[(20, 2)].symbol(), "x");
+        }
+    }
+
+    #[test]
+    fn dim_fades_text_into_its_ground_and_darkens_everything() {
+        let theme = Theme::default();
+        let black = Color::Rgb(0, 0, 0);
+        let (fg, bg) = (Color::Rgb(200, 100, 50), Color::Rgb(40, 60, 80));
+        let mut buf = Buffer::empty(Rect::new(0, 0, 6, 2));
+        buf.set_string(0, 0, "ab", Style::new().fg(fg).bg(bg));
+        // A cell nothing set colours on is the theme's text on its ground.
+        buf.set_string(2, 0, "c", Style::new());
+        buf.set_string(3, 0, CAP_L, Style::new().fg(fg).bg(bg));
+        buf.set_string(4, 0, CAP_R, Style::new().fg(fg).bg(bg));
+        // Reverse video: the text is drawn in `bg` on a ground of `fg`.
+        buf.set_string(5, 0, "r", Theme::highlight(bg, fg));
+        buf.set_string(0, 1, "z", Style::new().fg(fg).bg(bg));
+        dim(&theme, &mut buf, Rect::new(0, 0, 6, 1));
+
+        let text = mix(mix(fg, bg, 0.6), black, 0.45);
+        let ground = mix(bg, black, 0.45);
+        for x in 0..2 {
+            assert_eq!((buf[(x, 0)].fg, buf[(x, 0)].bg), (text, ground), "{x}");
+        }
+        assert_eq!(
+            buf[(2, 0)].fg,
+            mix(mix(theme.fg, theme.bg, 0.6), black, 0.45)
+        );
+        assert_eq!(buf[(2, 0)].bg, mix(theme.bg, black, 0.45));
+        // A cap is its pill's fill: it darkens with the pill and doesn't fade
+        // into the ground, so the pill keeps its shape.
+        for x in 3..5 {
+            assert_eq!(buf[(x, 0)].fg, mix(fg, black, 0.45), "{x}");
+            assert_eq!(buf[(x, 0)].bg, ground, "{x}");
+        }
+        assert_eq!(buf[(3, 0)].symbol(), CAP_L);
+        // `highlight(bg, fg)` holds the fill in `fg` and the text in `bg`.
+        let reversed = &buf[(5, 0)];
+        assert!(reversed.modifier.contains(Modifier::REVERSED));
+        assert_eq!(reversed.fg, ground);
+        assert_eq!(reversed.bg, text);
+        // Only `area` is dimmed, and nothing but colours changes.
+        assert_eq!((buf[(0, 1)].fg, buf[(0, 1)].bg), (fg, bg));
+        assert_eq!(buf[(0, 0)].symbol(), "a");
+        assert!(!buf[(0, 0)].modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn dim_fades_a_diagnostic_underline_with_the_text() {
+        let theme = Theme::default();
+        let black = Color::Rgb(0, 0, 0);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 2, 1));
+        let area = buf.area;
+        buf.set_style(area, Style::new().fg(theme.fg).bg(theme.bg));
+        buf[(0, 0)].set_style(
+            Style::new()
+                .underline_color(theme.err)
+                .add_modifier(Modifier::UNDERLINED),
+        );
+        dim(&theme, &mut buf, area);
+        assert_eq!(
+            buf[(0, 0)].underline_color,
+            mix(mix(theme.err, theme.bg, 0.6), black, 0.45)
+        );
+        // A cell without an underline colour keeps none.
+        assert_eq!(buf[(1, 0)].underline_color, Color::Reset);
+    }
+
+    #[test]
+    fn dim_in_mono_sets_the_dim_modifier_and_blends_nothing() {
+        let mono = mono();
+        let mut buf = Buffer::empty(Rect::new(0, 0, 3, 1));
+        buf.set_string(0, 0, "ab", Style::new().fg(Color::Gray));
+        buf.set_string(2, 0, "c", Theme::highlight(mono.hov, mono.strong));
+        let before = buf.clone();
+        let area = buf.area;
+        dim(&mono, &mut buf, area);
+        for x in 0..3 {
+            let (cell, was) = (&buf[(x, 0)], &before[(x, 0)]);
+            assert!(cell.modifier.contains(Modifier::DIM), "{x}");
+            assert_eq!((cell.fg, cell.bg), (was.fg, was.bg), "{x}");
+            assert!(!is_rgb(cell.fg) && !is_rgb(cell.bg), "{x}");
+            assert_eq!(cell.symbol(), was.symbol(), "{x}");
+        }
+        assert!(buf[(2, 0)].modifier.contains(Modifier::REVERSED));
     }
 }
