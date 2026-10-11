@@ -10,15 +10,16 @@ use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
+use ratatui::text::Span;
 use unicode_width::UnicodeWidthStr;
 
 use crate::buffer::movement::Motion;
 use crate::keymap::{Action, Input};
 use crate::theme::Theme;
+use crate::ui::kit::{self, Look, RowInk};
 use crate::ui::prompt::{Outcome, PromptBar};
-use crate::ui::{dialog_card, enter_mark, glow_row};
 
-/// Widest the choices card gets, borders included.
+/// Widest the choices card gets, its edge included.
 const MAX_WIDTH: u16 = 80;
 
 /// One entry of a list of choices, such as a run command: picked by its name,
@@ -39,10 +40,10 @@ pub struct Command {
     pub key: Option<String>,
 }
 
-/// Tallest the card for a list of choices gets (SPEC_V1_LAYOUT §9).
-const CHOICES_HEIGHT: u16 = 8;
-/// Where a choice's detail starts, from the card's left edge.
-const DETAIL_X: u16 = 14;
+/// Most choices a list of them shows; the selection scrolls through the rest.
+const CHOICES_ROWS: u16 = 5;
+/// Where a choice's detail starts, from where its name does.
+const DETAIL_X: u16 = 12;
 
 /// The cast card's width, before clamping to the screen, and the row it drops
 /// from (design README §3).
@@ -55,15 +56,14 @@ const CAST_ROWS: usize = 5;
 const CAST_MIXED_COMMANDS: usize = 2;
 /// Most command rows once `>` lists only commands.
 const CAST_COMMAND_ROWS: usize = 8;
-/// The cast's rows other than its sections: the lit edge, a blank, the query and
-/// the rule above them; a blank, the footer and a blank below.
-const CAST_CHROME: u16 = 7;
+/// A list panel's rows other than its list: the edge, a blank, the query and a
+/// blank above it; a blank, the hints and the edge below.
+const CHROME: u16 = 7;
 /// Right of the query: the palette's name.
 const CAST_NAME: &str = "cast";
-/// The footer's prefixes, each with what it switches to, and the keys. `@`
+/// The prefixes the hints start with, each with what it switches to. `@`
 /// (symbols) is left out until it does something.
 const CAST_PREFIXES: [(&str, &str); 3] = [(">", "commands"), (":", "line"), ("/", "text")];
-const CAST_KEYS: &str = "↑↓  ⏎  esc";
 
 /// What a key did to the picker, when it did more than move or edit the query.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -427,10 +427,10 @@ impl Picker {
 
     /// Draws the picker over `area` and returns where the cursor goes, in the
     /// query.
-    pub fn render(&self, theme: &Theme, frame: &mut Frame, area: Rect) -> (u16, u16) {
+    pub fn render(&self, look: Look, theme: &Theme, frame: &mut Frame, area: Rect) -> (u16, u16) {
         match &self.choices {
-            Some(choices) => self.render_choices(theme, frame, area, choices),
-            None => self.render_cast(theme, frame, area),
+            Some(choices) => self.render_choices(look, theme, frame, area, choices),
+            None => self.render_cast(look, theme, frame, area),
         }
     }
 
@@ -461,7 +461,7 @@ impl Picker {
     fn cast_card(&self, area: Rect) -> Rect {
         let width = CAST_WIDTH.min(area.width.saturating_sub(4));
         let y = area.y + CAST_TOP.min(area.height);
-        let height = (CAST_CHROME + sections_height(&self.cast_sections())).min(area.bottom() - y);
+        let height = (CHROME + sections_height(&self.cast_sections())).min(area.bottom() - y);
         Rect {
             x: area.x + (area.width - width) / 2,
             y,
@@ -470,41 +470,32 @@ impl Picker {
         }
     }
 
-    /// Dims `area` and draws the cast card over it: the lit edge, `✦` and the
-    /// query with the palette's name and what it lists at the right, a rule,
-    /// then each section under its header, the selected row the glow row with
-    /// `⏎`; then the footer.
-    fn render_cast(&self, theme: &Theme, frame: &mut Frame, area: Rect) -> (u16, u16) {
-        crate::ui::dim(theme, frame.buffer_mut(), area);
+    /// Dims `area` and draws the cast over it as a panel (tinkery-forge spec
+    /// F15): its title, for the mode, in the edge; `✦` and the query on a
+    /// strip, with the palette's name and what it lists at the right; each
+    /// section under its heading, the selected row a pill; then the keys, on
+    /// the row above the bottom edge.
+    fn render_cast(&self, look: Look, theme: &Theme, frame: &mut Frame, area: Rect) -> (u16, u16) {
+        let out = frame.buffer_mut();
+        kit::dim(theme, out, area);
         let card = self.cast_card(area);
-        dialog_card(theme, frame, card);
+        let mode = self.mode();
+        let inside = kit::panel_at(look, theme, out, card, mode.title());
         let sections = self.cast_sections();
-        if card.height < CAST_CHROME + sections_height(&sections) || card.width < 40 {
+        if inside.is_empty() || card.height < CHROME + sections_height(&sections) || card.width < 40
+        {
             return (card.x, card.y);
         }
-        let out = frame.buffer_mut();
-        let left = card.x + 4;
-        let right = card.right() - 4;
-        let muted = Style::new().fg(theme.muted);
-        let mode = self.mode();
+        let row = Row { look, theme, card };
 
-        let query_y = card.y + 2;
-        let scope = match mode {
-            Mode::Files => " · files · commands",
-            Mode::Commands => " · commands",
-            Mode::Line => " · line",
-            Mode::Text => " · text",
-        };
-        let scope_x = right - width_of(scope);
-        let name_x = scope_x - width_of(CAST_NAME);
-        out.set_string(name_x, query_y, CAST_NAME, Style::new().fg(theme.accent));
-        out.set_string(scope_x, query_y, scope, muted);
-        out.set_string(
-            left,
-            query_y,
-            "✦",
-            Style::new().fg(theme.accent2).add_modifier(Modifier::BOLD),
-        );
+        let quiet = kit::ink(theme, theme.muted, theme.raised2);
+        let scope = vec![
+            Span::styled(CAST_NAME, Style::new().fg(theme.accent)),
+            Span::styled(mode.scope(), Style::new().fg(quiet)),
+        ];
+        // The field ends two blanks short of the palette's name, so a long
+        // query never runs into it.
+        let field = kit::header(look, theme, out, card, scope);
         // A line that can't be gone to shows in `err` where it's typed too.
         let bad_line = mode == Mode::Line
             && matches!(
@@ -512,34 +503,19 @@ impl Picker {
                 LineAsked::OutOfRange | LineAsked::NotANumber
             );
         let query_fg = if bad_line { theme.err } else { theme.strong };
-        // Two blanks short of the palette's name, so a long query never runs
-        // into it.
-        let query = Rect::new(left + 2, query_y, name_x.saturating_sub(left + 4), 1);
-        let cursor = self
-            .query
-            .render_value(out, query, Style::new().fg(query_fg));
+        let query = Style::new().fg(query_fg).bg(theme.raised2);
+        let cursor = self.query.render_value(out, field, query);
 
-        for x in card.x + 2..card.right() - 2 {
-            out[(x, card.y + 3)].set_symbol("─").set_fg(theme.line2);
-        }
-
-        let row = Row {
-            theme,
-            card,
-            left,
-            right,
-        };
+        let heading = Style::new()
+            .fg(theme.muted)
+            .bg(theme.raised)
+            .add_modifier(Modifier::BOLD);
         let mut y = card.y + 4;
         for (i, section) in sections.iter().enumerate() {
             if i > 0 {
                 y += 1;
             }
-            out.set_string(
-                left,
-                y,
-                section.header(),
-                muted.add_modifier(Modifier::BOLD),
-            );
+            out.set_string(row.left(), y, section.header(), heading);
             y += 1;
             match *section {
                 Section::Files(rows) => self.render_files(out, &row, y, rows),
@@ -550,33 +526,27 @@ impl Picker {
             y += section.rows();
         }
 
-        let footer_y = y + 1;
-        let lit = Style::new().fg(theme.accent).add_modifier(Modifier::BOLD);
-        let mut x = left;
-        for (i, (prefix, label)) in CAST_PREFIXES.iter().enumerate() {
-            if i > 0 {
-                x += 3;
-            }
-            x = out.set_stringn(x, footer_y, prefix, usize::MAX, lit).0;
-            x = out
-                .set_stringn(x, footer_y, format!(" {label}"), usize::MAX, muted)
-                .0;
+        let keys = [("↑ ↓", "move"), ("⏎", mode.enter()), ("Esc", "close")];
+        let all: Vec<(&str, &str)> = CAST_PREFIXES.iter().chain(&keys).copied().collect();
+        let room = row.right().saturating_sub(row.left());
+        let mut hints = kit::hints(look, theme, &all, theme.raised);
+        // A card too narrow for all of it keeps the keys, which end the line.
+        if kit::width(&hints) > room {
+            hints = kit::hints(look, theme, &keys, theme.raised);
         }
-        out.set_string(right - width_of(CAST_KEYS), footer_y, CAST_KEYS, muted);
+        kit::put(out, row.left(), y + 1, &hints, row.right());
         cursor
     }
 
     /// Up to `rows` files from row `y`, scrolled just far enough to keep a
     /// selected file on the last row.
     fn render_files(&self, out: &mut Buffer, row: &Row, y: u16, rows: usize) {
-        let theme = row.theme;
-        let muted = Style::new().fg(theme.muted);
         let Some(files) = &self.files else {
-            out.set_string(row.left, y, "listing files…", muted);
+            out.set_string(row.left(), y, "listing files…", row.muted());
             return;
         };
         if self.matches.is_empty() {
-            out.set_string(row.left, y, self.no_match, muted);
+            out.set_string(row.left(), y, self.no_match, row.muted());
             return;
         }
         let last = self.selected.min(self.matches.len() - 1);
@@ -594,26 +564,17 @@ impl Picker {
             let path = files[m.item].as_str();
             self.matched(path, &mut matcher, &mut indices);
             let y = y + u16::try_from(line).unwrap_or(u16::MAX);
-            let selected = index == self.selected;
-            row.select(out, y, selected);
-            // Two blanks short of `⏎`, so a long path never runs into it.
-            let room = Rect::new(row.left, y, row.right.saturating_sub(row.left + 3), 1);
-            cast_file(theme, out, room, path, &indices, selected);
+            let ink = row.ink(out, y, index == self.selected);
+            cast_file(out, row.text(y), path, &indices, ink);
         }
     }
 
     /// Up to `rows` commands from row `y`: the name with its matched letters
-    /// lit and the key right-aligned in `muted`, scrolled just far enough to
-    /// keep a selected command on the last row.
+    /// lit and the key right-aligned, scrolled just far enough to keep a
+    /// selected command on the last row.
     fn render_commands(&self, out: &mut Buffer, row: &Row, y: u16, rows: usize) {
-        let theme = row.theme;
         if self.command_matches.is_empty() {
-            out.set_string(
-                row.left,
-                y,
-                "no matching commands",
-                Style::new().fg(theme.muted),
-            );
+            out.set_string(row.left(), y, "no matching commands", row.muted());
             return;
         }
         let before = self.files_listed();
@@ -635,36 +596,15 @@ impl Picker {
                 continue;
             };
             let y = y + u16::try_from(line).unwrap_or(u16::MAX);
-            let selected = before + index == self.selected;
-            row.select(out, y, selected);
-            let plain = selected && !theme.ramps();
-            let pick = |style: Style| if plain { Style::new() } else { style };
-            // On the selected row the key steps left of `⏎`.
-            let key_end = if selected {
-                row.right.saturating_sub(3)
-            } else {
-                row.right
-            };
-            let mut text_end = key_end;
+            let ink = row.ink(out, y, before + index == self.selected);
+            let mut text_end = row.right();
             if let Some(key) = &command.key {
-                let key_x = key_end.saturating_sub(width_of(key));
-                out.set_string(key_x, y, key, pick(Style::new().fg(theme.muted)));
+                let key_x = row.right().saturating_sub(width_of(key));
+                out.set_string(key_x, y, key, ink.faint);
                 text_end = key_x.saturating_sub(2);
             }
             self.matched(command.title, &mut matcher, &mut indices);
-            let hit = pick(Style::new().fg(theme.accent)).add_modifier(Modifier::BOLD);
-            let rest = pick(Style::new().fg(if selected { theme.strong } else { theme.fg }));
-            let mut x = row.left;
-            for (at, ch) in command.title.chars().enumerate() {
-                let cell = ch.to_string();
-                let cells = width_of(&cell);
-                if x + cells > text_end {
-                    break;
-                }
-                let is_hit = u32::try_from(at).is_ok_and(|at| indices.binary_search(&at).is_ok());
-                out.set_string(x, y, &cell, if is_hit { hit } else { rest });
-                x += cells;
-            }
+            lit_text(out, (row.left(), y), text_end, command.title, &indices, ink);
         }
     }
 
@@ -673,49 +613,33 @@ impl Picker {
     /// to.
     fn render_line(&self, out: &mut Buffer, row: &Row, y: u16) {
         let theme = row.theme;
-        let muted = Style::new().fg(theme.muted);
         let range = format!("1–{}", self.lines);
-        let room = usize::from(row.right.saturating_sub(row.left + 3));
+        let left = row.left();
+        let room = usize::from(row.right().saturating_sub(left));
         match self.line_asked() {
             LineAsked::Empty => {
-                out.set_stringn(
-                    row.left,
-                    y,
-                    format!("type a line number, {range}"),
-                    room,
-                    muted,
-                );
+                let hint = format!("type a line number, {range}");
+                out.set_stringn(left, y, hint, room, row.muted());
             }
             LineAsked::Go(line) => {
-                row.select(out, y, true);
-                let plain = !theme.ramps();
-                let pick = |style: Style| if plain { Style::new() } else { style };
-                let (x, _) = out.set_stringn(
-                    row.left,
-                    y,
-                    format!("Go to line {line}"),
-                    room,
-                    pick(Style::new().fg(theme.strong)),
-                );
-                let left = room.saturating_sub(usize::from(x - row.left));
-                out.set_stringn(
-                    x,
-                    y,
-                    format!("  of {}", self.lines),
-                    left,
-                    pick(Style::new().fg(theme.muted)),
-                );
+                let ink = row.ink(out, y, true);
+                let go = format!("Go to line {line}");
+                let (x, _) = out.set_stringn(left, y, go, room, ink.label);
+                let rest = room.saturating_sub(usize::from(x - left));
+                let of = format!("  of {}", self.lines);
+                out.set_stringn(x, y, of, rest, ink.faint);
             }
             asked @ (LineAsked::OutOfRange | LineAsked::NotANumber) => {
                 let value = self.needle().trim();
-                let (x, _) = out.set_stringn(row.left, y, value, room, Style::new().fg(theme.err));
+                let err = Style::new().fg(theme.err).bg(theme.raised);
+                let (x, _) = out.set_stringn(left, y, value, room, err);
                 let why = if asked == LineAsked::OutOfRange {
                     format!("  is out of range: lines {range}")
                 } else {
                     format!("  is not a line number: lines {range}")
                 };
-                let left = room.saturating_sub(usize::from(x - row.left));
-                out.set_stringn(x, y, why, left, muted);
+                let rest = room.saturating_sub(usize::from(x - left));
+                out.set_stringn(x, y, why, rest, row.muted());
             }
         }
     }
@@ -723,44 +647,25 @@ impl Picker {
     /// The row under `TEXT`: a hint until something is typed, then the search
     /// Enter starts as the selected row.
     fn render_text(&self, out: &mut Buffer, row: &Row, y: u16) {
-        let theme = row.theme;
-        let room = usize::from(row.right.saturating_sub(row.left + 3));
+        let left = row.left();
+        let room = usize::from(row.right().saturating_sub(left));
         let text = self.needle();
         if text.is_empty() {
-            out.set_stringn(
-                row.left,
-                y,
-                "type text to search the project for",
-                room,
-                Style::new().fg(theme.muted),
-            );
+            let hint = "type text to search the project for";
+            out.set_stringn(left, y, hint, room, row.muted());
             return;
         }
-        row.select(out, y, true);
-        let plain = !theme.ramps();
-        let pick = |style: Style| if plain { Style::new() } else { style };
-        let (x, _) = out.set_stringn(
-            row.left,
-            y,
-            "Search the project for ",
-            room,
-            pick(Style::new().fg(theme.strong)),
-        );
-        let left = room.saturating_sub(usize::from(x - row.left));
-        out.set_stringn(
-            x,
-            y,
-            text,
-            left,
-            pick(Style::new().fg(theme.accent)).add_modifier(Modifier::BOLD),
-        );
+        let ink = row.ink(out, y, true);
+        let (x, _) = out.set_stringn(left, y, "Search the project for ", room, ink.label);
+        let rest = room.saturating_sub(usize::from(x - left));
+        out.set_stringn(x, y, text, rest, ink.hit);
     }
 
     /// Where the card for a list of choices goes in `area`: as wide as go to
-    /// file's, up to eight rows tall (SPEC_V1_LAYOUT §9), centred.
+    /// file's was, tall enough for five choices, centred.
     fn choices_card(area: Rect) -> Rect {
         let width = (area.width * 3 / 5).clamp(40, MAX_WIDTH).min(area.width);
-        let height = CHOICES_HEIGHT.min(area.height.saturating_sub(4));
+        let height = (CHROME + CHOICES_ROWS).min(area.height.saturating_sub(4));
         Rect {
             x: area.x + (area.width - width) / 2,
             y: area.y + (area.height - height) / 2,
@@ -769,68 +674,53 @@ impl Picker {
         }
     }
 
-    /// Dims `area` and draws a list of choices as a dialog over it (README §5.1,
-    /// SPEC_V1_LAYOUT §9): the lit top edge, the query on an input row, then one
-    /// row per match (its name with the matched letters in the accent, the
-    /// detail in `muted` and the source right-aligned), the selected one as the
-    /// glow row, and the key hints with the count. Returns where the cursor goes.
+    /// Dims `area` and draws a list of choices over it as a panel (tinkery-forge
+    /// spec F15): its title in the edge; `✦` and the query on a strip, with
+    /// how many match at the right; one row per match (its name with the
+    /// matched letters in the accent, the detail and, right-aligned, the
+    /// source), the selected one a pill; then the keys. Returns where the
+    /// cursor goes.
     fn render_choices(
         &self,
+        look: Look,
         theme: &Theme,
         frame: &mut Frame,
         area: Rect,
         choices: &[Choice],
     ) -> (u16, u16) {
-        crate::ui::dim(theme, frame.buffer_mut(), area);
+        let out = frame.buffer_mut();
+        kit::dim(theme, out, area);
         let card = Self::choices_card(area);
-        crate::ui::dialog_card(theme, frame, card);
-        // The edge, the query, one choice and the footer.
-        if card.height < 4 || card.width < 20 {
+        let inside = kit::panel_at(look, theme, out, card, self.query.label);
+        // The chrome and one choice.
+        if inside.is_empty() || card.height <= CHROME || card.width < 20 {
             return (card.x, card.y);
         }
-        let label_width = u16::try_from(self.query.label.width()).unwrap_or(0);
-        let cursor = crate::ui::input_row(
-            theme,
-            frame,
-            Rect {
-                y: card.y + 1,
-                height: 1,
-                ..card
-            },
-            self.query.label,
-            label_width,
-            &self.query,
-            true,
-        );
-        let out = frame.buffer_mut();
-        let muted = Style::new().fg(theme.muted);
-        let total = self.files.as_ref().map_or(0, Vec::len);
-        crate::ui::footer(theme, out, card, "↑↓ select   ⏎ run   esc close");
-        let count = format!("{} of {total}", self.matches.len());
-        let count_x = card
-            .right()
-            .saturating_sub(2 + u16::try_from(count.width()).unwrap_or(0));
-        out.set_string(count_x, card.bottom() - 1, count, muted);
+        let row = Row { look, theme, card };
 
-        let list = Rect {
-            y: card.y + 2,
-            height: card.height - 3,
-            ..card
-        };
+        let total = self.files.as_ref().map_or(0, Vec::len);
+        let quiet = kit::ink(theme, theme.muted, theme.raised2);
+        let count = Span::styled(
+            format!("{} of {total}", self.matches.len()),
+            Style::new().fg(quiet),
+        );
+        let field = kit::header(look, theme, out, card, vec![count]);
+        let query = Style::new().fg(theme.strong).bg(theme.raised2);
+        let cursor = self.query.render_value(out, field, query);
+
+        let keys = [("↑ ↓", "select"), ("⏎", "run"), ("Esc", "close")];
+        let hints = kit::hints(look, theme, &keys, theme.raised);
+        kit::put(out, row.left(), card.bottom() - 2, &hints, row.right());
+
+        let list_y = card.y + 4;
         if self.matches.is_empty() {
-            out.set_stringn(
-                list.x + 2,
-                list.y,
-                self.no_match,
-                usize::from(list.width.saturating_sub(4)),
-                muted,
-            );
+            let room = usize::from(row.right().saturating_sub(row.left()));
+            out.set_stringn(row.left(), list_y, self.no_match, room, row.muted());
             return cursor;
         }
-        let rows = usize::from(list.height);
+        let rows = usize::from(card.height - CHROME);
         // Scrolls just far enough to keep the selection on the last row.
         let first = self.selected.saturating_sub(rows.saturating_sub(1));
-        let ramps = theme.ramps();
         let mut matcher = self.matcher.clone();
         let mut indices = Vec::new();
         for (line, (index, m)) in self
@@ -844,45 +734,21 @@ impl Picker {
             let Some(choice) = choices.get(m.item) else {
                 continue;
             };
-            let y = list.y + u16::try_from(line).unwrap_or(u16::MAX);
-            let selected = index == self.selected;
-            if selected {
-                crate::ui::glow_row(theme, out, card.x, card.right(), y);
-                crate::ui::enter_mark(theme, out, card.right() - 4, y);
-            }
-            // In mono the selected row is reverse video, which colours of its
-            // own would break up.
-            let plain = selected && !ramps;
-            let style = |style: Style| if plain { Style::new() } else { style };
-            let name_style = style(Style::new().fg(if selected { theme.strong } else { theme.fg }));
-            let hit_style = style(Style::new().fg(theme.accent)).add_modifier(Modifier::BOLD);
-            let dim_style = style(Style::new().fg(if selected { theme.text } else { theme.muted }));
+            let y = list_y + u16::try_from(line).unwrap_or(u16::MAX);
+            let ink = row.ink(out, y, index == self.selected);
 
-            // The source ends two cells short of where `⏎` goes.
-            let source_end = card.right().saturating_sub(7);
-            let source_width = u16::try_from(choice.source.width()).unwrap_or(0);
-            let source_x = source_end.saturating_sub(source_width);
-            out.set_string(source_x, y, choice.source, dim_style);
+            let source_x = row.right().saturating_sub(width_of(choice.source));
+            out.set_string(source_x, y, choice.source, ink.faint);
             let text_end = source_x.saturating_sub(2);
 
             self.matched(&choice.name, &mut matcher, &mut indices);
-            let mut x = card.x + 2;
-            for (at, ch) in choice.name.chars().enumerate() {
-                let cell = ch.to_string();
-                let cells = u16::try_from(cell.width()).unwrap_or(1);
-                if x + cells > text_end {
-                    break;
-                }
-                let hit = u32::try_from(at).is_ok_and(|at| indices.binary_search(&at).is_ok());
-                out.set_string(x, y, &cell, if hit { hit_style } else { name_style });
-                x += cells;
-            }
+            let x = lit_text(out, (row.left(), y), text_end, &choice.name, &indices, ink);
             // A detected command is named after itself; saying it twice tells
             // nothing.
             if choice.detail != choice.name {
-                let detail_x = (card.x + DETAIL_X).max(x + 2);
+                let detail_x = (row.left() + DETAIL_X).max(x + 2);
                 let room = usize::from(text_end.saturating_sub(detail_x));
-                out.set_stringn(detail_x, y, &choice.detail, room, dim_style);
+                out.set_stringn(detail_x, y, &choice.detail, room, ink.faint);
             }
         }
         cursor
@@ -892,6 +758,38 @@ impl Picker {
 /// How many cells `text` takes.
 fn width_of(text: &str) -> u16 {
     u16::try_from(text.width()).unwrap_or(u16::MAX)
+}
+
+impl Mode {
+    /// The cast's title, in its panel's edge.
+    fn title(self) -> &'static str {
+        match self {
+            Mode::Files => "Go to file",
+            Mode::Commands => "Commands",
+            Mode::Line => "Go to line",
+            Mode::Text => "Search",
+        }
+    }
+
+    /// What the cast lists, after its name at the right of the query.
+    fn scope(self) -> &'static str {
+        match self {
+            Mode::Files => " · files · commands",
+            Mode::Commands => " · commands",
+            Mode::Line => " · line",
+            Mode::Text => " · text",
+        }
+    }
+
+    /// What Enter does, in the hints.
+    fn enter(self) -> &'static str {
+        match self {
+            Mode::Files => "open",
+            Mode::Commands => "run",
+            Mode::Line => "go",
+            Mode::Text => "search",
+        }
+    }
 }
 
 /// One part of the cast, under its header.
@@ -930,45 +828,82 @@ fn sections_height(sections: &[Section]) -> u16 {
     rows + u16::try_from(sections.len().saturating_sub(1)).unwrap_or(0)
 }
 
-/// Where a cast row's text goes: from `left` to `right`, inside `card`.
+/// Where the rows of a list go in `card`, and how they're drawn.
 struct Row<'a> {
+    look: Look,
     theme: &'a Theme,
     card: Rect,
-    left: u16,
-    right: u16,
 }
 
 impl Row<'_> {
-    /// When `selected`, lights row `y` as the one Enter acts on: the glow
-    /// across the card and `⏎` at the right.
-    fn select(&self, out: &mut Buffer, y: u16, selected: bool) {
-        if selected {
-            glow_row(self.theme, out, self.card.x, self.card.right(), y);
-            enter_mark(self.theme, out, self.right, y);
-        }
+    /// Where a row's text starts: four cells in, after the selection's mark.
+    fn left(&self) -> u16 {
+        self.card.x + 4
+    }
+
+    /// Where a row's text ends: four cells in from the card's right edge.
+    fn right(&self) -> u16 {
+        self.card.right().saturating_sub(4)
+    }
+
+    /// The cells of row `y` its text may take.
+    fn text(&self, y: u16) -> Rect {
+        Rect::new(self.left(), y, self.right().saturating_sub(self.left()), 1)
+    }
+
+    /// What a row that isn't a choice says (nothing matches, a hint) is in.
+    fn muted(&self) -> Style {
+        Style::new().fg(self.theme.muted).bg(self.theme.raised)
+    }
+
+    /// Draws row `y` as the one Enter acts on when `selected`, and returns
+    /// the styles its text goes in.
+    fn ink(&self, out: &mut Buffer, y: u16, selected: bool) -> RowInk {
+        let row = Rect::new(self.card.x + 1, y, self.card.width.saturating_sub(2), 1);
+        // Nothing reports the mouse's position yet, so no row is hovered.
+        kit::sel_row(
+            self.look,
+            self.theme,
+            out,
+            row,
+            selected,
+            false,
+            self.theme.raised,
+        )
     }
 }
 
-/// One file row of the cast in `room`: the file's name, its matched letters
-/// `accent` bold and the rest `fg` (`strong` when selected), then two blanks and
-/// its folder in plain `muted`: the design lights only the name, so a query that
-/// hits the folder (`src`, `util`) doesn't paint the folder of every row.
-/// `matched` holds the char indices of the matched letters in `path`, sorted. On
-/// the selected row in `mono`, which is reverse video, the only styling is bold.
-fn cast_file(
-    theme: &Theme,
+/// Draws `text` from `at`, stopping before `end`: the letters whose char
+/// indices are in `matched` (sorted) in `ink.hit`, the rest in `ink.label`.
+/// Returns the column after the last letter drawn.
+fn lit_text(
     out: &mut Buffer,
-    room: Rect,
-    path: &str,
+    (x, y): (u16, u16),
+    end: u16,
+    text: &str,
     matched: &[u32],
-    selected: bool,
-) {
-    let plain = selected && !theme.ramps();
-    let pick = |style: Style| if plain { Style::new() } else { style };
-    let name_hit = pick(Style::new().fg(theme.accent)).add_modifier(Modifier::BOLD);
-    let name_rest = pick(Style::new().fg(if selected { theme.strong } else { theme.fg }));
-    let dir = pick(Style::new().fg(theme.muted));
+    ink: RowInk,
+) -> u16 {
+    let mut x = x;
+    for (at, ch) in text.chars().enumerate() {
+        let cell = ch.to_string();
+        let cells = width_of(&cell);
+        if x + cells > end {
+            break;
+        }
+        let hit = u32::try_from(at).is_ok_and(|at| matched.binary_search(&at).is_ok());
+        out.set_string(x, y, &cell, if hit { ink.hit } else { ink.label });
+        x += cells;
+    }
+    x
+}
 
+/// One file row of the cast in `room`: the file's name, its matched letters
+/// `ink.hit` and the rest `ink.label`, then two blanks and its folder in
+/// `ink.faint`: the design lights only the name, so a query that hits the
+/// folder (`src`, `util`) doesn't paint the folder of every row. `matched`
+/// holds the char indices of the matched letters in `path`, sorted.
+fn cast_file(out: &mut Buffer, room: Rect, path: &str, matched: &[u32], ink: RowInk) {
     let chars: Vec<char> = path.chars().collect();
     // The name starts after the last `/`; a file at the root has no folder.
     let base = chars.iter().rposition(|&c| c == '/').map_or(0, |at| at + 1);
@@ -987,14 +922,14 @@ fn cast_file(
     };
     let mut x = room.x;
     for at in base..chars.len() {
-        if !put(&mut x, at, name_hit, name_rest) {
+        if !put(&mut x, at, ink.hit, ink.label) {
             return;
         }
     }
     // Two blanks, then the folder without the `/` that ends it.
     x += 2;
     for at in 0..base.saturating_sub(1) {
-        if !put(&mut x, at, dir, dir) {
+        if !put(&mut x, at, ink.faint, ink.faint) {
             return;
         }
     }
@@ -1007,6 +942,7 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     use crate::theme::mix;
+    use crate::ui::kit::{CAP_L, CAP_R};
 
     fn picker(files: &[&str]) -> Picker {
         let mut picker = Picker::cast(Vec::new(), 1, "");
@@ -1085,43 +1021,181 @@ mod tests {
             .to_vec()
     }
 
+    /// What a hint line reads with round ends.
+    fn hints_text(pairs: &[(&str, &str)]) -> String {
+        pairs
+            .iter()
+            .map(|(key, what)| format!("{CAP_L}{key}{CAP_R} {what}"))
+            .collect::<Vec<_>>()
+            .join("   ")
+    }
+
+    /// Asserts row `y` of `card` is the selected row: a pill of `hov` on
+    /// `raised` across the card's inside, with `›` in the accent, bold.
+    fn assert_selected(buffer: &Buffer, theme: &Theme, card: Rect, y: u16) {
+        let (left, right) = (&buffer[(card.x + 1, y)], &buffer[(card.right() - 2, y)]);
+        assert_eq!((left.symbol(), right.symbol()), (CAP_L, CAP_R), "row {y}");
+        assert_eq!((left.fg, left.bg), (theme.hov, theme.raised), "row {y}");
+        assert_eq!((right.fg, right.bg), (theme.hov, theme.raised), "row {y}");
+        for x in card.x + 2..card.right() - 2 {
+            assert_eq!(buffer[(x, y)].bg, theme.hov, "{x},{y}");
+        }
+        let mark = &buffer[(card.x + 2, y)];
+        assert_eq!(mark.symbol(), "›", "row {y}");
+        assert_eq!(mark.fg, theme.accent, "row {y}");
+        assert!(mark.modifier.contains(Modifier::BOLD), "row {y}");
+    }
+
+    /// Asserts row `y` of `card` isn't lit: the card's fill, no pill, no mark.
+    fn assert_resting(buffer: &Buffer, theme: &Theme, card: Rect, y: u16) {
+        for x in card.x + 1..card.right() - 1 {
+            let cell = &buffer[(x, y)];
+            assert_eq!(cell.bg, theme.raised, "{x},{y}");
+            assert!(!matches!(cell.symbol(), CAP_L | CAP_R | "›"), "{x},{y}");
+        }
+    }
+
+    /// Asserts `card` is drawn the new way: no lit top edge, no glow, no `⏎`
+    /// at a row's right, no rule.
+    fn assert_no_old_look(buffer: &Buffer, theme: &Theme, card: Rect) {
+        let glow = mix(theme.raised, theme.accent, 0.3);
+        for y in card.top()..card.bottom() {
+            for x in card.left()..card.right() {
+                let cell = &buffer[(x, y)];
+                assert!(!matches!(cell.symbol(), "▀" | "─"), "{x},{y}");
+                assert_ne!(cell.bg, glow, "{x},{y}");
+                assert_ne!(cell.bg, theme.accent, "accent is never a fill: {x},{y}");
+            }
+            assert_ne!(buffer[(card.right() - 5, y)].symbol(), "⏎", "row {y}");
+        }
+    }
+
     #[test]
-    fn choices_are_a_dialog_with_details_sources_and_the_glow() -> anyhow::Result<()> {
+    fn choices_are_a_panel_with_details_sources_and_a_pill() -> anyhow::Result<()> {
         let p = Picker::choices("Run", run_choices());
         let theme = Theme::default();
-        let mut terminal = Terminal::new(TestBackend::new(100, 30))?;
-        terminal.draw(|frame| {
-            p.render(&theme, frame, frame.area());
-        })?;
-        let buffer = terminal.backend().buffer();
-        // 60 wide, 8 tall, centred.
-        let card = Rect::new(20, 11, 60, 8);
+        let buffer = draw(&p, &theme)?;
+        // 60 wide, the chrome and five rows tall, centred.
+        let card = Rect::new(20, 9, 60, 12);
         assert_eq!(Picker::choices_card(Rect::new(0, 0, 100, 30)), card);
-        let row = |y: u16| -> String {
-            (card.x..card.right())
-                .map(|x| buffer[(x, y)].symbol())
-                .collect()
-        };
-        assert_eq!(buffer[(card.x, card.y)].symbol(), "▀");
-        assert!(
-            row(card.y + 1).starts_with("  ✦ Run  "),
-            "{:?}",
-            row(card.y + 1)
-        );
-        let first = row(card.y + 2);
-        assert!(first.starts_with("  dev         npm run dev"), "{first:?}");
-        assert!(first.ends_with(".tinkery.toml  ⏎    "), "{first:?}");
+        assert_eq!(p.card(Rect::new(0, 0, 100, 30)), card);
+        // The panel's edge, with the title in it.
+        let edge = card_row(&buffer, card, card.y);
+        assert!(edge.starts_with(" ▁ Run ▁▁▁"), "{edge:?}");
+        assert_eq!(buffer[(card.x + 1, card.y)].fg, theme.accent);
+        assert_eq!(buffer[(card.x + 3, card.y)].fg, theme.accent);
+        assert_eq!(buffer[(card.x, card.y + 1)].symbol(), "▕");
+        assert_eq!(buffer[(card.right() - 1, card.y + 1)].symbol(), "▏");
+        assert_eq!(buffer[(card.x + 1, card.bottom() - 1)].symbol(), "▔");
+        // The query's strip, with how many match at its right.
+        let query = card_row(&buffer, card, card.y + 2);
+        assert!(query.starts_with(&format!("▕{CAP_L}  ✦ ")), "{query:?}");
+        assert!(query.ends_with(&format!("2 of 2  {CAP_R}▏")), "{query:?}");
+        assert_eq!(buffer[(card.x + 4, card.y + 2)].fg, theme.accent2);
+        assert_eq!(buffer[(card.x + 10, card.y + 2)].bg, theme.raised2);
+        assert_eq!(buffer[(card.right() - 5, card.y + 2)].fg, theme.muted);
+        assert_eq!(text_of(&buffer, card, card.y + 3), "");
+
+        let first = text_of(&buffer, card, card.y + 4);
+        assert!(first.starts_with("dev         npm run dev"), "{first:?}");
+        assert!(first.ends_with(".tinkery.toml"), "{first:?}");
+        assert_selected(&buffer, &theme, card, card.y + 4);
+        // The selected row's name is `strong` bold, and what says less `text`.
+        let name = &buffer[(card.x + 4, card.y + 4)];
+        assert_eq!(name.fg, theme.strong);
+        assert!(name.modifier.contains(Modifier::BOLD));
+        assert_eq!(buffer[(card.x + 16, card.y + 4)].fg, theme.text);
+        assert_eq!(buffer[(card.right() - 5, card.y + 4)].fg, theme.text);
+        // Any other row is `fg`, with its detail and source in `muted`.
+        let second = text_of(&buffer, card, card.y + 5);
+        assert!(second.starts_with("test        cargo test"), "{second:?}");
+        assert_resting(&buffer, &theme, card, card.y + 5);
+        assert_eq!(buffer[(card.x + 4, card.y + 5)].fg, theme.fg);
+        assert!(buffer[(card.x + 4, card.y + 5)].modifier.is_empty());
+        assert_eq!(buffer[(card.x + 16, card.y + 5)].fg, theme.muted);
+        assert_eq!(buffer[(card.right() - 5, card.y + 5)].fg, theme.muted);
+
+        // The keys, on the row above the bottom edge.
+        let hints = text_of(&buffer, card, card.bottom() - 2);
         assert_eq!(
-            buffer[(card.x, card.y + 2)].bg,
-            mix(theme.raised, theme.accent, 0.3)
+            hints,
+            format!(
+                "{CAP_L}↑{CAP_R} {}",
+                hints_text(&[("↓", "select"), ("⏎", "run"), ("Esc", "close")])
+            )
         );
-        assert_eq!(buffer[(card.x + 14, card.y + 3)].fg, theme.muted);
-        let footer = row(card.bottom() - 1);
-        assert!(
-            footer.starts_with("  ↑↓ select   ⏎ run   esc close"),
-            "{footer:?}"
+        assert_eq!(text_of(&buffer, card, card.bottom() - 3), "");
+        assert_no_old_look(&buffer, &theme, card);
+        Ok(())
+    }
+
+    #[test]
+    fn choices_scroll_past_the_fifth_row_and_say_when_none_match() -> anyhow::Result<()> {
+        let choices: Vec<Choice> = (0..7)
+            .map(|i| Choice {
+                name: format!("job{i}"),
+                detail: format!("run {i}"),
+                source: "detected",
+            })
+            .collect();
+        let mut p = Picker::choices("Run", choices);
+        let theme = Theme::default();
+        let card = p.card(Rect::new(0, 0, 100, 30));
+        let buffer = draw(&p, &theme)?;
+        assert!(text_of(&buffer, card, card.y + 8).starts_with("job4 "));
+        assert_eq!(text_of(&buffer, card, card.y + 9), "");
+        assert!(card_row(&buffer, card, card.y + 2).contains("7 of 7"));
+        for _ in 0..6 {
+            p.handle(Input::Action(Action::Move(Motion::Down)));
+        }
+        let buffer = draw(&p, &theme)?;
+        assert!(text_of(&buffer, card, card.y + 4).starts_with("job2 "));
+        assert!(text_of(&buffer, card, card.y + 8).starts_with("job6 "));
+        assert_selected(&buffer, &theme, card, card.y + 8);
+        assert_resting(&buffer, &theme, card, card.y + 4);
+
+        type_query(&mut p, "zzz");
+        let buffer = draw(&p, &theme)?;
+        assert_eq!(text_of(&buffer, card, card.y + 4), "no match");
+        assert_eq!(buffer[(card.x + 4, card.y + 4)].fg, theme.muted);
+        assert_resting(&buffer, &theme, card, card.y + 4);
+        assert!(card_row(&buffer, card, card.y + 2).contains("✦ zzz"));
+        assert!(card_row(&buffer, card, card.y + 2).contains("0 of 7"));
+        Ok(())
+    }
+
+    #[test]
+    fn in_mono_the_selected_choice_is_reverse_video_with_no_colours() -> anyhow::Result<()> {
+        let mut p = Picker::choices("Run", run_choices());
+        type_query(&mut p, "d");
+        let mono = Theme::named("mono").expect("mono exists");
+        let buffer = draw(&p, &mono)?;
+        let card = p.card(Rect::new(0, 0, 100, 30));
+        let y = card.y + 4;
+        assert_eq!(
+            text_of(&buffer, card, y),
+            format!("{:<12}{:<27}.tinkery.toml", "dev", "npm run dev")
         );
-        assert!(footer.ends_with("2 of 2  "), "{footer:?}");
+        // The whole inside of the card, one style from edge to edge: nothing
+        // on the row has a colour of its own, the matched letter included.
+        let reversed = Theme::highlight(mono.hov, mono.strong);
+        for x in card.x + 1..card.right() - 1 {
+            let cell = &buffer[(x, y)];
+            assert!(cell.modifier.contains(Modifier::REVERSED), "{x}");
+            assert_eq!((Some(cell.fg), Some(cell.bg)), (reversed.fg, reversed.bg));
+            assert!(!matches!(cell.symbol(), CAP_L | CAP_R), "{x}");
+        }
+        assert_eq!(buffer[(card.x + 2, y)].symbol(), "›");
+        assert!(!buffer[(card.x, y)].modifier.contains(Modifier::REVERSED));
+        // No Nerd Font glyph anywhere, and no other row reversed.
+        for row in card.top()..card.bottom() {
+            let line = card_row(&buffer, card, row);
+            assert!(!line.contains(CAP_L) && !line.contains(CAP_R), "{line:?}");
+            if row != y {
+                let cell = &buffer[(card.x + 6, row)];
+                assert!(!cell.modifier.contains(Modifier::REVERSED), "row {row}");
+            }
+        }
         Ok(())
     }
 
@@ -1162,16 +1236,13 @@ mod tests {
         // Before the walk reports back, which a PTY test can't wait for.
         let p = Picker::cast(Vec::new(), 1, "");
         let theme = Theme::default();
-        let mut terminal = Terminal::new(TestBackend::new(100, 30))?;
-        terminal.draw(|frame| {
-            p.render(&theme, frame, frame.area());
-        })?;
-        let buffer = terminal.backend().buffer();
+        let buffer = draw(&p, &theme)?;
         let card = p.card(Rect::new(0, 0, 100, 30));
-        let line: String = (card.x..card.right())
-            .map(|x| buffer[(x, card.y + 5)].symbol())
-            .collect();
-        assert!(line.starts_with("    listing files…"), "{line:?}");
+        assert_eq!(text_of(&buffer, card, card.y + 5), "listing files…");
+        assert_eq!(buffer[(card.x + 4, card.y + 5)].fg, theme.muted);
+        // A message isn't a row to pick: it's never lit.
+        assert_resting(&buffer, &theme, card, card.y + 5);
+        assert!(card_row(&buffer, card, card.y).starts_with(" ▁ Go to file ▁"));
         Ok(())
     }
 
@@ -1180,49 +1251,57 @@ mod tests {
         let mut p = picker(FILES);
         type_query(&mut p, "main");
         let theme = Theme::default();
-        let mut terminal = Terminal::new(TestBackend::new(100, 30))?;
-        terminal.draw(|frame| {
-            p.render(&theme, frame, frame.area());
-        })?;
-        let buffer = terminal.backend().buffer();
+        let buffer = draw(&p, &theme)?;
         let card = p.card(Rect::new(0, 0, 100, 30));
         let row = card.y + 5;
         let line: String = (card.x..card.right())
             .map(|x| buffer[(x, row)].symbol())
             .collect();
-        assert!(line.starts_with("    main.rs  src"), "{line:?}");
-        let lit: String = (card.x..card.right())
+        assert!(
+            line.starts_with(&format!("▕{CAP_L}› main.rs  src ")),
+            "{line:?}"
+        );
+        assert_selected(&buffer, &theme, card, row);
+        // Accent and bold: the selection's mark and the matched letters.
+        let lit: String = (card.x + 1..card.right() - 1)
             .filter(|&x| {
                 let cell = &buffer[(x, row)];
                 cell.fg == theme.accent && cell.modifier.contains(Modifier::BOLD)
             })
             .map(|x| buffer[(x, row)].symbol())
             .collect();
-        assert_eq!(lit, "main");
-        assert_eq!(buffer[(card.x + 13, row)].fg, theme.muted);
+        assert_eq!(lit, "›main");
+        // The rest of the name is `strong` bold, the folder `text`.
+        let rest = &buffer[(card.x + 8, row)];
+        assert_eq!((rest.symbol(), rest.fg), (".", theme.strong));
+        assert!(rest.modifier.contains(Modifier::BOLD));
+        let folder = &buffer[(card.x + 13, row)];
+        assert_eq!((folder.symbol(), folder.fg), ("s", theme.text));
+        assert!(!folder.modifier.contains(Modifier::BOLD));
+        assert_no_old_look(&buffer, &theme, card);
         Ok(())
     }
 
     #[test]
-    fn letters_matched_in_the_folder_stay_muted() -> anyhow::Result<()> {
+    fn letters_matched_in_the_folder_are_not_lit() -> anyhow::Result<()> {
         let mut p = picker(FILES);
         type_query(&mut p, "util");
         let theme = Theme::default();
-        let mut terminal = Terminal::new(TestBackend::new(100, 30))?;
-        terminal.draw(|frame| {
-            p.render(&theme, frame, frame.area());
-        })?;
-        let buffer = terminal.backend().buffer();
+        let buffer = draw(&p, &theme)?;
         let card = p.card(Rect::new(0, 0, 100, 30));
         let row = card.y + 5;
         let line: String = (card.x..card.right())
             .map(|x| buffer[(x, row)].symbol())
             .collect();
-        assert!(line.starts_with("    helpers.rs  src/util"), "{line:?}");
+        assert!(
+            line.starts_with(&format!("▕{CAP_L}› helpers.rs  src/util ")),
+            "{line:?}"
+        );
+        // On the selected row the folder is `text`, and never lit.
         let folder = card.x + 16..card.x + 24;
         for x in folder {
             let cell = &buffer[(x, row)];
-            assert_eq!(cell.fg, theme.muted, "{:?} at {x}", cell.symbol());
+            assert_eq!(cell.fg, theme.text, "{:?} at {x}", cell.symbol());
             assert!(!cell.modifier.contains(Modifier::BOLD));
         }
         Ok(())
@@ -1252,9 +1331,18 @@ mod tests {
     fn draw(p: &Picker, theme: &Theme) -> anyhow::Result<Buffer> {
         let mut terminal = Terminal::new(TestBackend::new(100, 30))?;
         terminal.draw(|frame| {
-            p.render(theme, frame, frame.area());
+            p.render(Look::default(), theme, frame, frame.area());
         })?;
         Ok(terminal.backend().buffer().clone())
+    }
+
+    /// What row `y` of `card` says where a row's text goes: four cells in from
+    /// each edge, without the blanks around it.
+    fn text_of(buffer: &Buffer, card: Rect, y: u16) -> String {
+        let cells: String = (card.x + 4..card.right() - 4)
+            .map(|x| buffer[(x, y)].symbol())
+            .collect();
+        cells.trim().to_string()
     }
 
     /// The text of row `y` across `card`.
@@ -1290,18 +1378,36 @@ mod tests {
         let theme = Theme::default();
         let buffer = draw(&p, &theme)?;
         let card = p.card(Rect::new(0, 0, 100, 30));
-        assert!(card_row(&buffer, card, card.y + 4).starts_with("    COMMANDS"));
+        assert!(card_row(&buffer, card, card.y).starts_with(" ▁ Commands ▁"));
+        assert_eq!(text_of(&buffer, card, card.y + 4), "COMMANDS");
+        let heading = &buffer[(card.x + 4, card.y + 4)];
+        assert_eq!(heading.fg, theme.muted);
+        assert!(heading.modifier.contains(Modifier::BOLD));
+        // The selected row is a pill, its key where every row's is.
         let first = card_row(&buffer, card, card.y + 5);
-        assert!(first.starts_with("    Save "), "{first:?}");
-        // The selected row's key steps left of `⏎`.
-        assert!(first.ends_with("Ctrl+S  ⏎    "), "{first:?}");
+        assert!(first.starts_with(&format!("▕{CAP_L}› Save ")), "{first:?}");
+        assert!(first.ends_with(&format!(" Ctrl+S  {CAP_R}▏")), "{first:?}");
+        assert_selected(&buffer, &theme, card, card.y + 5);
+        assert_eq!(buffer[(card.x + 4, card.y + 5)].fg, theme.strong);
+        assert_eq!(buffer[(card.right() - 10, card.y + 5)].fg, theme.text);
         let second = card_row(&buffer, card, card.y + 6);
-        assert!(second.starts_with("    Split right "), "{second:?}");
-        assert!(second.ends_with(" Alt+V    "), "{second:?}");
+        assert!(second.starts_with("▕   Split right "), "{second:?}");
+        assert!(second.ends_with(" Alt+V   ▏"), "{second:?}");
+        assert_resting(&buffer, &theme, card, card.y + 6);
+        assert_eq!(buffer[(card.x + 4, card.y + 6)].fg, theme.fg);
         assert_eq!(buffer[(card.right() - 9, card.y + 6)].fg, theme.muted);
         // A command without a key shows none.
-        let last = card_row(&buffer, card, card.y + 8);
-        assert_eq!(last.trim_end(), "    Cycle focus");
+        assert_eq!(text_of(&buffer, card, card.y + 8), "Cycle focus");
+        // The prefixes and the keys, ending with the way out.
+        assert_eq!(
+            text_of(&buffer, card, card.bottom() - 2),
+            format!(
+                "{}   {CAP_L}↑{CAP_R} {}",
+                hints_text(&[(">", "commands"), (":", "line"), ("/", "text")]),
+                hints_text(&[("↓", "move"), ("⏎", "run"), ("Esc", "close")])
+            )
+        );
+        assert_no_old_look(&buffer, &theme, card);
         Ok(())
     }
 
@@ -1344,12 +1450,14 @@ mod tests {
         let theme = Theme::default();
         let buffer = draw(&p, &theme)?;
         let card = p.card(Rect::new(0, 0, 100, 30));
-        assert!(card_row(&buffer, card, card.y + 4).starts_with("    LINE"));
-        let row = card_row(&buffer, card, card.y + 5);
-        assert!(
-            row.starts_with("    999  is out of range: lines 1–200"),
-            "{row:?}"
+        assert!(card_row(&buffer, card, card.y).starts_with(" ▁ Go to line ▁"));
+        assert_eq!(text_of(&buffer, card, card.y + 4), "LINE");
+        assert_eq!(
+            text_of(&buffer, card, card.y + 5),
+            "999  is out of range: lines 1–200"
         );
+        // Nothing to go to, so no row is selected.
+        assert_resting(&buffer, &theme, card, card.y + 5);
         assert_eq!(buffer[(card.x + 4, card.y + 5)].fg, theme.err);
         assert_eq!(buffer[(card.x + 9, card.y + 5)].fg, theme.muted);
         // Where it's typed too, after `✦ :`.
@@ -1357,9 +1465,190 @@ mod tests {
         assert!(card_row(&buffer, card, card.y + 2).contains("cast · line"));
 
         let buffer = draw(&cast(":120"), &theme)?;
-        let row = card_row(&buffer, card, card.y + 5);
-        assert!(row.starts_with("    Go to line 120  of 200"), "{row:?}");
+        assert_eq!(text_of(&buffer, card, card.y + 5), "Go to line 120  of 200");
+        assert_selected(&buffer, &theme, card, card.y + 5);
+        assert_eq!(buffer[(card.x + 4, card.y + 5)].fg, theme.strong);
+        assert_eq!(buffer[(card.x + 20, card.y + 5)].fg, theme.text);
         assert_eq!(buffer[(card.x + 7, card.y + 2)].fg, theme.strong);
+        assert!(
+            text_of(&buffer, card, card.bottom() - 2)
+                .ends_with(&hints_text(&[("⏎", "go"), ("Esc", "close")]))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_slash_shows_the_search_enter_starts_as_the_selected_row() -> anyhow::Result<()> {
+        let theme = Theme::default();
+        let p = cast("/");
+        let card = p.card(Rect::new(0, 0, 100, 30));
+        let buffer = draw(&p, &theme)?;
+        assert!(card_row(&buffer, card, card.y).starts_with(" ▁ Search ▁"));
+        assert_eq!(text_of(&buffer, card, card.y + 4), "TEXT");
+        assert_eq!(
+            text_of(&buffer, card, card.y + 5),
+            "type text to search the project for"
+        );
+        assert_resting(&buffer, &theme, card, card.y + 5);
+
+        let buffer = draw(&cast("/foo"), &theme)?;
+        assert_eq!(
+            text_of(&buffer, card, card.y + 5),
+            "Search the project for foo"
+        );
+        assert_selected(&buffer, &theme, card, card.y + 5);
+        let word = &buffer[(card.x + 27, card.y + 5)];
+        assert_eq!((word.symbol(), word.fg), ("f", theme.accent));
+        assert!(word.modifier.contains(Modifier::BOLD));
+        assert!(card_row(&buffer, card, card.y + 2).contains("cast · text"));
+        assert!(
+            text_of(&buffer, card, card.bottom() - 2)
+                .ends_with(&hints_text(&[("⏎", "search"), ("Esc", "close")]))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn the_cast_is_a_panel_with_the_query_on_a_strip() -> anyhow::Result<()> {
+        // Four files and two commands hold an `r`.
+        let p = cast("r");
+        let card = p.card(Rect::new(0, 0, 100, 30));
+        for name in ["tinkery", "tinkery-light"] {
+            let theme = Theme::named(name).expect("a listed theme exists");
+            let buffer = draw(&p, &theme)?;
+            // An accent edge with the title in it, around `raised`.
+            let edge = card_row(&buffer, card, card.y);
+            assert!(edge.starts_with(" ▁ Go to file ▁"), "{name}: {edge:?}");
+            assert_eq!(buffer[(card.x + 20, card.y)].fg, theme.accent, "{name}");
+            assert_eq!(buffer[(card.x + 20, card.y + 1)].bg, theme.raised, "{name}");
+            assert_eq!(text_of(&buffer, card, card.y + 1), "", "{name}");
+            // The strip: `raised2` between two ends, across the inside.
+            let y = card.y + 2;
+            let query = card_row(&buffer, card, y);
+            assert!(
+                query.starts_with(&format!("▕{CAP_L}  ✦ r ")),
+                "{name}: {query:?}"
+            );
+            assert!(
+                query.ends_with(&format!("cast · files · commands  {CAP_R}▏")),
+                "{name}: {query:?}"
+            );
+            let cap = &buffer[(card.x + 1, y)];
+            assert_eq!((cap.fg, cap.bg), (theme.raised2, theme.raised), "{name}");
+            for x in card.x + 2..card.right() - 2 {
+                assert_eq!(buffer[(x, y)].bg, theme.raised2, "{name}: {x}");
+            }
+            assert_eq!(buffer[(card.x + 4, y)].fg, theme.accent2, "{name}");
+            assert_eq!(buffer[(card.x + 6, y)].fg, theme.strong, "{name}");
+            assert_eq!(buffer[(card.right() - 27, y)].fg, theme.accent, "{name}");
+            assert_eq!(buffer[(card.right() - 5, y)].fg, theme.muted, "{name}");
+            // The row under it is blank, where the rule was.
+            assert_eq!(text_of(&buffer, card, card.y + 3), "", "{name}");
+            // Section headings in `muted` bold.
+            for (row, heading) in [(card.y + 4, "FILES"), (card.y + 10, "COMMANDS")] {
+                assert_eq!(text_of(&buffer, card, row), heading, "{name}");
+                let cell = &buffer[(card.x + 4, row)];
+                assert_eq!(cell.fg, theme.muted, "{name}");
+                assert!(cell.modifier.contains(Modifier::BOLD), "{name}");
+            }
+            assert_selected(&buffer, &theme, card, card.y + 5);
+            assert_no_old_look(&buffer, &theme, card);
+            // The keys, on the row above the bottom edge.
+            assert_eq!(
+                text_of(&buffer, card, card.bottom() - 2),
+                format!(
+                    "{}   {CAP_L}↑{CAP_R} {}",
+                    hints_text(&[(">", "commands"), (":", "line"), ("/", "text")]),
+                    hints_text(&[("↓", "move"), ("⏎", "open"), ("Esc", "close")])
+                ),
+                "{name}"
+            );
+            let key = &buffer[(card.x + 5, card.bottom() - 2)];
+            assert_eq!((key.fg, key.bg), (theme.strong, theme.btn), "{name}");
+            assert_eq!(buffer[(card.x + 1, card.bottom() - 1)].symbol(), "▔");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_narrow_cast_keeps_the_keys_that_end_its_hints() -> anyhow::Result<()> {
+        let p = cast("");
+        let theme = Theme::default();
+        let mut terminal = Terminal::new(TestBackend::new(60, 30))?;
+        terminal.draw(|frame| {
+            p.render(Look::default(), &theme, frame, frame.area());
+        })?;
+        let buffer = terminal.backend().buffer();
+        let card = p.card(Rect::new(0, 0, 60, 30));
+        assert_eq!(card.width, 56);
+        assert_eq!(
+            text_of(buffer, card, card.bottom() - 2),
+            format!(
+                "{CAP_L}↑{CAP_R} {}",
+                hints_text(&[("↓", "move"), ("⏎", "open"), ("Esc", "close")])
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn the_selection_moves_its_pill_from_files_into_commands() -> anyhow::Result<()> {
+        let mut p = cast("");
+        let theme = Theme::default();
+        let card = p.card(Rect::new(0, 0, 100, 30));
+        let buffer = draw(&p, &theme)?;
+        assert_selected(&buffer, &theme, card, card.y + 5);
+        for y in card.y + 6..card.y + 10 {
+            assert_resting(&buffer, &theme, card, y);
+        }
+        for _ in 0..FILES.len() {
+            p.handle(Input::Action(Action::Move(Motion::Down)));
+        }
+        let buffer = draw(&p, &theme)?;
+        // Five file rows, a blank and `COMMANDS`, then the selected command.
+        assert_eq!(text_of(&buffer, card, card.y + 11), "COMMANDS");
+        assert_selected(&buffer, &theme, card, card.y + 12);
+        assert!(text_of(&buffer, card, card.y + 12).starts_with("Save "));
+        for y in card.y + 5..card.y + 10 {
+            assert_resting(&buffer, &theme, card, y);
+        }
+        assert_resting(&buffer, &theme, card, card.y + 13);
+        Ok(())
+    }
+
+    #[test]
+    fn in_mono_the_selected_cast_row_is_reverse_video_with_no_colours() -> anyhow::Result<()> {
+        let mono = Theme::named("mono").expect("mono exists");
+        let reversed = Theme::highlight(mono.hov, mono.strong);
+        for query in ["main", ">sav", ":120", "/foo"] {
+            let p = cast(query);
+            let card = p.card(Rect::new(0, 0, 100, 30));
+            let buffer = draw(&p, &mono)?;
+            let y = card.y + 5;
+            for x in card.x + 1..card.right() - 1 {
+                let cell = &buffer[(x, y)];
+                assert!(cell.modifier.contains(Modifier::REVERSED), "{query}: {x}");
+                assert_eq!(
+                    (Some(cell.fg), Some(cell.bg)),
+                    (reversed.fg, reversed.bg),
+                    "{query}: {x}"
+                );
+            }
+            assert_eq!(buffer[(card.x + 2, y)].symbol(), "›", "{query}");
+            // Terminal colours only, and no Nerd Font glyph.
+            for row in card.top()..card.bottom() {
+                for x in card.left()..card.right() {
+                    let cell = &buffer[(x, row)];
+                    let rgb = |c| matches!(c, ratatui::style::Color::Rgb(..));
+                    assert!(!rgb(cell.fg) && !rgb(cell.bg), "{query}: {x},{row}");
+                    assert!(!matches!(cell.symbol(), CAP_L | CAP_R), "{query}");
+                    if row != y {
+                        let on = cell.modifier.contains(Modifier::REVERSED);
+                        assert!(!on, "{query}: {x},{row}");
+                    }
+                }
+            }
+        }
         Ok(())
     }
 

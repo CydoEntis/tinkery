@@ -4898,11 +4898,11 @@ impl App {
             frame.set_cursor_position(at);
         }
         if let Some(picker) = &self.picker {
-            let at = picker.render(theme, frame, frame.area());
+            let at = picker.render(self.look, theme, frame, frame.area());
             frame.set_cursor_position(at);
         }
         if let Some(browser) = &self.folders {
-            let at = browser.render(theme, frame, frame.area());
+            let at = browser.render(self.look, theme, frame, frame.area());
             frame.set_cursor_position(at);
         }
         // Nothing is typed into the catalog, so it shows no cursor.

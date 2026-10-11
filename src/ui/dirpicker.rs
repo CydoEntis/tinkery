@@ -10,14 +10,15 @@ use nucleo::{Config, Matcher, Utf32Str};
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Style;
+use ratatui::text::Span;
 use unicode_width::UnicodeWidthStr;
 
 use crate::buffer::movement::Motion;
 use crate::keymap::{Action, Input};
 use crate::theme::Theme;
+use crate::ui::kit::{self, Look, RowInk};
 use crate::ui::prompt::{Outcome, PromptBar};
-use crate::ui::{dialog_card, dim, enter_mark, glow_row};
 
 /// The card's width before clamping to the screen, and the row it drops from:
 /// the cast palette's, so the browser reads as the palette turning into it.
@@ -25,12 +26,18 @@ const WIDTH: u16 = 86;
 const TOP: u16 = 4;
 /// Most folder rows shown; the selection scrolls through the rest.
 const FOLDER_ROWS: usize = 10;
-/// The rows other than the folders: the lit edge, a blank, the header, the
-/// rule and the open row above them; a blank, the footer and a blank below.
+/// The rows other than the folders: the edge, a blank, the header, a blank
+/// and the open row above them; a blank, the hints and the edge below.
 const CHROME: u16 = 8;
 /// Right of the header: what Enter does here and what's listed.
 const SCOPE: &str = "open · folders";
-const FOOTER: &str = "⏎ into  ← up  ctrl+⏎ open here  esc cancel";
+/// The keys, on the panel's last row.
+const HINTS: [(&str, &str); 4] = [
+    ("⏎", "into"),
+    ("←", "up"),
+    ("Ctrl+⏎", "open here"),
+    ("Esc", "close"),
+];
 
 /// What a key did to the browser, when it did more than move or filter.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -246,63 +253,49 @@ impl DirPicker {
         }
     }
 
-    /// Dims `area` and draws the card over it: the lit edge; `✦`, the folder
-    /// and the query, with `open · folders` at the right; a rule; the open row;
-    /// the folders, the selected one on the glow row with `⏎`; the footer.
+    /// Dims `area` and draws the browser over it as a panel (tinkery-forge spec
+    /// F15): its title in the edge; `✦`, the folder and the query on a strip,
+    /// with `open · folders` at the right; the open row; the folders, the
+    /// selected row a pill; then the keys, on the row above the bottom edge.
     /// Returns where the cursor goes.
-    pub fn render(&self, theme: &Theme, frame: &mut Frame, area: Rect) -> (u16, u16) {
-        dim(theme, frame.buffer_mut(), area);
+    pub fn render(&self, look: Look, theme: &Theme, frame: &mut Frame, area: Rect) -> (u16, u16) {
+        let out = frame.buffer_mut();
+        kit::dim(theme, out, area);
         let card = self.card(area);
-        dialog_card(theme, frame, card);
+        let inside = kit::panel_at(look, theme, out, card, self.query.label);
         let rows = self.rows();
         let full = CHROME + u16::try_from(rows).unwrap_or(1);
-        if card.height < full || card.width < 40 {
+        if inside.is_empty() || card.height < full || card.width < 40 {
             return (card.x, card.y);
         }
-        let out = frame.buffer_mut();
-        let left = card.x + 4;
-        let right = card.right() - 4;
-        let muted = Style::new().fg(theme.muted);
+        let list = List { look, theme, card };
 
-        let header_y = card.y + 2;
-        let scope_x = right - width_of(SCOPE);
-        out.set_string(scope_x, header_y, SCOPE, muted);
-        out.set_string(
-            left,
-            header_y,
-            "✦",
-            Style::new().fg(theme.accent2).add_modifier(Modifier::BOLD),
-        );
-        // Two blanks short of the scope, so a long path never runs into it.
-        let field = Rect::new(left + 2, header_y, scope_x.saturating_sub(left + 4), 1);
+        let quiet = kit::ink(theme, theme.muted, theme.raised2);
+        let scope = vec![Span::styled(SCOPE, Style::new().fg(quiet))];
+        // The field ends two blanks short of the scope, so a long path never
+        // runs into it.
+        let field = kit::header(look, theme, out, card, scope);
         let cursor = self.render_header(theme, out, field);
 
-        for x in card.x + 2..card.right() - 2 {
-            out[(x, card.y + 3)].set_symbol("─").set_fg(theme.line2);
-        }
-
         let open_y = card.y + 4;
-        self.render_open_row(theme, out, card, open_y);
-        self.render_folders(theme, out, card, open_y + 1, rows);
+        self.render_open_row(out, &list, open_y);
+        self.render_folders(out, &list, open_y + 1, rows);
 
-        let footer_y = open_y + 1 + u16::try_from(rows).unwrap_or(1) + 1;
-        out.set_stringn(
-            left,
-            footer_y,
-            FOOTER,
-            usize::from(right.saturating_sub(left)),
-            muted,
-        );
+        let hints = kit::hints(look, theme, &HINTS, theme.raised);
+        let hints_y = open_y + 1 + u16::try_from(rows).unwrap_or(1) + 1;
+        kit::put(out, list.left(), hints_y, &hints, list.right());
         cursor
     }
 
-    /// The folder shown in `text`, then the query in `strong`; the folder is cut
-    /// from the front with `…` when both don't fit. A typed absolute path stands
-    /// alone, as the folder in front of it would read as part of it.
+    /// The folder shown in `text`, then the query in `strong`, on the header's
+    /// strip; the folder is cut from the front with `…` when both don't fit. A
+    /// typed absolute path stands alone, as the folder in front of it would
+    /// read as part of it.
     fn render_header(&self, theme: &Theme, out: &mut Buffer, field: Rect) -> (u16, u16) {
         if field.width == 0 {
             return (field.x, field.y);
         }
+        let on = Style::new().bg(theme.raised2);
         let typed = self.query.text();
         let mut x = field.x;
         if !Path::new(typed).is_absolute() {
@@ -315,55 +308,40 @@ impl DirPicker {
             let room = usize::from(field.width).saturating_sub(query_room.max(8));
             let shown = cut_front(&shown, room);
             x = out
-                .set_stringn(x, field.y, &shown, room, Style::new().fg(theme.text))
+                .set_stringn(x, field.y, &shown, room, on.fg(theme.text))
                 .0;
         }
         let rest = Rect::new(x, field.y, field.right().saturating_sub(x), 1);
-        self.query
-            .render_value(out, rest, Style::new().fg(theme.strong))
+        self.query.render_value(out, rest, on.fg(theme.strong))
     }
 
     /// `⏎ open <folder>`: what Enter does with nothing else picked.
-    fn render_open_row(&self, theme: &Theme, out: &mut Buffer, card: Rect, y: u16) {
-        let left = card.x + 4;
-        let right = card.right() - 4;
-        let selected = self.selected == 0;
-        if selected {
-            glow_row(theme, out, card.x, card.right(), y);
-            enter_mark(theme, out, right, y);
-        }
-        let plain = selected && !theme.ramps();
-        let pick = |style: Style| if plain { Style::new() } else { style };
-        let end = usize::from(right.saturating_sub(left + 3));
-        let (x, _) = out.set_stringn(left, y, "⏎ ", end, pick(Style::new().fg(theme.accent)));
+    fn render_open_row(&self, out: &mut Buffer, list: &List, y: u16) {
+        let left = list.left();
+        let ink = list.ink(out, y, self.selected == 0);
+        let end = usize::from(list.right().saturating_sub(left));
+        let enter = ink.of(Style::new().fg(list.theme.accent));
+        let (x, _) = out.set_stringn(left, y, "⏎ ", end, enter);
         let used = usize::from(x - left);
-        let label = pick(Style::new().fg(if selected { theme.strong } else { theme.fg }));
-        let (x, _) = out.set_stringn(x, y, "open ", end.saturating_sub(used), label);
+        let (x, _) = out.set_stringn(x, y, "open ", end.saturating_sub(used), ink.label);
         let used = usize::from(x - left);
         let path = self.dir.display().to_string();
         let room = end.saturating_sub(used);
-        out.set_stringn(
-            x,
-            y,
-            cut_front(&path, room),
-            room,
-            pick(Style::new().fg(theme.muted)),
-        );
+        out.set_stringn(x, y, cut_front(&path, room), room, ink.faint);
     }
 
     /// Up to `rows` folders from row `y`, scrolled just far enough to keep a
     /// selected folder on the last row: `▸` then the name, its matched letters
     /// in the accent.
-    fn render_folders(&self, theme: &Theme, out: &mut Buffer, card: Rect, y: u16, rows: usize) {
-        let left = card.x + 4;
-        let right = card.right() - 4;
-        let muted = Style::new().fg(theme.muted);
+    fn render_folders(&self, out: &mut Buffer, list: &List, y: u16, rows: usize) {
+        let left = list.left();
         if self.matches.is_empty() {
             let why = if self.folders.is_empty() {
                 "no folders here"
             } else {
                 "no matching folders"
             };
+            let muted = Style::new().fg(list.theme.muted).bg(list.theme.raised);
             out.set_string(left, y, why, muted);
             return;
         }
@@ -379,32 +357,57 @@ impl DirPicker {
             .enumerate()
         {
             let row_y = y + u16::try_from(line).unwrap_or(u16::MAX);
-            let selected = index + 1 == self.selected;
-            if selected {
-                glow_row(theme, out, card.x, card.right(), row_y);
-                enter_mark(theme, out, right, row_y);
-            }
-            let plain = selected && !theme.ramps();
-            let pick = |style: Style| if plain { Style::new() } else { style };
-            out.set_string(left, row_y, "▸", pick(muted));
+            let ink = list.ink(out, row_y, index + 1 == self.selected);
+            out.set_string(left, row_y, "▸", ink.faint);
             let name = &self.folders[folder];
             self.matched(name, &mut matcher, &mut indices);
-            let hit = pick(Style::new().fg(theme.accent)).add_modifier(Modifier::BOLD);
-            let rest = pick(Style::new().fg(if selected { theme.strong } else { theme.fg }));
-            // Two blanks short of `⏎`, so a long name never runs into it.
-            let end = right.saturating_sub(3);
             let mut x = left + 2;
             for (at, ch) in name.chars().enumerate() {
                 let cell = ch.to_string();
                 let cells = width_of(&cell);
-                if x + cells > end {
+                if x + cells > list.right() {
                     break;
                 }
                 let is_hit = u32::try_from(at).is_ok_and(|at| indices.binary_search(&at).is_ok());
-                out.set_string(x, row_y, &cell, if is_hit { hit } else { rest });
+                out.set_string(x, row_y, &cell, if is_hit { ink.hit } else { ink.label });
                 x += cells;
             }
         }
+    }
+}
+
+/// Where the browser's rows go in `card`, and how they're drawn.
+struct List<'a> {
+    look: Look,
+    theme: &'a Theme,
+    card: Rect,
+}
+
+impl List<'_> {
+    /// Where a row's text starts: four cells in, after the selection's mark.
+    fn left(&self) -> u16 {
+        self.card.x + 4
+    }
+
+    /// Where a row's text ends: four cells in from the card's right edge.
+    fn right(&self) -> u16 {
+        self.card.right().saturating_sub(4)
+    }
+
+    /// Draws row `y` as the one Enter acts on when `selected`, and returns
+    /// the styles its text goes in.
+    fn ink(&self, out: &mut Buffer, y: u16, selected: bool) -> RowInk {
+        let row = Rect::new(self.card.x + 1, y, self.card.width.saturating_sub(2), 1);
+        // Nothing reports the mouse's position yet, so no row is hovered.
+        kit::sel_row(
+            self.look,
+            self.theme,
+            out,
+            row,
+            selected,
+            false,
+            self.theme.raised,
+        )
     }
 }
 
@@ -494,7 +497,10 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
+    use ratatui::style::Modifier;
+
     use crate::theme::mix;
+    use crate::ui::kit::{CAP_L, CAP_R};
 
     fn folder(names: &[&str]) -> anyhow::Result<tempfile::TempDir> {
         let dir = tempfile::tempdir()?;
@@ -671,7 +677,7 @@ mod tests {
     fn draw(p: &DirPicker, theme: &Theme) -> anyhow::Result<Buffer> {
         let mut terminal = Terminal::new(TestBackend::new(100, 30))?;
         terminal.draw(|frame| {
-            p.render(theme, frame, frame.area());
+            p.render(Look::default(), theme, frame, frame.area());
         })?;
         Ok(terminal.backend().buffer().clone())
     }
@@ -682,65 +688,198 @@ mod tests {
             .collect()
     }
 
+    /// What row `y` of `card` says where a row's text goes: four cells in from
+    /// each edge, without the blanks around it.
+    fn text_of(buffer: &Buffer, card: Rect, y: u16) -> String {
+        let cells: String = (card.x + 4..card.right() - 4)
+            .map(|x| buffer[(x, y)].symbol())
+            .collect();
+        cells.trim().to_string()
+    }
+
+    /// What the hints read with round ends.
+    fn hints_text() -> String {
+        HINTS
+            .iter()
+            .map(|(key, what)| format!("{CAP_L}{key}{CAP_R} {what}"))
+            .collect::<Vec<_>>()
+            .join("   ")
+    }
+
+    /// Asserts row `y` of `card` is the selected row: a pill of `hov` on
+    /// `raised` across the card's inside, with `›` in the accent, bold.
+    fn assert_selected(buffer: &Buffer, theme: &Theme, card: Rect, y: u16) {
+        let (left, right) = (&buffer[(card.x + 1, y)], &buffer[(card.right() - 2, y)]);
+        assert_eq!((left.symbol(), right.symbol()), (CAP_L, CAP_R), "row {y}");
+        assert_eq!((left.fg, left.bg), (theme.hov, theme.raised), "row {y}");
+        assert_eq!((right.fg, right.bg), (theme.hov, theme.raised), "row {y}");
+        for x in card.x + 2..card.right() - 2 {
+            assert_eq!(buffer[(x, y)].bg, theme.hov, "{x},{y}");
+        }
+        let mark = &buffer[(card.x + 2, y)];
+        assert_eq!(mark.symbol(), "›", "row {y}");
+        assert_eq!(mark.fg, theme.accent, "row {y}");
+        assert!(mark.modifier.contains(Modifier::BOLD), "row {y}");
+    }
+
+    /// Asserts row `y` of `card` isn't lit: the card's fill, no pill, no mark.
+    fn assert_resting(buffer: &Buffer, theme: &Theme, card: Rect, y: u16) {
+        for x in card.x + 1..card.right() - 1 {
+            let cell = &buffer[(x, y)];
+            assert_eq!(cell.bg, theme.raised, "{x},{y}");
+            assert!(!matches!(cell.symbol(), CAP_L | CAP_R | "›"), "{x},{y}");
+        }
+    }
+
     #[test]
-    fn the_card_is_the_casts_with_header_rule_open_row_folders_and_footer() -> anyhow::Result<()> {
+    fn the_browser_is_a_panel_with_header_open_row_folders_and_hints() -> anyhow::Result<()> {
         let names: Vec<String> = (0..12).map(|i| format!("dir{i:02}")).collect();
         let refs: Vec<&str> = names.iter().map(String::as_str).collect();
         let dir = folder(&refs)?;
         let mut p = browse(dir.path())?;
-        let theme = Theme::default();
         let area = Rect::new(0, 0, 100, 30);
         let card = p.card(area);
+        // The cast's card: 86 wide from row 4, as tall as its rows need.
         assert_eq!(card, Rect::new(7, 4, 86, 18));
-        let buffer = draw(&p, &theme)?;
-        assert_eq!(buffer[(card.x, card.y)].symbol(), "▀");
-        let header = card_row(&buffer, card, card.y + 2);
-        assert!(header.starts_with("    ✦ "), "{header:?}");
-        assert!(header.ends_with("open · folders    "), "{header:?}");
-        assert_eq!(buffer[(card.x + 4, card.y + 2)].fg, theme.accent2);
-        assert_eq!(buffer[(card.x + 5, card.y + 3)].symbol(), "─");
-        let open = card_row(&buffer, card, card.y + 4);
-        assert!(open.starts_with("    ⏎ open "), "{open:?}");
-        assert!(open.ends_with("⏎    "), "{open:?}");
-        assert_eq!(
-            buffer[(card.x, card.y + 4)].bg,
-            mix(theme.raised, theme.accent, 0.3)
-        );
-        let first = card_row(&buffer, card, card.y + 5);
-        assert!(first.starts_with("    ▸ dir00 "), "{first:?}");
-        let last = card_row(&buffer, card, card.y + 14);
-        assert!(last.starts_with("    ▸ dir09 "), "{last:?}");
-        let footer = card_row(&buffer, card, card.y + 16);
-        assert!(footer.starts_with(&format!("    {FOOTER}")), "{footer:?}");
+        for name in ["tinkery", "tinkery-light"] {
+            let theme = Theme::named(name).expect("a listed theme exists");
+            let buffer = draw(&p, &theme)?;
+            // An accent edge with the title in it; no lit edge, no rule.
+            let edge = card_row(&buffer, card, card.y);
+            assert!(edge.starts_with(" ▁ Open directory ▁"), "{name}: {edge:?}");
+            assert_eq!(buffer[(card.x + 30, card.y)].fg, theme.accent, "{name}");
+            assert_eq!(buffer[(card.x, card.y + 1)].symbol(), "▕", "{name}");
+            assert_eq!(buffer[(card.x + 1, card.bottom() - 1)].symbol(), "▔");
+            // The header's strip: `✦`, the folder, and the scope at the right.
+            let y = card.y + 2;
+            let header = card_row(&buffer, card, y);
+            assert!(
+                header.starts_with(&format!("▕{CAP_L}  ✦ ")),
+                "{name}: {header:?}"
+            );
+            assert!(
+                header.ends_with(&format!("open · folders  {CAP_R}▏")),
+                "{name}: {header:?}"
+            );
+            for x in card.x + 2..card.right() - 2 {
+                assert_eq!(buffer[(x, y)].bg, theme.raised2, "{name}: {x}");
+            }
+            assert_eq!(buffer[(card.x + 4, y)].fg, theme.accent2, "{name}");
+            assert_eq!(buffer[(card.x + 6, y)].fg, theme.text, "{name}");
+            assert_eq!(buffer[(card.right() - 5, y)].fg, theme.muted, "{name}");
+            assert_eq!(text_of(&buffer, card, card.y + 3), "", "{name}");
+            // The open row, selected: a pill, its words `strong` bold.
+            let open = text_of(&buffer, card, card.y + 4);
+            assert!(open.starts_with("⏎ open "), "{name}: {open:?}");
+            assert_selected(&buffer, &theme, card, card.y + 4);
+            assert_eq!(buffer[(card.x + 4, card.y + 4)].fg, theme.accent, "{name}");
+            let word = &buffer[(card.x + 6, card.y + 4)];
+            assert_eq!(word.fg, theme.strong, "{name}");
+            assert!(word.modifier.contains(Modifier::BOLD), "{name}");
+            assert_eq!(buffer[(card.x + 11, card.y + 4)].fg, theme.text, "{name}");
+            // Ten folders, none lit.
+            assert_eq!(text_of(&buffer, card, card.y + 5), "▸ dir00", "{name}");
+            assert_eq!(text_of(&buffer, card, card.y + 14), "▸ dir09", "{name}");
+            for row in card.y + 5..card.y + 15 {
+                assert_resting(&buffer, &theme, card, row);
+            }
+            assert_eq!(buffer[(card.x + 4, card.y + 5)].fg, theme.muted, "{name}");
+            assert_eq!(buffer[(card.x + 6, card.y + 5)].fg, theme.fg, "{name}");
+            // A blank, then the keys on the row above the bottom edge.
+            assert_eq!(text_of(&buffer, card, card.y + 15), "", "{name}");
+            assert_eq!(text_of(&buffer, card, card.y + 16), hints_text(), "{name}");
+            assert!(hints_text().ends_with(&format!("{CAP_L}Esc{CAP_R} close")));
+            let glow = mix(theme.raised, theme.accent, 0.3);
+            for row in card.top()..card.bottom() {
+                for x in card.left()..card.right() {
+                    let cell = &buffer[(x, row)];
+                    assert!(!matches!(cell.symbol(), "▀" | "─"), "{name}: {x},{row}");
+                    assert_ne!(cell.bg, glow, "{name}: {x},{row}");
+                    assert_ne!(cell.bg, theme.accent, "{name}: {x},{row}");
+                }
+                // No `⏎` marks the selected row's right.
+                assert_ne!(buffer[(card.right() - 5, row)].symbol(), "⏎", "{name}");
+            }
+        }
 
-        // The selection scrolls the list past the card.
+        // The selection scrolls the list past the card, taking the pill along.
+        let theme = Theme::default();
         for _ in 0..12 {
             press(&mut p, Action::Move(Motion::Down));
         }
         let buffer = draw(&p, &theme)?;
-        let last = card_row(&buffer, card, card.y + 14);
-        assert!(last.starts_with("    ▸ dir11 "), "{last:?}");
-        assert!(last.ends_with("⏎    "), "{last:?}");
+        assert_eq!(text_of(&buffer, card, card.y + 5), "▸ dir02");
+        assert_eq!(text_of(&buffer, card, card.y + 14), "▸ dir11");
+        assert_selected(&buffer, &theme, card, card.y + 14);
+        assert_resting(&buffer, &theme, card, card.y + 4);
+        assert_eq!(buffer[(card.x + 4, card.y + 14)].fg, theme.text);
+        assert_eq!(buffer[(card.x + 6, card.y + 14)].fg, theme.strong);
         Ok(())
     }
 
     #[test]
-    fn mono_reverses_the_selected_row() -> anyhow::Result<()> {
-        let dir = folder(&["a"])?;
-        let p = browse(dir.path())?;
-        let mono = Theme::named("mono").expect("mono exists");
-        let buffer = draw(&p, &mono)?;
+    fn matched_letters_stay_accent_bold_and_no_match_says_so() -> anyhow::Result<()> {
+        let dir = folder(&["docs", "src"])?;
+        let mut p = browse(dir.path())?;
+        let theme = Theme::default();
         let card = p.card(Rect::new(0, 0, 100, 30));
-        assert!(
-            buffer[(card.x + 6, card.y + 4)]
-                .modifier
-                .contains(Modifier::REVERSED)
-        );
-        assert!(
-            !buffer[(card.x + 6, card.y + 5)]
-                .modifier
-                .contains(Modifier::REVERSED)
-        );
+        type_query(&mut p, "sr");
+        let buffer = draw(&p, &theme)?;
+        assert_eq!(text_of(&buffer, card, card.y + 5), "▸ src");
+        assert_selected(&buffer, &theme, card, card.y + 5);
+        assert_resting(&buffer, &theme, card, card.y + 4);
+        for (x, lit) in [(6, true), (7, true), (8, false)] {
+            let cell = &buffer[(card.x + x, card.y + 5)];
+            let color = if lit { theme.accent } else { theme.strong };
+            assert_eq!(cell.fg, color, "{x}");
+            assert!(cell.modifier.contains(Modifier::BOLD), "{x}");
+        }
+        // The query follows the folder on the strip, in `strong`.
+        let header = card_row(&buffer, card, card.y + 2);
+        let typed = header.find("sr ").expect("the query after the folder");
+        let typed = u16::try_from(header[..typed].chars().count())?;
+        assert_eq!(buffer[(card.x + typed, card.y + 2)].fg, theme.strong);
+        assert_eq!(buffer[(card.x + typed, card.y + 2)].bg, theme.raised2);
+
+        type_query(&mut p, "zzz");
+        let buffer = draw(&p, &theme)?;
+        assert_eq!(text_of(&buffer, card, card.y + 5), "no matching folders");
+        assert_eq!(buffer[(card.x + 4, card.y + 5)].fg, theme.muted);
+        assert_resting(&buffer, &theme, card, card.y + 5);
+        assert_selected(&buffer, &theme, card, card.y + 4);
+        Ok(())
+    }
+
+    #[test]
+    fn mono_reverses_the_selected_row_and_gives_it_no_colours() -> anyhow::Result<()> {
+        let dir = folder(&["a"])?;
+        let mut p = browse(dir.path())?;
+        let mono = Theme::named("mono").expect("mono exists");
+        let reversed = Theme::highlight(mono.hov, mono.strong);
+        let card = p.card(Rect::new(0, 0, 100, 30));
+        for selected in [card.y + 4, card.y + 5] {
+            let buffer = draw(&p, &mono)?;
+            for x in card.x + 1..card.right() - 1 {
+                let cell = &buffer[(x, selected)];
+                assert!(cell.modifier.contains(Modifier::REVERSED), "{x}");
+                // Nothing on the row has a colour of its own.
+                assert_eq!((Some(cell.fg), Some(cell.bg)), (reversed.fg, reversed.bg));
+            }
+            assert_eq!(buffer[(card.x + 2, selected)].symbol(), "›");
+            for row in card.top()..card.bottom() {
+                for x in card.left()..card.right() {
+                    let cell = &buffer[(x, row)];
+                    // Terminal colours only, and no Nerd Font glyph.
+                    let rgb = |c| matches!(c, ratatui::style::Color::Rgb(..));
+                    assert!(!rgb(cell.fg) && !rgb(cell.bg), "{x},{row}");
+                    assert!(!matches!(cell.symbol(), CAP_L | CAP_R), "{x},{row}");
+                    if row != selected {
+                        assert!(!cell.modifier.contains(Modifier::REVERSED), "{x},{row}");
+                    }
+                }
+            }
+            press(&mut p, Action::Move(Motion::Down));
+        }
         Ok(())
     }
 
