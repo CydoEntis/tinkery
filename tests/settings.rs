@@ -58,9 +58,13 @@ fn settings_creates_a_missing_config_from_the_template_and_opens_it() {
     tinkery.wait_for_text("# insert_spaces = true", WAIT);
     tinkery.wait_for_text("# auto_pairs = true", WAIT);
     tinkery.wait_for_text("# theme = \"tinkery\"", WAIT);
+    tinkery.wait_for_text("# pill_caps = true", WAIT);
+    tinkery.wait_for_text("# corners = \"flush\"", WAIT);
     let written = fs::read_to_string(&config).expect("config.toml written");
     assert!(written.contains("[keys]"), "{written}");
     assert!(written.contains("# save = \"ctrl+s\""), "{written}");
+    assert!(written.contains("[ui]"), "{written}");
+    assert!(written.contains("# corners = \"flush\""), "{written}");
     assert!(tab_row(&tinkery).contains("config.toml"));
 }
 
@@ -157,4 +161,50 @@ fn a_config_naming_a_bad_theme_keeps_the_settings_in_use() {
     tinkery.send_keys("ctrl+s");
     tinkery.wait_for_text("config error: theme: unknown theme", WAIT);
     assert_eq!(tab_in_a(&mut tinkery, project.path()), "  ");
+}
+
+#[test]
+fn saving_the_config_applies_corners_at_once() {
+    const QUESTION: &str = "config.toml has unsaved changes";
+    let (_project, _home, mut tinkery) = editing_config("[ui]\ncorners = \"flush\"\n[editor]\n");
+    // Dirty the file to ask about quitting: the card's edge is flush.
+    tinkery.send_keys("ctrl+end");
+    tinkery.type_text("#");
+    tinkery.send_keys("ctrl+q");
+    tinkery.wait_for_text(QUESTION, WAIT);
+    let screen = tinkery.screen();
+    assert!(screen.iter().any(|row| row.contains("▁▁▁▁")), "{screen:#?}");
+    assert!(!screen.iter().any(|row| row.contains('╭')), "{screen:#?}");
+    tinkery.send_keys("esc");
+    tinkery.wait_for_text_gone(QUESTION, WAIT);
+
+    // `flush` ends a cell before the end of line 2; type `rounded` over it.
+    tinkery.send_keys("ctrl+home");
+    tinkery.send_keys("down");
+    tinkery.send_keys("end");
+    tinkery.send_keys("left");
+    for _ in 0..5 {
+        tinkery.send_keys("backspace");
+    }
+    tinkery.type_text("rounded");
+    tinkery.wait_for_text("corners = \"rounded\"", WAIT);
+    tinkery.send_keys("ctrl+s");
+    tinkery.wait_for_text("settings applied", WAIT);
+
+    // The next card is drawn inside a line, with no restart.
+    tinkery.type_text("#");
+    tinkery.send_keys("ctrl+q");
+    tinkery.wait_for_text(QUESTION, WAIT);
+    let screen = tinkery.screen();
+    assert!(
+        screen.iter().any(|row| row.contains("╭────")),
+        "{screen:#?}"
+    );
+    assert!(
+        screen.iter().any(|row| row.contains("────╯")),
+        "{screen:#?}"
+    );
+    assert!(!screen.iter().any(|row| row.contains('▁')), "{screen:#?}");
+    tinkery.type_text("d");
+    assert!(tinkery.wait_exit(WAIT).success());
 }

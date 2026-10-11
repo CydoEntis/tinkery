@@ -4,22 +4,25 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use harness::{ROWS, Tinkery};
+use harness::{ROWS, Tinkery, buttons_text};
 use tempfile::TempDir;
 
 const START: Duration = Duration::from_secs(10);
 const WAIT: Duration = Duration::from_secs(5);
 const QUESTION: &str = "Recover unsaved changes to a.txt?";
-/// At 100x30 the card is 59 wide (the 51-cell explanation + 8) and 7 tall,
-/// centred (SPEC_V1_LAYOUT §7.4): from column 20 and row 11, with its text at
-/// column 23 and the buttons on row 15, ` Recover ` then ` Discard ` at 34.
+/// At 100x30 the card is a panel 59 wide (the 51-cell explanation + 8) and 9
+/// tall, centred (tinkery-forge spec F16): from column 20 and row 10, with its
+/// text at column 23 and the buttons on row 16, ` Recover R ` then
+/// ` Discard D ` at 36.
 const CARD_X: u16 = 20;
-const CARD_Y: u16 = 11;
+const CARD_Y: u16 = 10;
 const TEXT_X: u16 = 23;
-const BUTTON_ROW: u16 = 15;
-const DISCARD_X: u16 = 34;
-/// The default theme's `accent`, where the focused button starts.
+const BUTTON_ROW: u16 = 16;
+const DISCARD_X: u16 = 36;
+/// Hydra's `accent`, the focused button's fill, and its `btn`, where the
+/// other waits.
 const ACCENT: vt100::Color = vt100::Color::Rgb(0xc3, 0xf5, 0x3c);
+const BTN: vt100::Color = vt100::Color::Rgb(0x1d, 0x2a, 0x37);
 
 /// A project folder holding `a.txt` and a separate data dir that survives relaunches.
 struct Setup {
@@ -103,7 +106,7 @@ fn edit_and_crash(setup: &Setup) {
 }
 
 /// Waits for the recover card and checks its copy, with the backup's time, and
-/// buttons sit where §7.4 puts them.
+/// buttons sit where the panel puts them.
 fn wait_for_card(setup: &Setup, tinkery: &Tinkery) {
     tinkery.wait_for_text(QUESTION, START);
     let backups = setup.backup_files();
@@ -115,28 +118,42 @@ fn wait_for_card(setup: &Setup, tinkery: &Tinkery) {
         chrono::DateTime::<chrono::Local>::from(written).format("%H:%M")
     );
     let screen = tinkery.screen();
+    for (row, edge) in [(CARD_Y, "▁"), (CARD_Y + 8, "▔")] {
+        assert_eq!(
+            tinkery.text_col(row, &edge.repeat(57)),
+            Some(CARD_X + 1),
+            "{screen:#?}"
+        );
+        assert_eq!(tinkery.fg_at(CARD_X + 1, row), ACCENT);
+    }
     assert_eq!(
-        tinkery.text_col(CARD_Y, &"▀".repeat(59)),
-        Some(CARD_X),
-        "{screen:#?}"
-    );
-    assert_eq!(
-        tinkery.text_col(CARD_Y + 1, QUESTION),
+        tinkery.text_col(CARD_Y + 2, QUESTION),
         Some(TEXT_X),
         "{screen:#?}"
     );
     assert_eq!(
-        tinkery.text_col(CARD_Y + 2, &explanation),
+        tinkery.text_col(CARD_Y + 3, &explanation),
         Some(TEXT_X),
         "{screen:#?}"
     );
+    // Recover, the action, first and focused; no Cancel, since Esc doesn't
+    // answer this card.
     assert_eq!(
-        tinkery.text_col(BUTTON_ROW, "Recover    Discard"),
-        Some(TEXT_X + 1),
+        tinkery.text_col(
+            BUTTON_ROW,
+            &buttons_text(&[("Recover", "R"), ("Discard", "D")])
+        ),
+        Some(TEXT_X),
         "{screen:#?}"
     );
-    assert_eq!(tinkery.bg_at(TEXT_X, BUTTON_ROW), ACCENT);
-    assert_eq!(tinkery.underlined_text(BUTTON_ROW), "RD");
+    assert_eq!(tinkery.bg_text(BUTTON_ROW, ACCENT), "Recover R");
+    assert_eq!(tinkery.bg_text(BUTTON_ROW, BTN), "Discard D");
+    assert_eq!(tinkery.text_col(BUTTON_ROW, "Discard"), Some(DISCARD_X + 1));
+    assert!(
+        !screen[usize::from(BUTTON_ROW)].contains("Esc"),
+        "{screen:#?}"
+    );
+    assert_eq!(tinkery.underlined_text(BUTTON_ROW), "");
 }
 
 #[test]

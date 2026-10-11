@@ -314,6 +314,7 @@ impl FindBar {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Corners;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
@@ -433,8 +434,14 @@ mod tests {
         assert_eq!(find.current_match(), Some(6..9));
     }
 
-    const ROUND: Look = Look { pill_caps: true };
-    const SQUARE: Look = Look { pill_caps: false };
+    const ROUND: Look = Look {
+        pill_caps: true,
+        corners: Corners::Flush,
+    };
+    const SQUARE: Look = Look {
+        pill_caps: false,
+        corners: Corners::Flush,
+    };
 
     /// Draws `find` across a one-row screen `width` cells wide.
     fn drawn(

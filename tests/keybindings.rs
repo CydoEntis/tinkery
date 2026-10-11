@@ -8,7 +8,7 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
-use harness::{HYDRA, ROWS, Tinkery};
+use harness::{HYDRA, ROWS, Tinkery, buttons_text};
 use vt100::Color;
 
 const START: Duration = Duration::from_secs(10);
@@ -417,6 +417,18 @@ fn ask_to_move_ctrl_k(project: &Path, config: &Path) -> Tinkery {
     tinkery.send_keys("ctrl+k");
     tinkery.wait_for_text(MOVE_CTRL_K, WAIT);
     tinkery.wait_for_text("Show hover is left with no key.", WAIT);
+    // The card is a panel 52 wide (the 44-cell question + 8) from column 24
+    // and row 10: Yes first and focused, in tinkery's accent, and No, which
+    // is what Esc answers, on its btn.
+    let screen = tinkery.screen();
+    assert_eq!(tinkery.text_col(12, MOVE_CTRL_K), Some(27), "{screen:#?}");
+    assert_eq!(
+        tinkery.text_col(16, &buttons_text(&[("Yes", "Y"), ("No", "Esc")])),
+        Some(27),
+        "{screen:#?}"
+    );
+    assert_eq!(tinkery.bg_text(16, Color::Rgb(0xff, 0x8a, 0x3d)), "Yes Y");
+    assert_eq!(tinkery.bg_text(16, Color::Rgb(0x33, 0x2a, 0x25)), "No Esc");
     tinkery
 }
 

@@ -208,6 +208,7 @@ impl PromptBar {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Corners;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::style::Modifier;
@@ -249,8 +250,14 @@ mod tests {
         assert_eq!(bar.text(), "ab");
     }
 
-    const ROUND: Look = Look { pill_caps: true };
-    const SQUARE: Look = Look { pill_caps: false };
+    const ROUND: Look = Look {
+        pill_caps: true,
+        corners: Corners::Flush,
+    };
+    const SQUARE: Look = Look {
+        pill_caps: false,
+        corners: Corners::Flush,
+    };
     const HINT: [(&str, &str); 2] = [("⏎", "create"), ("esc", "cancel")];
 
     /// Draws `bar` with `HINT` across row 1 of a 50-cell screen filled with the
