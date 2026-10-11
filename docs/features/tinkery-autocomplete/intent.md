@@ -14,7 +14,7 @@ scroll, so anything after them can't be reached.
 the popup had closed, and typing `l` showed nothing. Completion only opens after a
 character the server names (`.` in TypeScript) or Alt+/, as v1's R33 says; a letter
 only filters a popup that is already open. This change overrides that clause of
-[R33](../tome-v1/spec.md).
+[R33](../tinkery-v1/spec.md).
 
 ## Proposed outcome
 
@@ -39,7 +39,7 @@ does, and it can be turned off. The list scrolls to every match.
 
 ## Out of scope
 
-- Tome deciding by syntax where completion makes sense (strings, comments): the server
+- Tinkery deciding by syntax where completion makes sense (strings, comments): the server
   answers or doesn't.
 - Asking again when a server says its list is incomplete; a minimum number of letters;
   fuzzy matching.
