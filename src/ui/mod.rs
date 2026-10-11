@@ -39,11 +39,13 @@ pub fn card_block(theme: &Theme) -> Block<'static> {
 }
 
 /// How far each cell moves towards `scrim` behind a dialog (design README §3).
+#[cfg_attr(not(test), expect(dead_code, reason = "removed by #228"))]
 const DIM: f64 = 0.6;
 
 /// Dims everything already drawn in `area`, so a dialog drawn after it stands
 /// out: each fg, bg and underline colour mixed `DIM` towards `scrim`, or the DIM modifier where the
 /// theme's colours can't be blended (`mono`).
+#[cfg_attr(not(test), expect(dead_code, reason = "removed by #228"))]
 pub fn dim(theme: &Theme, buf: &mut Buffer, area: Rect) {
     let area = area.intersection(buf.area);
     let ramps = theme.ramps();
@@ -69,6 +71,7 @@ pub fn dim(theme: &Theme, buf: &mut Buffer, area: Rect) {
 /// Draws an empty dialog card over `card`: `text` on `raised`, no border, and a
 /// lit top edge of `▀` running accent → accent2 → accent (design README §3).
 /// Content goes from the card's second row.
+#[cfg_attr(not(test), expect(dead_code, reason = "removed by #228"))]
 pub fn dialog_card(theme: &Theme, frame: &mut Frame, card: Rect) {
     let card = card.intersection(frame.area());
     if card.is_empty() {
@@ -112,6 +115,7 @@ pub fn glow_row(theme: &Theme, buf: &mut Buffer, x0: u16, x1: u16, y: u16) {
 
 /// Marks the selected row as the one Enter acts on: `⏎` ending at `right`, in
 /// the accent (plain in `mono`, where the row is already reversed).
+#[expect(dead_code, reason = "removed by #228")]
 pub fn enter_mark(theme: &Theme, buf: &mut Buffer, right: u16, y: u16) {
     let style = if theme.ramps() {
         Style::new().fg(theme.accent)
@@ -125,6 +129,7 @@ pub fn enter_mark(theme: &Theme, buf: &mut Buffer, right: u16, y: u16) {
 /// cells in, the label (`text` while the row takes the keys, else `muted`)
 /// padded to `label_width`, two blanks, then the value in `strong`. Returns
 /// where the cursor goes.
+#[expect(dead_code, reason = "removed by #228")]
 pub fn input_row(
     theme: &Theme,
     frame: &mut Frame,
@@ -157,6 +162,7 @@ pub fn input_row(
 }
 
 /// The hints on a dialog's last row, in `muted`, two cells in.
+#[expect(dead_code, reason = "removed by #228")]
 pub fn footer(theme: &Theme, buf: &mut Buffer, card: Rect, hints: &str) {
     let y = card.bottom().saturating_sub(1);
     buf.set_stringn(

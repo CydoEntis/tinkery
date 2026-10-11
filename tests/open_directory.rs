@@ -7,42 +7,102 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
-use harness::{HYDRA, ROWS, Tinkery, buttons_text};
+use harness::{CAP_L, CAP_R, HYDRA, ROWS, Tinkery, buttons_text, hints_text};
 use tempfile::TempDir;
 use vt100::Color;
 
 const START: Duration = Duration::from_secs(10);
 const WAIT: Duration = Duration::from_secs(10);
 
-/// At 100x30 the browser is the cast's card: 86 wide from column 7, dropping
-/// from row 4 with its lit edge. The header is row 6, the rule row 7, the open
-/// row 8 and the folders from row 9, their text four cells in; the right-aligned
-/// text ends four cells in from the card's edge.
+/// At 100x30 the browser is a panel the size of the cast's: 86 wide from
+/// column 7, dropping from row 4, its title in the top edge. The header's strip
+/// is row 6, row 7 is blank, the open row is row 8 and the folders run from
+/// row 9, their text four cells in; the right-aligned text ends four cells in
+/// from the card's edge. A row's pill runs the card's inside, from column 8 to
+/// column 91, with `›` a cell into it.
 const CARD_X: u16 = 7;
 const CARD_Y: u16 = 4;
+const CARD_WIDTH: u16 = 86;
 const HEADER_ROW: u16 = 6;
-const RULE_ROW: u16 = 7;
+const BLANK_ROW: u16 = 7;
 const OPEN_ROW: u16 = 8;
 const FIRST_ROW: u16 = 9;
+const PILL_X: u16 = CARD_X + 1;
+const PILL_END: u16 = CARD_X + CARD_WIDTH - 2;
+const MARK_X: u16 = CARD_X + 2;
 const TEXT_X: u16 = 11;
 const RIGHT: u16 = 89;
+const TITLE: &str = "▁ Open directory ▁";
 const SCOPE: &str = "open · folders";
-const FOOTER: &str = "⏎ into  ← up  ctrl+⏎ open here  esc cancel";
 /// The run panel's title row at 30 rows.
 const TITLE_ROW: u16 = 20;
 
-/// The default theme, hydra: its `accent`, `raised` and the tree's glow start.
-const ACCENT: Color = Color::Rgb(0xc3, 0xf5, 0x3c);
-const RAISED: Color = Color::Rgb(0x0f, 0x18, 0x21);
+/// The default theme, tinkery, which an empty config runs on: the roles the
+/// browser is drawn in.
+const DEFAULT: &str = "";
+const ACCENT: Color = Color::Rgb(0xff, 0x8a, 0x3d);
+const ACCENT2: Color = Color::Rgb(0xff, 0xd2, 0x7a);
+const RAISED: Color = Color::Rgb(0x1f, 0x1b, 0x19);
+const RAISED2: Color = Color::Rgb(0x29, 0x23, 0x20);
+const HOV: Color = Color::Rgb(0x3a, 0x30, 0x2a);
+const MUTED: Color = Color::Rgb(0x7d, 0x70, 0x67);
+const TEXT: Color = Color::Rgb(0xb5, 0xa8, 0x9d);
+const STRONG: Color = Color::Rgb(0xf8, 0xf0, 0xe6);
+/// hydra's glow at the start of the tree's selected row.
 const TREE_GLOW: Color = Color::Rgb(0x3c, 0x4e, 0x24);
 
-/// `a` moved `t` of the way to `b`, per channel, rounded, as the editor mixes.
-fn mix(a: Color, b: Color, t: f64) -> Color {
-    let (Color::Rgb(r1, g1, b1), Color::Rgb(r2, g2, b2)) = (a, b) else {
-        panic!("can't mix {a:?} and {b:?}");
-    };
-    let m = |p: u8, q: u8| (f64::from(p) + (f64::from(q) - f64::from(p)) * t).round() as u8;
-    Color::Rgb(m(r1, r2), m(g1, g2), m(b1, b2))
+/// The keys on the browser's last row, as keycaps with round ends.
+fn hints() -> String {
+    hints_text(&[
+        ("⏎", "into"),
+        ("←", "up"),
+        ("Ctrl+⏎", "open here"),
+        ("Esc", "close"),
+    ])
+}
+
+/// The cell at (`col`, `y`), as text.
+fn cell(tinkery: &Tinkery, col: u16, y: u16) -> String {
+    row(tinkery, y)
+        .chars()
+        .nth(usize::from(col))
+        .map(String::from)
+        .unwrap_or_default()
+}
+
+/// `text` without the card's two edge cells, which share the edge's colour and
+/// weight with what's inside, and without blanks.
+fn inside(text: &str) -> String {
+    text.replace(['▕', '▏', ' '], "")
+}
+
+/// Waits for row `y` to be the selected row and asserts it's drawn as one: a
+/// pill of `hov` on the card's `raised` across its inside, `›` in the accent a
+/// cell in, and no `⏎` at its right.
+fn wait_for_pill(tinkery: &Tinkery, y: u16) {
+    tinkery.wait_for_bg(MARK_X, y, HOV, WAIT);
+    assert_eq!(cell(tinkery, PILL_X, y), CAP_L, "row {y}");
+    assert_eq!(cell(tinkery, PILL_END, y), CAP_R, "row {y}");
+    for x in [PILL_X, PILL_END] {
+        assert_eq!(tinkery.fg_at(x, y), HOV, "the end at {x},{y}");
+        assert_eq!(tinkery.bg_at(x, y), RAISED, "the end at {x},{y}");
+    }
+    assert_eq!(
+        tinkery.bg_text(y, HOV).chars().count(),
+        usize::from(CARD_WIDTH - 4),
+        "the pill runs between its ends on row {y}"
+    );
+    assert_eq!(tinkery.text_col(y, "›"), Some(MARK_X), "row {y}");
+    assert_eq!(tinkery.fg_at(MARK_X, y), ACCENT, "row {y}");
+    assert!(tinkery.bold_at(MARK_X, y), "row {y}");
+    assert_ne!(cell(tinkery, RIGHT - 1, y), "⏎", "row {y}");
+}
+
+/// Asserts row `y` isn't lit: no pill, no mark.
+fn assert_no_pill(tinkery: &Tinkery, y: u16) {
+    assert_eq!(tinkery.bg_text(y, HOV), "", "row {y}");
+    assert_eq!(tinkery.bg_at(MARK_X, y), RAISED, "row {y}");
+    assert_eq!(tinkery.text_col(y, "›"), None, "row {y}");
 }
 
 /// A folder holding `folders` (nested with `/`) and `files` (name, text).
@@ -97,36 +157,70 @@ fn open_browser(tinkery: &mut Tinkery) {
 #[test]
 fn open_directory_in_the_cast_opens_the_folder_browser() {
     let dir = folder(&["alpha", "Beta", ".hidden"], &[("notes.txt", "")]);
-    let mut tinkery = open_in(dir.path(), HYDRA);
+    let mut tinkery = open_in(dir.path(), DEFAULT);
     open_browser(&mut tinkery);
     let here = name(dir.path());
 
-    // The lit edge across the cast's card.
+    // A panel the size of the cast's: an accent edge with the title in it,
+    // around `raised`. No lit top edge.
+    assert_eq!(tinkery.text_col(CARD_Y, TITLE), Some(CARD_X + 1));
+    assert!(!row(&tinkery, CARD_Y).contains('▀'));
+    assert_eq!(tinkery.fg_at(CARD_X + 1, CARD_Y), ACCENT);
+    assert_eq!(tinkery.fg_at(CARD_X + 3, CARD_Y), ACCENT);
+    assert_eq!(cell(&tinkery, CARD_X, HEADER_ROW), "▕");
+    assert_eq!(cell(&tinkery, CARD_X + CARD_WIDTH - 1, HEADER_ROW), "▏");
+    assert_eq!(tinkery.bg_at(TEXT_X, BLANK_ROW), RAISED);
+    // The header's strip of `raised2`: `✦` and the folder, `open · folders`
+    // at the right.
+    assert_eq!(cell(&tinkery, PILL_X, HEADER_ROW), CAP_L);
+    assert_eq!(cell(&tinkery, PILL_END, HEADER_ROW), CAP_R);
+    assert_eq!(tinkery.fg_at(PILL_X, HEADER_ROW), RAISED2);
     assert_eq!(
-        row(&tinkery, CARD_Y).chars().nth(usize::from(CARD_X)),
-        Some('▀')
+        tinkery.bg_text(HEADER_ROW, RAISED2).chars().count(),
+        usize::from(CARD_WIDTH - 4)
     );
-    // `✦` and the folder, `open · folders` at the right.
     assert_eq!(tinkery.text_col(HEADER_ROW, "✦ "), Some(TEXT_X));
+    assert_eq!(tinkery.fg_at(TEXT_X, HEADER_ROW), ACCENT2);
+    assert_eq!(tinkery.fg_at(TEXT_X + 2, HEADER_ROW), TEXT);
     let header = row(&tinkery, HEADER_ROW);
     assert!(header.contains(&here), "{header:?}");
     assert_eq!(
         tinkery.text_col(HEADER_ROW, SCOPE),
         Some(RIGHT - u16::try_from(SCOPE.chars().count()).unwrap())
     );
-    assert_eq!(row(&tinkery, RULE_ROW).chars().nth(9), Some('─'));
-    // The open row first, selected: the glow and `⏎` at the right.
+    assert_eq!(tinkery.fg_at(RIGHT - 1, HEADER_ROW), MUTED);
+    // Where the rule was, a blank row.
+    for x in CARD_X + 1..CARD_X + CARD_WIDTH - 1 {
+        assert_eq!(cell(&tinkery, x, BLANK_ROW), " ", "column {x}");
+    }
+    // The open row first, selected: the pill, its words `strong` bold.
     assert_eq!(tinkery.text_col(OPEN_ROW, "⏎ open "), Some(TEXT_X));
     assert!(row(&tinkery, OPEN_ROW).contains(&here));
-    assert_eq!(tinkery.text_col(OPEN_ROW, "⏎    "), Some(RIGHT - 1));
-    assert_eq!(tinkery.bg_at(CARD_X, OPEN_ROW), mix(RAISED, ACCENT, 0.3));
-    // Folders only, ignoring case, dot-folders last.
+    wait_for_pill(&tinkery, OPEN_ROW);
+    assert_eq!(tinkery.fg_at(TEXT_X, OPEN_ROW), ACCENT);
+    assert_eq!(inside(&tinkery.fg_text(OPEN_ROW, STRONG)), "open");
+    assert_eq!(tinkery.fg_at(TEXT_X + 7, OPEN_ROW), TEXT);
+    // Folders only, ignoring case, dot-folders last; none of them lit.
     assert_eq!(tinkery.text_col(FIRST_ROW, "▸ alpha"), Some(TEXT_X));
     assert_eq!(tinkery.text_col(FIRST_ROW + 1, "▸ Beta"), Some(TEXT_X));
     assert_eq!(tinkery.text_col(FIRST_ROW + 2, "▸ .hidden"), Some(TEXT_X));
-    // A blank, then the footer.
-    assert_eq!(row(&tinkery, FIRST_ROW + 3).trim(), "");
-    assert_eq!(tinkery.text_col(FIRST_ROW + 4, FOOTER), Some(TEXT_X));
+    for y in FIRST_ROW..FIRST_ROW + 3 {
+        assert_no_pill(&tinkery, y);
+        assert_eq!(tinkery.fg_at(TEXT_X, y), MUTED, "row {y}");
+        assert!(!tinkery.bold_at(TEXT_X + 2, y), "row {y}");
+    }
+    // A blank, then the keys as keycaps ending `Esc close`, then the edge.
+    for x in CARD_X + 1..CARD_X + CARD_WIDTH - 1 {
+        assert_eq!(cell(&tinkery, x, FIRST_ROW + 3), " ", "column {x}");
+    }
+    assert_eq!(tinkery.text_col(FIRST_ROW + 4, &hints()), Some(TEXT_X));
+    assert!(
+        row(&tinkery, FIRST_ROW + 4)
+            .trim_end_matches([' ', '▏'])
+            .ends_with(&format!("{CAP_L}Esc{CAP_R} close"))
+    );
+    assert_eq!(tinkery.text_col(FIRST_ROW + 5, "▔"), Some(CARD_X + 1));
+    assert_eq!(row(&tinkery, FIRST_ROW + 5).matches('▔').count(), 84);
     assert!(
         !tinkery.screen()[..usize::from(ROWS - 1)]
             .iter()
@@ -144,11 +238,11 @@ fn many_folders_scroll_past_the_card() {
     let names: Vec<String> = (0..14).map(|i| format!("dir{i:02}")).collect();
     let refs: Vec<&str> = names.iter().map(String::as_str).collect();
     let dir = folder(&refs, &[]);
-    let mut tinkery = open_in(dir.path(), HYDRA);
+    let mut tinkery = open_in(dir.path(), DEFAULT);
     open_browser(&mut tinkery);
-    // Ten rows, then a blank and the footer.
+    // Ten rows, then a blank and the keys.
     assert_eq!(tinkery.text_col(FIRST_ROW + 9, "▸ dir09"), Some(TEXT_X));
-    assert_eq!(tinkery.text_col(FIRST_ROW + 11, FOOTER), Some(TEXT_X));
+    assert_eq!(tinkery.text_col(FIRST_ROW + 11, &hints()), Some(TEXT_X));
     for _ in 0..14 {
         tinkery.send_keys("down");
     }
@@ -156,6 +250,10 @@ fn many_folders_scroll_past_the_card() {
         screen[usize::from(FIRST_ROW + 9)].contains("▸ dir13")
     });
     assert!(row(&tinkery, FIRST_ROW).contains("▸ dir04"));
+    // The pill went with the selection.
+    wait_for_pill(&tinkery, FIRST_ROW + 9);
+    assert_no_pill(&tinkery, OPEN_ROW);
+    assert_no_pill(&tinkery, FIRST_ROW);
 }
 
 #[test]
@@ -163,12 +261,30 @@ fn mono_reverses_the_selected_row() {
     let dir = folder(&["alpha"], &[]);
     let mut tinkery = open_in(dir.path(), "theme = \"mono\"\n");
     open_browser(&mut tinkery);
+    // The whole inside of the card, from edge to edge, with the mark.
     let selected = tinkery.reversed_text(OPEN_ROW);
-    assert_eq!(selected.chars().count(), 86, "{selected:?}");
-    assert!(selected.starts_with("    ⏎ open "), "{selected:?}");
+    assert_eq!(selected.chars().count(), 84, "{selected:?}");
+    assert!(selected.starts_with(" › ⏎ open "), "{selected:?}");
+    // It carries no colours: one style across it, in the terminal's own.
+    let colours = |tinkery: &Tinkery, y: u16| {
+        let (fg, bg) = (tinkery.fg_at(PILL_X, y), tinkery.bg_at(PILL_X, y));
+        for x in PILL_X..=PILL_END {
+            assert_eq!(tinkery.fg_at(x, y), fg, "{x},{y}");
+            assert_eq!(tinkery.bg_at(x, y), bg, "{x},{y}");
+        }
+        assert!(!matches!(fg, Color::Rgb(..)) && !matches!(bg, Color::Rgb(..)));
+    };
+    colours(&tinkery, OPEN_ROW);
+    // No Nerd Font glyph anywhere.
+    let screen = tinkery.screen().join("\n");
+    assert!(
+        !screen.contains(CAP_L) && !screen.contains(CAP_R),
+        "{screen}"
+    );
+    assert!(row(&tinkery, FIRST_ROW + 2).contains(" Esc  close"));
     tinkery.send_keys("down");
-    // The whole card's width, `⏎` four cells in from its right edge.
-    tinkery.wait_for_reversed(FIRST_ROW, &format!("{:<81}⏎    ", "    ▸ alpha"), WAIT);
+    tinkery.wait_for_reversed(FIRST_ROW, &format!("{:<84}", " › ▸ alpha"), WAIT);
+    colours(&tinkery, FIRST_ROW);
     assert_eq!(tinkery.reversed_text(OPEN_ROW), "");
 }
 
@@ -176,7 +292,7 @@ fn mono_reverses_the_selected_row() {
 fn the_browser_goes_in_and_up_filters_and_closes() {
     let dir = folder(&["alpha/inner", "Beta", ".hidden"], &[]);
     let here = name(dir.path());
-    let mut tinkery = open_in(dir.path(), HYDRA);
+    let mut tinkery = open_in(dir.path(), DEFAULT);
     open_browser(&mut tinkery);
 
     // Enter on a folder goes into it.
@@ -191,7 +307,8 @@ fn the_browser_goes_in_and_up_filters_and_closes() {
     tinkery.wait_for_screen("back in the project", WAIT, |screen| {
         screen[usize::from(FIRST_ROW + 1)].contains("▸ Beta")
     });
-    tinkery.wait_for_bg(CARD_X, FIRST_ROW, mix(RAISED, ACCENT, 0.3), WAIT);
+    wait_for_pill(&tinkery, FIRST_ROW);
+    assert_no_pill(&tinkery, OPEN_ROW);
 
     // Typing filters the folders; the open row stays.
     tinkery.type_text("bet");
@@ -200,6 +317,17 @@ fn the_browser_goes_in_and_up_filters_and_closes() {
             && !screen[usize::from(FIRST_ROW + 1)].contains("▸")
     });
     assert_eq!(tinkery.text_col(OPEN_ROW, "⏎ open "), Some(TEXT_X));
+    // The best match is selected, its matched letters in the accent, bold.
+    // "b" alone already lists only Beta, so wait for the whole query, which
+    // follows the folder in the header.
+    let typed = format!("{}bet ", std::path::MAIN_SEPARATOR);
+    tinkery.wait_for_screen("the whole query", WAIT, |screen| {
+        screen[usize::from(HEADER_ROW)].contains(&typed)
+    });
+    wait_for_pill(&tinkery, FIRST_ROW);
+    assert_eq!(inside(&tinkery.fg_text(FIRST_ROW, ACCENT)), "›Bet");
+    assert_eq!(inside(&tinkery.fg_text(FIRST_ROW, STRONG)), "a");
+    assert_eq!(inside(&tinkery.bold_text(FIRST_ROW)), "›Beta");
     // Backspace edits the query while there is one, then goes up.
     for _ in 0..3 {
         tinkery.send_keys("backspace");

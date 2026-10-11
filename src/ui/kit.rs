@@ -1,6 +1,6 @@
 //! The drawing kit every screen's chrome is built from: pills, chips, strips,
-//! keycaps and hint lines, buttons, cards, panels and the dimmed backdrop
-//! (tinkery-forge spec F4 to F7).
+//! keycaps and hint lines, buttons, cards, panels, the dimmed backdrop, and
+//! the header and rows of a list in a panel (tinkery-forge spec F4 to F8).
 //!
 //! A pill is a filled run of cells whose two ends are rounded by a Nerd Font
 //! half-circle drawn in the fill colour on the ground around the pill. A font
@@ -13,6 +13,10 @@
 //! top edge; a panel is a card centred over a screen `dim` has darkened.
 //! `[ui] corners` picks the edge: flush, drawn with eighth blocks that meet
 //! the fill exactly, or rounded box-drawing lines.
+//!
+//! A list in a panel is `dim`, `panel_at` (or `panel`), `header` for its
+//! title or query, `sel_row` before each row's text, and `hints` on the row
+//! above the bottom edge.
 //!
 //! Nothing here reads a global. Each function takes the `Look` and the `Theme`
 //! it draws with, and the `ground` (the colour behind the pill) where an end
@@ -549,8 +553,173 @@ pub fn panel(
     (width, height): (u16, u16),
     title: &str,
 ) -> Rect {
+    panel_at(look, theme, buf, centred(area, width, height), title)
+}
+
+/// A panel over `rect` exactly, for a dialog that says where it goes itself
+/// (a list that drops from the top rather than sitting in the middle): a card
+/// with an `accent` edge and title around `raised`. Returns the inside. `dim`
+/// the screen first.
+pub fn panel_at(look: Look, theme: &Theme, buf: &mut Buffer, rect: Rect, title: &str) -> Rect {
     let lit = Card::new(theme, title).lit(theme.accent);
-    card(look, theme, buf, centred(area, width, height), &lit)
+    card(look, theme, buf, rect, &lit)
+}
+
+/// The mark a list panel's header starts with.
+pub const HEADER_MARK: &str = "✦";
+/// The mark a selected row starts with.
+pub const SEL_MARK: &str = "›";
+
+/// The header of a list in a panel drawn over `card`: a strip of `raised2`
+/// across the card's inside on its third row, with `HEADER_MARK` in `accent2`
+/// bold four cells in from the card's edge and `right` (what the list holds,
+/// a count) ending four cells short of the other, on the strip's fill. Returns
+/// the cells between them, where the caller draws the title or the query on
+/// `raised2`: from two cells after the mark to two short of `right`. The row
+/// under the strip stays blank and the list starts on the card's fifth row.
+/// A card with no room for the strip gets none and an empty field.
+pub fn header(
+    look: Look,
+    theme: &Theme,
+    buf: &mut Buffer,
+    card: Rect,
+    right: Vec<Span<'static>>,
+) -> Rect {
+    let fill = theme.raised2;
+    let y = card.y + 2;
+    if card.width < 12 || card.height < 4 || y >= buf.area.bottom() {
+        return Rect::new(card.x, y, 0, 0);
+    }
+    let row = Rect::new(card.x + 1, y, card.width - 2, 1);
+    strip(look, theme, buf, row, fill, theme.raised);
+    let mark = Style::new()
+        .fg(theme.accent2)
+        .bg(fill)
+        .add_modifier(Modifier::BOLD);
+    let (left, end) = (card.x + 4, card.right() - 4);
+    put(buf, left, y, &[Span::styled(HEADER_MARK, mark)], end);
+    let right: Vec<Span> = right
+        .into_iter()
+        .map(|span| span.patch_style(Style::new().bg(fill)))
+        .collect();
+    let field_x = left + 2;
+    let right_x = end.saturating_sub(width(&right)).max(field_x);
+    put(buf, right_x, y, &right, end);
+    let field_end = if right.is_empty() {
+        end
+    } else {
+        right_x.saturating_sub(2)
+    };
+    Rect::new(field_x, y, field_end.saturating_sub(field_x), 1)
+}
+
+/// The styles one row of a list draws its text in, from `sel_row`. They carry
+/// the row's fill, so text drawn in them sits on the row whatever state it is
+/// in; on the selected row in `mono`, which is reverse video, they carry no
+/// colours at all, as a colour would break the reverse up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RowInk {
+    /// The row's own words: `strong` bold when selected, else `fg`.
+    pub label: Style,
+    /// The letters a query matched: `accent` bold.
+    pub hit: Style,
+    /// What says less than the label (a folder, a key, a source): `muted`, or
+    /// `text` on a lit row, where `muted` is too close to the fill to read.
+    pub faint: Style,
+    fill: Color,
+    plain: bool,
+}
+
+impl RowInk {
+    /// `style` as this row draws it: on the row's fill, or with its weight
+    /// alone where the row carries no colours.
+    pub fn of(self, style: Style) -> Style {
+        if self.plain {
+            Style::new()
+                .add_modifier(style.add_modifier)
+                .remove_modifier(style.sub_modifier)
+        } else {
+            style.bg(self.fill)
+        }
+    }
+}
+
+/// Draws the state of one row of a list on `ground` and returns the styles
+/// its text goes in; call it for every row, before drawing the row's text.
+/// `row` is the whole row, edge to edge of the card's inside; the text starts
+/// three cells into it, after the mark.
+///
+/// A `selected` row is a row pill of `hov` with `SEL_MARK` in `accent` bold a
+/// cell in; a `hovered` one gets the pill without the mark; any other row is
+/// left as it is. Accent is never a row's fill. `mono` has no fills: there the
+/// selected row is reverse video from edge to edge, with the mark and nothing
+/// coloured on it, and hovering shows nothing.
+pub fn sel_row(
+    look: Look,
+    theme: &Theme,
+    buf: &mut Buffer,
+    row: Rect,
+    selected: bool,
+    hovered: bool,
+    ground: Color,
+) -> RowInk {
+    let bold = Modifier::BOLD;
+    let row = Rect { height: 1, ..row }.intersection(buf.area);
+    let resting = RowInk {
+        label: Style::new().fg(theme.fg).bg(ground),
+        hit: Style::new().fg(theme.accent).bg(ground).add_modifier(bold),
+        faint: Style::new().fg(ink(theme, theme.muted, ground)).bg(ground),
+        fill: ground,
+        plain: false,
+    };
+    if row.is_empty() {
+        return resting;
+    }
+    let mark_x = row.x.saturating_add(1);
+    if theme.flat() {
+        if !selected {
+            return resting;
+        }
+        for x in row.left()..row.right() {
+            buf[(x, row.y)].reset();
+        }
+        buf.set_style(row, Theme::highlight(theme.hov, theme.strong));
+        let weight = Style::new().add_modifier(bold);
+        let mark = [Span::styled(SEL_MARK, weight)];
+        put(buf, mark_x, row.y, &mark, row.right());
+        return RowInk {
+            label: weight,
+            hit: weight,
+            faint: Style::new(),
+            fill: ground,
+            plain: true,
+        };
+    }
+    if !selected && !hovered {
+        return resting;
+    }
+    let fill = theme.hov;
+    row_pill(look, theme, buf, (row.x, row.y), row.width, fill, ground);
+    let on = Style::new().bg(fill);
+    if selected {
+        let mark = [Span::styled(
+            SEL_MARK,
+            on.fg(theme.accent).add_modifier(bold),
+        )];
+        // Never over the pill's right end, on a row too narrow to hold it.
+        put(buf, mark_x, row.y, &mark, row.right().saturating_sub(1));
+    }
+    RowInk {
+        label: if selected {
+            on.fg(theme.strong).add_modifier(bold)
+        } else {
+            on.fg(theme.fg)
+        },
+        hit: on.fg(theme.accent).add_modifier(bold),
+        faint: on.fg(theme.text),
+        fill,
+        plain: false,
+    }
 }
 
 /// How far the text behind a panel moves towards its own ground, and then how
@@ -1405,5 +1574,224 @@ mod tests {
             assert_eq!(cell.symbol(), was.symbol(), "{x}");
         }
         assert!(buf[(2, 0)].modifier.contains(Modifier::REVERSED));
+    }
+
+    #[test]
+    fn a_panel_at_a_rect_is_the_panel_drawn_there() {
+        let theme = Theme::default();
+        let rect = Rect::new(3, 1, 20, 6);
+        let mut buf = screen(40, 12);
+        let inside = panel_at(ROUND, &theme, &mut buf, rect, "Run");
+        assert_eq!(inside, Rect::new(4, 2, 18, 4));
+        assert_edge(&buf, (4, 1), "▁", theme.accent, true);
+        assert_edge(&buf, (3, 3), "▕", theme.accent, true);
+        let cells: Vec<char> = line(&buf, 1).chars().collect();
+        assert_eq!(cells[5..10].iter().collect::<String>(), " Run ");
+        assert_eq!(buf[(6, 1)].fg, theme.accent);
+        assert_eq!(buf[(10, 4)].bg, theme.raised);
+        // `panel` is the same thing where `centred` puts it.
+        let mut centre = screen(40, 12);
+        let area = centre.area;
+        panel(ROUND, &theme, &mut centre, area, (20, 6), "Run");
+        let mut at = screen(40, 12);
+        panel_at(ROUND, &theme, &mut at, centred(area, 20, 6), "Run");
+        assert_eq!(centre, at);
+    }
+
+    #[test]
+    fn a_header_is_a_strip_with_the_mark_and_what_goes_at_the_right() {
+        for (look, theme, round) in looks() {
+            let mut buf = screen(40, 8);
+            let card = Rect::new(2, 1, 36, 6);
+            panel_at(look, &theme, &mut buf, card, "");
+            let scope = vec![
+                Span::styled("cast", Style::new().fg(theme.accent)),
+                Span::styled(" · files", Style::new().fg(theme.text)),
+            ];
+            let field = header(look, &theme, &mut buf, card, scope);
+            let y = card.y + 2;
+            let fill = theme.raised2;
+            // The strip runs the card's inside, on the card's fill.
+            assert_eq!(buf[(card.x, y)].symbol(), "▕");
+            for (x, cap) in [(card.x + 1, CAP_L), (card.right() - 2, CAP_R)] {
+                let cell = &buf[(x, y)];
+                if round {
+                    assert_eq!(cell.symbol(), cap, "{x}");
+                    assert_eq!((cell.fg, cell.bg), (fill, theme.raised), "{x}");
+                } else {
+                    assert_eq!((cell.symbol(), cell.bg), (" ", fill), "{x}");
+                }
+            }
+            for x in card.x + 2..card.right() - 2 {
+                assert_eq!(buf[(x, y)].bg, fill, "{x}");
+            }
+            // One row only: the rows around it are the card's.
+            assert_eq!(buf[(card.x + 6, y - 1)].bg, theme.raised);
+            assert_eq!(buf[(card.x + 6, y + 1)].bg, theme.raised);
+            assert_eq!(buf[(card.x + 6, y + 1)].symbol(), " ");
+            // The mark four cells in, the right text ending four cells in.
+            let mark = &buf[(card.x + 4, y)];
+            assert_eq!(mark.symbol(), HEADER_MARK);
+            assert_eq!((mark.fg, mark.bg), (theme.accent2, fill));
+            assert!(mark.modifier.contains(Modifier::BOLD));
+            let cells: Vec<char> = line(&buf, y).chars().collect();
+            let end = usize::from(card.right() - 4);
+            assert_eq!(
+                cells[end - 12..end].iter().collect::<String>(),
+                "cast · files"
+            );
+            assert_eq!(cells[end], ' ');
+            let name = &buf[(card.right() - 16, y)];
+            assert_eq!((name.fg, name.bg), (theme.accent, fill));
+            assert_eq!(buf[(card.right() - 5, y)].fg, theme.text);
+            // The field: after the mark and a blank, two short of the right.
+            assert_eq!(field, Rect::new(card.x + 6, y, 36 - 6 - 4 - 12 - 2, 1));
+            // With nothing at the right the field runs to where it would end.
+            let mut buf = screen(40, 8);
+            let field = header(look, &theme, &mut buf, card, Vec::new());
+            assert_eq!(field, Rect::new(card.x + 6, y, 36 - 6 - 4, 1));
+        }
+        // No room for it: nothing drawn, nowhere to type.
+        let theme = Theme::default();
+        for card in [Rect::new(0, 0, 11, 6), Rect::new(0, 0, 36, 3)] {
+            let mut buf = screen(40, 8);
+            assert!(header(ROUND, &theme, &mut buf, card, Vec::new()).is_empty());
+            assert_eq!(buf, screen(40, 8), "{card:?}");
+        }
+        let mut buf = screen(40, 2);
+        assert!(header(ROUND, &theme, &mut buf, Rect::new(0, 0, 36, 6), Vec::new()).is_empty());
+    }
+
+    /// A row of a list on `GROUND`, drawn over what was there.
+    fn list_row(look: Look, theme: &Theme, selected: bool, hovered: bool) -> (Buffer, RowInk) {
+        let mut buf = screen(12, 1);
+        let ink = sel_row(
+            look,
+            theme,
+            &mut buf,
+            Rect::new(1, 0, 10, 1),
+            selected,
+            hovered,
+            GROUND,
+        );
+        (buf, ink)
+    }
+
+    #[test]
+    fn a_selected_row_is_a_pill_of_hov_with_the_mark_and_a_strong_bold_label() {
+        for (look, theme, round) in looks().into_iter().take(2) {
+            let (buf, ink) = list_row(look, &theme, true, false);
+            assert_end(&buf, 1, CAP_L, round, theme.hov, GROUND);
+            assert_end(&buf, 10, CAP_R, round, theme.hov, GROUND);
+            let mark = &buf[(2, 0)];
+            assert_eq!(mark.symbol(), SEL_MARK);
+            assert_eq!((mark.fg, mark.bg), (theme.accent, theme.hov));
+            assert_eq!(mark.modifier, Modifier::BOLD);
+            for x in 3..10 {
+                let cell = &buf[(x, 0)];
+                assert_eq!((cell.symbol(), cell.bg), (" ", theme.hov), "{x}");
+                assert!(cell.modifier.is_empty(), "{x}");
+            }
+            // Around the row nothing changed.
+            assert_eq!(buf[(0, 0)].symbol(), "x");
+            assert_eq!(buf[(11, 0)].symbol(), "x");
+            let bold = Style::new().bg(theme.hov).add_modifier(Modifier::BOLD);
+            assert_eq!(ink.label, bold.fg(theme.strong));
+            assert_eq!(ink.hit, bold.fg(theme.accent));
+            assert_eq!(ink.faint, Style::new().bg(theme.hov).fg(theme.text));
+            assert_eq!(
+                ink.of(Style::new().fg(theme.err)),
+                Style::new().fg(theme.err).bg(theme.hov)
+            );
+            // Accent is the mark and the matched letters, never the fill.
+            assert_ne!(theme.hov, theme.accent);
+            if !round {
+                assert_no_caps(&buf);
+            }
+        }
+    }
+
+    #[test]
+    fn a_hovered_row_is_the_pill_without_the_mark() {
+        for (look, theme, round) in looks().into_iter().take(2) {
+            let (buf, ink) = list_row(look, &theme, false, true);
+            assert_end(&buf, 1, CAP_L, round, theme.hov, GROUND);
+            assert_end(&buf, 10, CAP_R, round, theme.hov, GROUND);
+            for x in 2..10 {
+                let cell = &buf[(x, 0)];
+                assert_eq!((cell.symbol(), cell.bg), (" ", theme.hov), "{x}");
+            }
+            // Lit, but not the row Enter acts on: its label keeps its weight.
+            assert_eq!(ink.label, Style::new().bg(theme.hov).fg(theme.fg));
+            assert_eq!(ink.faint, Style::new().bg(theme.hov).fg(theme.text));
+            // Selected and hovered at once is the selected row.
+            assert_eq!(
+                list_row(look, &theme, true, true),
+                list_row(look, &theme, true, false)
+            );
+        }
+    }
+
+    #[test]
+    fn a_row_neither_selected_nor_hovered_is_left_alone() {
+        for (look, theme, _) in looks() {
+            let (buf, ink) = list_row(look, &theme, false, false);
+            assert_eq!(buf, screen(12, 1));
+            let on = Style::new().bg(GROUND);
+            assert_eq!(ink.label, on.fg(theme.fg));
+            assert_eq!(ink.hit, on.fg(theme.accent).add_modifier(Modifier::BOLD));
+            assert_eq!(ink.faint, on.fg(theme.muted));
+            assert_eq!(
+                ink.of(Style::new().fg(theme.err)),
+                on.fg(theme.err),
+                "on the ground"
+            );
+        }
+        // Where `muted` is the ground's own colour, the faint text still reads.
+        let mono = mono();
+        let mut buf = screen(12, 1);
+        let row = Rect::new(1, 0, 10, 1);
+        let ink = sel_row(ROUND, &mono, &mut buf, row, false, false, mono.raised2);
+        assert_eq!(ink.faint.fg, Some(mono.text));
+        // Off the buffer there's nothing to draw.
+        let theme = Theme::default();
+        let mut buf = screen(12, 1);
+        let off = Rect::new(1, 4, 10, 1);
+        sel_row(ROUND, &theme, &mut buf, off, true, false, GROUND);
+        assert_eq!(buf, screen(12, 1));
+    }
+
+    #[test]
+    fn in_mono_the_selected_row_is_reverse_video_and_carries_no_colours() {
+        let mono = mono();
+        for look in [ROUND, SQUARE, ROUNDED] {
+            let (buf, ink) = list_row(look, &mono, true, false);
+            assert_eq!(row(&buf), format!("x {SEL_MARK}        x"));
+            for x in 1..11 {
+                let cell = &buf[(x, 0)];
+                assert!(cell.modifier.contains(Modifier::REVERSED), "{x}");
+                assert!(!cell.modifier.contains(Modifier::UNDERLINED), "{x}");
+                // Terminal colours only: nothing blended.
+                assert!(!is_rgb(cell.fg) && !is_rgb(cell.bg), "{x}");
+            }
+            assert!(buf[(2, 0)].modifier.contains(Modifier::BOLD));
+            assert!(!buf[(0, 0)].modifier.contains(Modifier::REVERSED));
+            assert_no_caps(&buf);
+            // Its text has weight and nothing else.
+            let weight = Style::new().add_modifier(Modifier::BOLD);
+            assert_eq!((ink.label, ink.hit), (weight, weight));
+            assert_eq!(ink.faint, Style::new());
+            let asked = Style::new()
+                .fg(mono.err)
+                .bg(mono.raised)
+                .add_modifier(Modifier::BOLD);
+            assert_eq!(ink.of(asked), weight);
+            assert_eq!(ink.of(Style::new().fg(mono.accent)), Style::new());
+
+            // Hovering shows nothing: mono has no fill to show it with.
+            let (buf, ink) = list_row(look, &mono, false, true);
+            assert_eq!(buf, screen(12, 1));
+            assert_eq!(ink.label, Style::new().fg(mono.fg).bg(GROUND));
+        }
     }
 }

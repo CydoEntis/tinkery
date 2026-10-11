@@ -4931,23 +4931,23 @@ impl App {
             frame.set_cursor_position(at);
         }
         if let Some(picker) = &self.picker {
-            let at = picker.render(theme, frame, frame.area());
+            let at = picker.render(self.look, theme, frame, frame.area());
             frame.set_cursor_position(at);
         }
         if let Some(browser) = &self.folders {
-            let at = browser.render(theme, frame, frame.area());
+            let at = browser.render(self.look, theme, frame, frame.area());
             frame.set_cursor_position(at);
         }
         // Nothing is typed into the catalog, so it shows no cursor.
         if let Some(catalog) = &self.catalog {
-            catalog.render(theme, frame, frame.area());
+            catalog.render(self.look, theme, frame, frame.area());
         }
         if let Some(card) = &self.keybindings {
-            let at = card.render(theme, frame, frame.area());
+            let at = card.render(self.look, theme, frame, frame.area());
             frame.set_cursor_position(at);
         }
         if let Some(panel) = &self.project_search {
-            let at = panel.render(theme, frame, frame.area());
+            let at = panel.render(self.look, theme, frame, frame.area());
             frame.set_cursor_position(at);
         }
         if let Some(prompt) = self.prompt {
