@@ -4902,7 +4902,7 @@ impl App {
                 ..screen
             };
             if let Some(at) = cursor_cell(shown.buffer(), view, self.editor.tab_width, area) {
-                render_hover(theme, text, at, bounds, frame);
+                render_hover(self.look, theme, text, at, bounds, frame);
             }
         }
         if let Some(open) = &self.completion
@@ -4920,7 +4920,7 @@ impl App {
             if let Some(typed) = completion::typed_word(&buffer.rope, open.start, buffer.cursor)
                 && let Some(at) = cursor_cell(buffer, view, self.editor.tab_width, area)
             {
-                open.render(theme, &typed, at, bounds, frame);
+                open.render(self.look, theme, &typed, at, bounds, frame);
             }
         }
         if let (Some(name_prompt), Some(area)) = (&self.name_prompt, panes.bar) {

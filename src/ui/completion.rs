@@ -6,12 +6,11 @@ use std::ops::Range;
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
-use ratatui::widgets::Clear;
 use ropey::Rope;
 use unicode_width::UnicodeWidthStr;
 
-use super::hover::anchor;
+use super::hover::{anchor, popup_card};
+use super::kit::{self, Look};
 use crate::lsp::CompletionItem;
 use crate::theme::Theme;
 
@@ -19,8 +18,13 @@ use crate::theme::Theme;
 pub const MAX_ITEMS: usize = 10;
 /// Widest a row's text gets inside the card.
 const MAX_TEXT_WIDTH: usize = 60;
-/// Border plus one cell of padding on each side.
-const SIDE: u16 = 2;
+/// How far into a row its text starts: the row pill's end, the mark of the
+/// selected row and a blank.
+const MARK: u16 = 3;
+/// The card's edge and `MARK` before a row's text.
+const LEFT: u16 = 1 + MARK;
+/// The row pill's other end and the card's edge after it.
+const RIGHT: u16 = 2;
 
 /// Whether `c` belongs to the word being completed.
 pub fn is_word_char(c: char) -> bool {
@@ -123,10 +127,11 @@ impl Completion {
     /// Draws the items matching `typed` in a card anchored at the cursor cell
     /// `cursor`, inside `bounds`: each row its kind in `muted`, its label in `fg`
     /// with the typed prefix in `accent` bold, and its detail right-aligned in
-    /// `muted`. The selected row is the glow row with its label in `strong`.
-    /// Nothing when nothing matches.
+    /// `muted`. The selected row is the kit's: a pill with its mark, the label
+    /// in `strong` bold. Nothing when nothing matches.
     pub fn render(
         &self,
+        look: Look,
         theme: &Theme,
         typed: &str,
         cursor: (u16, u16),
@@ -151,42 +156,33 @@ impl Completion {
         let text_width = (kind_width + gap + label_width + detail_room).clamp(1, MAX_TEXT_WIDTH);
         let rows = u16::try_from(shown.len()).unwrap_or(u16::MAX);
         let width = u16::try_from(text_width).unwrap_or(u16::MAX);
-        let card = anchor(cursor, width + SIDE * 2, rows + 2, bounds);
-        if card.width <= SIDE * 2 || card.height <= 2 {
+        let card = anchor(cursor, width + LEFT + RIGHT, rows + 2, bounds);
+        if card.width <= LEFT + RIGHT || card.height <= 2 {
             return;
         }
-        frame.render_widget(Clear, card);
-        let block = super::card_block(theme);
-        let inner = block.inner(card);
-        frame.render_widget(block, card);
-        let room = usize::from(inner.width.saturating_sub(2));
-        let typed_chars = typed.chars().count();
-        // `mono` draws the glow as reverse video, which only reads when the
-        // row's text brings no colours of its own.
-        let plain = !theme.ramps();
         let out = frame.buffer_mut();
+        let inner = popup_card(look, theme, out, card);
+        if inner.is_empty() {
+            return;
+        }
+        // The text ends where the row pill's right end begins.
+        let right = inner.right().saturating_sub(1);
+        let x = inner.x + MARK;
+        let room = usize::from(right.saturating_sub(x));
+        let typed_chars = typed.chars().count();
         for (index, (y, item)) in (inner.y..inner.bottom()).zip(&shown).enumerate() {
+            let row = Rect::new(inner.x, y, inner.width, 1);
+            // Nothing reports the mouse's position yet, so no row is hovered.
             let chosen = index == selected;
-            if chosen {
-                super::glow_row(theme, out, inner.x, inner.right(), y);
-            }
-            let fg = |color| {
-                if chosen && plain {
-                    Style::new()
-                } else {
-                    Style::new().fg(color)
-                }
-            };
-            let x = inner.x + 1;
-            out.set_stringn(x, y, item.kind, room, fg(theme.muted));
+            let ink = kit::sel_row(look, theme, out, row, chosen, false, theme.raised);
+            out.set_stringn(x, y, item.kind, room, ink.faint);
             let offset = kind_width + gap;
             if offset >= room {
                 continue;
             }
             let label_x = x + u16::try_from(offset).unwrap_or(u16::MAX);
             let label_room = room - offset;
-            let label = fg(if chosen { theme.strong } else { theme.fg });
-            let (end, _) = out.set_stringn(label_x, y, &item.label, label_room, label);
+            let (end, _) = out.set_stringn(label_x, y, &item.label, label_room, ink.label);
             // The typed prefix: the label's first chars, when they are what was
             // typed (the match is on the filter text, which can differ).
             let prefix_len = item
@@ -199,16 +195,15 @@ impl Completion {
                 && prefix.chars().count() == typed_chars
                 && prefix.to_lowercase() == typed.to_lowercase()
             {
-                let style = fg(theme.accent).add_modifier(Modifier::BOLD);
-                out.set_stringn(label_x, y, prefix, label_room, style);
+                out.set_stringn(label_x, y, prefix, label_room, ink.hit);
             }
             let detail = item.detail.width();
-            let right = usize::from(inner.right().saturating_sub(1));
+            let right = usize::from(right);
             let free = right.saturating_sub(usize::from(end) + 2);
             if detail > 0 && free > 0 {
                 let shown_width = detail.min(free);
                 let detail_x = u16::try_from(right - shown_width).unwrap_or(u16::MAX);
-                out.set_stringn(detail_x, y, &item.detail, shown_width, fg(theme.muted));
+                out.set_stringn(detail_x, y, &item.detail, shown_width, ink.faint);
             }
         }
     }
@@ -216,7 +211,14 @@ impl Completion {
 
 #[cfg(test)]
 mod tests {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use ratatui::buffer::Buffer;
+    use ratatui::style::{Color, Modifier, Style};
+
     use super::*;
+    use crate::config::Corners;
+    use crate::ui::kit::{CAP_L, CAP_R, SEL_MARK};
 
     fn item(label: &str, edit: Option<Range<usize>>) -> CompletionItem {
         CompletionItem {
@@ -296,5 +298,177 @@ mod tests {
         assert_eq!(typed_word(&rope, 6, 6).as_deref(), Some(""));
         assert_eq!(typed_word(&rope, 6, 5), None);
         assert_eq!(typed_word(&rope, 6, 10), None);
+    }
+
+    /// `push` (with a detail) and `push_str` for a typed `pu`, the first one
+    /// selected, with the cursor at (2, 1) of a 32 by 7 screen of `x`: the card
+    /// is at (2, 2), 27 by 4, and its rows' text starts at column 6.
+    fn popup(look: Look, theme: &Theme) -> anyhow::Result<Buffer> {
+        let mut push = item("push", None);
+        push.detail = "fn(char)".into();
+        let completion = Completion::new(1, 0, 0, vec![push, item("push_str", None)]);
+        let mut terminal = Terminal::new(TestBackend::new(32, 7))?;
+        terminal.draw(|frame| {
+            let area = frame.area();
+            let out = frame.buffer_mut();
+            for y in area.top()..area.bottom() {
+                out.set_string(0, y, "x".repeat(32), Style::new().fg(Color::Red));
+            }
+            completion.render(look, theme, "pu", (2, 1), area, frame);
+        })?;
+        Ok(terminal.backend().buffer().clone())
+    }
+
+    /// Columns `from` up to `to` of row `y`.
+    fn cells(buf: &Buffer, y: u16, from: u16, to: u16) -> String {
+        (from..to).map(|x| buf[(x, y)].symbol()).collect()
+    }
+
+    const LOOKS: [Look; 2] = [
+        Look {
+            pill_caps: true,
+            corners: Corners::Flush,
+        },
+        Look {
+            pill_caps: false,
+            corners: Corners::Rounded,
+        },
+    ];
+
+    #[test]
+    fn the_popup_is_a_card_on_raised_and_its_selected_row_a_pill() -> anyhow::Result<()> {
+        let bold = Modifier::BOLD;
+        for name in ["tinkery", "tinkery-light"] {
+            let theme = Theme::named(name).expect("it exists");
+            for look in LOOKS {
+                let at = format!("{name} {look:?}");
+                let buf = popup(look, &theme)?;
+                let (top, side, bottom) = match look.corners {
+                    Corners::Flush => (format!(" {} ", "▁".repeat(25)), ("▕", "▏"), "▔"),
+                    Corners::Rounded => (format!("╭{}╮", "─".repeat(25)), ("│", "│"), "─"),
+                };
+                assert_eq!(cells(&buf, 2, 2, 29), top, "{at}");
+                assert_eq!(cells(&buf, 5, 3, 28), bottom.repeat(25), "{at}");
+                for y in 3..5 {
+                    for (x, glyph) in [(2, side.0), (28, side.1)] {
+                        let edge = &buf[(x, y)];
+                        assert_eq!(edge.symbol(), glyph, "{at}");
+                        assert_eq!((edge.fg, edge.bg), (theme.line2, theme.bg), "{at}");
+                    }
+                }
+                // The selected row: a pill of `hov` on `raised` across the
+                // inside, `›` a cell in, then the text.
+                assert_eq!(
+                    cells(&buf, 3, 4, 27),
+                    format!("{SEL_MARK} fn push      fn(char)"),
+                    "{at}"
+                );
+                for (x, cap) in [(3, CAP_L), (27, CAP_R)] {
+                    let end = &buf[(x, 3)];
+                    if look.pill_caps {
+                        assert_eq!(end.symbol(), cap, "{at}");
+                        assert_eq!((end.fg, end.bg), (theme.hov, theme.raised), "{at}");
+                    } else {
+                        assert_eq!((end.symbol(), end.bg), (" ", theme.hov), "{at}");
+                    }
+                }
+                for x in 4..27 {
+                    assert_eq!(buf[(x, 3)].bg, theme.hov, "{at} {x}");
+                }
+                let style = |x: u16, y: u16| (buf[(x, y)].fg, buf[(x, y)].modifier);
+                assert_eq!(style(4, 3), (theme.accent, bold), "{at}");
+                // Kind and detail in `text`, as `muted` is too close to `hov`.
+                assert_eq!(style(6, 3), (theme.text, Modifier::empty()), "{at}");
+                assert_eq!(style(19, 3), (theme.text, Modifier::empty()), "{at}");
+                // The typed `pu` in `accent` bold, the rest in `strong` bold.
+                assert_eq!(style(9, 3), (theme.accent, bold), "{at}");
+                assert_eq!(style(10, 3), (theme.accent, bold), "{at}");
+                assert_eq!(style(11, 3), (theme.strong, bold), "{at}");
+                assert_eq!(style(12, 3), (theme.strong, bold), "{at}");
+
+                // Any other row is left on the card: kind `muted`, label `fg`
+                // with the typed prefix still `accent` bold.
+                assert_eq!(cells(&buf, 4, 3, 28), format!("   {:<22}", "fn push_str"));
+                for x in 3..28 {
+                    assert_eq!(buf[(x, 4)].bg, theme.raised, "{at} {x}");
+                }
+                assert_eq!(style(6, 4), (theme.muted, Modifier::empty()), "{at}");
+                assert_eq!(style(9, 4), (theme.accent, bold), "{at}");
+                assert_eq!(style(10, 4), (theme.accent, bold), "{at}");
+                assert_eq!(style(11, 4), (theme.fg, Modifier::empty()), "{at}");
+
+                // Not dimmed: around the card the screen is as it was.
+                for (x, y) in [(1, 3), (29, 3), (10, 1), (10, 6), (0, 0), (31, 6)] {
+                    let cell = &buf[(x, y)];
+                    assert_eq!((cell.symbol(), cell.fg), ("x", Color::Red), "{at}");
+                    assert_eq!((cell.bg, cell.modifier), (Color::Reset, Modifier::empty()));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn in_mono_the_selected_row_is_reverse_video_with_nothing_coloured_on_it() -> anyhow::Result<()>
+    {
+        let mono = Theme::named("mono").expect("mono exists");
+        for look in LOOKS {
+            let buf = popup(look, &mono)?;
+            assert_eq!(
+                cells(&buf, 3, 3, 28),
+                format!(" {SEL_MARK} fn push      fn(char) "),
+                "{look:?}"
+            );
+            // One pair of colours from edge to edge of the inside, reversed:
+            // no kind, label, prefix or detail brings its own.
+            let row = Theme::highlight(mono.hov, mono.strong);
+            for x in 3..28 {
+                let cell = &buf[(x, 3)];
+                assert_eq!(
+                    (cell.fg, cell.bg),
+                    (row.fg.unwrap(), row.bg.unwrap()),
+                    "{x}"
+                );
+                assert!(cell.modifier.contains(Modifier::REVERSED), "{x}");
+                // The mark and the label are told apart by weight alone.
+                let heavy = x == 4 || (9..13).contains(&x);
+                assert_eq!(cell.modifier.contains(Modifier::BOLD), heavy, "{x}");
+            }
+            // The row under it is plain: kind in `muted`, the prefix bold.
+            for x in 3..28 {
+                let cell = &buf[(x, 4)];
+                assert_eq!(cell.bg, mono.raised, "{x}");
+                assert!(!cell.modifier.contains(Modifier::REVERSED), "{x}");
+            }
+            assert_eq!(buf[(6, 4)].fg, mono.muted);
+            assert_eq!(buf[(9, 4)].fg, mono.accent);
+            assert!(buf[(9, 4)].modifier.contains(Modifier::BOLD));
+            assert_eq!(buf[(11, 4)].fg, mono.fg);
+            // Terminal colours only and no Nerd Font glyph, whatever `[ui]` says.
+            for y in 0..7 {
+                for x in 0..32 {
+                    let cell = &buf[(x, y)];
+                    assert!(!matches!(cell.fg, Color::Rgb(..)), "{x},{y}");
+                    assert!(!matches!(cell.bg, Color::Rgb(..)), "{x},{y}");
+                    assert!(!matches!(cell.symbol(), CAP_L | CAP_R), "{x},{y}");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_popup_with_no_room_for_a_row_draws_nothing() -> anyhow::Result<()> {
+        let completion = Completion::new(1, 0, 0, vec![item("push", None)]);
+        let theme = Theme::default();
+        // Six cells is the edges, the mark's three and the pill's end: no text.
+        let mut terminal = Terminal::new(TestBackend::new(6, 6))?;
+        terminal
+            .draw(|frame| completion.render(LOOKS[0], &theme, "", (0, 0), frame.area(), frame))?;
+        assert_eq!(
+            terminal.backend().buffer(),
+            &Buffer::empty(Rect::new(0, 0, 6, 6))
+        );
+        Ok(())
     }
 }
