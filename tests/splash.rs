@@ -97,7 +97,7 @@ fn wait_for_selected(tinkery: &Tinkery, row: u16) {
 
 /// What the name prompt says Enter and Esc do, each key a keycap.
 fn create_hint() -> String {
-    harness::hints_text(&[("⏎", "create"), ("esc", "cancel")])
+    harness::hints_text(&[("⏎", "create"), ("Esc", "cancel")])
 }
 
 fn wait_for_status(tinkery: &Tinkery, text: &str) {

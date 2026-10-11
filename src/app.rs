@@ -212,7 +212,7 @@ impl BarOp {
             BarOp::Rename(_) => "rename",
             BarOp::SaveAs(_) => "save",
         };
-        [("⏎", enter), ("esc", "cancel")]
+        [("⏎", enter), ("Esc", "cancel")]
     }
 }
 

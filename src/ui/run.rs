@@ -24,11 +24,11 @@ pub type Hints = [(&'static str, &'static str)];
 
 /// The keys the title row offers while the command runs, and once it's done
 /// (SPEC_V1_LAYOUT §9).
-const RUNNING_HINTS: &Hints = &[("shift+F5", "stop"), ("ctrl+F5", "restart"), ("F4", "hide")];
+const RUNNING_HINTS: &Hints = &[("Shift+F5", "stop"), ("Ctrl+F5", "restart"), ("F4", "hide")];
 const DONE_HINTS: &Hints = &[("F5", "run again"), ("F4", "hide")];
 /// The same for a debug session's output: Alt+F6 is what stops it.
-const DEBUG_RUNNING_HINTS: &Hints = &[("alt+F6", "stop"), ("F4", "hide")];
-const DEBUG_DONE_HINTS: &Hints = &[("alt+F5", "debug again"), ("F4", "hide")];
+const DEBUG_RUNNING_HINTS: &Hints = &[("Alt+F6", "stop"), ("F4", "hide")];
+const DEBUG_DONE_HINTS: &Hints = &[("Alt+F5", "debug again"), ("F4", "hide")];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunStatus {

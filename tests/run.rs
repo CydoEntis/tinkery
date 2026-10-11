@@ -57,7 +57,7 @@ const PICKER_STRONG: Color = Color::Rgb(0xf8, 0xf0, 0xe6);
 /// The hints at the right of the title row while running, and once done: each
 /// key, drawn as a keycap, and what it does.
 const RUNNING_HINTS: &[(&str, &str)] =
-    &[("shift+F5", "stop"), ("ctrl+F5", "restart"), ("F4", "hide")];
+    &[("Shift+F5", "stop"), ("Ctrl+F5", "restart"), ("F4", "hide")];
 const DONE_HINTS: &[(&str, &str)] = &[("F5", "run again"), ("F4", "hide")];
 /// The default theme's (tinkery's) `surface` and `btn`, which
 /// `the_title_rows_hints_are_keycaps` reads on an empty config.
@@ -215,7 +215,7 @@ fn in_mono_the_title_rows_keycaps_are_bold_text() {
     // The same cells as with colours, a blank where each cap's end would be.
     let title = row(&tinkery, TITLE_ROW);
     assert!(
-        title.ends_with("   shift+F5  stop    ctrl+F5  restart    F4  hide"),
+        title.ends_with("   Shift+F5  stop    Ctrl+F5  restart    F4  hide"),
         "{title:?}"
     );
     // A cell short of the right edge, as with colours.
@@ -227,7 +227,7 @@ fn in_mono_the_title_rows_keycaps_are_bold_text() {
     // The name and the keys are the row's bold text; nothing is reversed.
     assert_eq!(
         tinkery.bold_text(TITLE_ROW).replace(' ', ""),
-        "devshift+F5ctrl+F5F4"
+        "devShift+F5Ctrl+F5F4"
     );
     assert_eq!(tinkery.reversed_text(TITLE_ROW), "");
 }

@@ -271,7 +271,7 @@ fn the_panel_has_an_accent_edge_two_strips_and_keycap_hints_over_a_dimmed_screen
     assert_eq!(tinkery.fg_at(VALUE_X, QUERY_ROW), STRONG);
     assert_eq!(tinkery.fg_at(LABEL_X, REPLACE_ROW), MUTED);
     assert_eq!(
-        tinkery.text_col(REPLACE_ROW, "tab to replace"),
+        tinkery.text_col(REPLACE_ROW, "Tab to replace"),
         Some(VALUE_X)
     );
     assert_eq!(tinkery.fg_at(VALUE_X, REPLACE_ROW), MUTED);
@@ -321,7 +321,7 @@ fn tab_gives_the_replace_strip_the_keys_and_its_label_turns_text() {
     tinkery.wait_for_cursor(VALUE_X, REPLACE_ROW, WAIT);
     tinkery.wait_for_fg_at(LABEL_X, REPLACE_ROW, TEXT, WAIT);
     assert_eq!(tinkery.fg_at(LABEL_X, QUERY_ROW), MUTED);
-    tinkery.wait_for_text_gone("tab to replace", WAIT);
+    tinkery.wait_for_text_gone("Tab to replace", WAIT);
     // Tab now names the field it goes back to.
     assert_eq!(tinkery.text_col(HINTS_ROW, &hints("search")), Some(LIST_X));
     tinkery.type_text("DONE");

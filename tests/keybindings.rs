@@ -391,7 +391,7 @@ fn a_paste_goes_into_the_filter() {
 }
 
 /// What the selected row shows while it waits for a new key.
-const WAITING: &str = "press a key… (esc cancels)";
+const WAITING: &str = "press a key… (Esc cancels)";
 
 /// Tinkery on `a.txt` (`alpha`) in `project`, with `TINKERY_CONFIG` pointing at
 /// `config`.

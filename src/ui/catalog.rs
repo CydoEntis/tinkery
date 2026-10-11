@@ -31,9 +31,8 @@ const TOP: u16 = 4;
 const CHROME: u16 = 7;
 /// The rows between the servers and the debuggers: a blank and the heading.
 const GAP: u16 = 2;
-/// The panel's title, in its top edge, and what the header's strip says.
+/// The panel's title, in its top edge.
 const TITLE: &str = "Language servers";
-const HEADER: &str = "language servers";
 const DEBUGGERS: &str = "debuggers";
 /// Cells for the row's name, so the commands line up: the longest name and two
 /// blanks.
@@ -419,15 +418,9 @@ impl Catalog {
         let left = card.x + 4;
         let right = card.right() - 4;
 
-        // Nothing is typed here, so the strip says what the list is.
-        let field = kit::header(look, theme, out, card, Vec::new());
-        out.set_stringn(
-            field.x,
-            field.y,
-            HEADER,
-            usize::from(field.width),
-            Style::new().fg(theme.strong).bg(theme.raised2),
-        );
+        // Nothing is typed here and the edge already names the list, so the
+        // strip is only the mark: the chrome the other panels have.
+        kit::header(look, theme, out, card, Vec::new());
 
         for (i, row) in self.rows.iter().enumerate() {
             let y = card.y + self.row_offset(i);
@@ -948,16 +941,13 @@ mod tests {
         let bottom = card_row(&buffer, card, card.bottom() - 1);
         assert_eq!(bottom, format!(" {} ", "▔".repeat(84)));
 
-        // The header: a strip of `raised2` across the inside.
+        // The header: a strip of `raised2` across the inside, with the mark
+        // and nothing else. The edge has already said what the list is.
         let header = card_row(&buffer, card, card.y + 2);
-        assert_eq!(
-            header,
-            format!("▕{CAP_L}  ✦ {:<76}  {CAP_R}▏", "language servers")
-        );
+        assert_eq!(header, format!("▕{CAP_L}  ✦ {:<76}  {CAP_R}▏", ""));
         let mark = &buffer[(card.x + 4, card.y + 2)];
         assert_eq!((mark.fg, mark.bg), (theme.accent2, theme.raised2));
-        let said = &buffer[(card.x + 6, card.y + 2)];
-        assert_eq!((said.fg, said.bg), (theme.strong, theme.raised2));
+        assert_eq!(buffer[(card.x + 6, card.y + 2)].bg, theme.raised2);
         assert_eq!(text_row(&buffer, card, card.y + 3).trim(), "");
 
         // The first row is selected: a pill of `hov` with `›` in the accent,

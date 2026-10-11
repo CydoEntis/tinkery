@@ -38,7 +38,8 @@ const COMMAND_X: u16 = 36;
 const RIGHT: u16 = 89;
 const FOOTER_ROW: u16 = 21;
 const TITLE: &str = "▁ Language servers ▁";
-const HEADER: &str = "✦ language servers";
+/// All the header's strip says: the edge above it names the list.
+const MARK: &str = "✦";
 
 /// The default theme, tinkery, which an empty config runs on: the roles the
 /// catalog is drawn in.
@@ -153,7 +154,7 @@ fn open_catalog(tinkery: &mut Tinkery) {
     // The header can arrive before the rest of the card (ConPTY streams the
     // redraw in pieces), so wait for the keys on its last row too.
     tinkery.wait_for_screen("the catalog", WAIT, |screen| {
-        screen[usize::from(HEADER_ROW)].contains(HEADER)
+        screen[usize::from(CARD_Y)].contains(TITLE)
             && screen
                 .iter()
                 .any(|row| row.contains("copy command") && row.contains("close"))
@@ -172,19 +173,25 @@ fn language_servers_in_the_cast_lists_each_server_and_its_state() {
     let mut tinkery = with_path(project.path(), path.path());
     open_catalog(&mut tinkery);
 
-    // A panel: the title set into its accent edge, then `✦ language servers`
-    // on the header's strip and a blank row.
+    // A panel: the title set into its accent edge, then the header's strip,
+    // which holds the mark and doesn't say the title again, and a blank row.
     assert_eq!(tinkery.text_col(CARD_Y, TITLE), Some(CARD_X + 1));
     assert_eq!(tinkery.fg_at(CARD_X + 1, CARD_Y), ACCENT);
     assert!(tinkery.bold_at(CARD_X + 3, CARD_Y));
     assert_eq!(cell(&tinkery, CARD_X, HEADER_ROW), "▕");
     assert_eq!(cell(&tinkery, CARD_X + CARD_WIDTH - 1, HEADER_ROW), "▏");
-    assert_eq!(tinkery.text_col(HEADER_ROW, HEADER), Some(TEXT_X));
+    assert_eq!(
+        inside(&tinkery, HEADER_ROW),
+        format!(
+            "{CAP_L}  {MARK}{}{CAP_R}",
+            " ".repeat(usize::from(PILL_END - TEXT_X - 1))
+        )
+    );
+    assert_eq!(tinkery.text_col(HEADER_ROW, MARK), Some(TEXT_X));
     assert_eq!(cell(&tinkery, PILL_X, HEADER_ROW), CAP_L);
     assert_eq!(cell(&tinkery, PILL_END, HEADER_ROW), CAP_R);
     assert_eq!(tinkery.fg_at(PILL_X, HEADER_ROW), RAISED2);
     assert_eq!(tinkery.bg_at(TEXT_X + 2, HEADER_ROW), RAISED2);
-    assert_eq!(tinkery.fg_at(TEXT_X + 2, HEADER_ROW), STRONG);
     assert_eq!(inside(&tinkery, BLANK_ROW), "");
     assert_eq!(
         row(&tinkery, FOOTER_ROW + 1)
@@ -302,12 +309,12 @@ fn arrows_move_the_selection_and_esc_or_a_click_outside_close() {
     // Typed letters go nowhere; the catalog stays.
     tinkery.type_text("x");
     tinkery.send_keys("esc");
-    tinkery.wait_for_text_gone(HEADER, WAIT);
+    tinkery.wait_for_text_gone(TITLE, WAIT);
 
     // A click outside the card closes it too.
     open_catalog(&mut tinkery);
     tinkery.click(2, ROWS - 3);
-    tinkery.wait_for_text_gone(HEADER, WAIT);
+    tinkery.wait_for_text_gone(TITLE, WAIT);
 }
 
 #[test]
@@ -391,7 +398,7 @@ fn enter_on_a_missing_row_runs_its_install_in_the_run_panel() {
     tinkery.send_keys("enter");
 
     // The card closes and the panel, hidden until now, shows the install.
-    tinkery.wait_for_text_gone(HEADER, WAIT);
+    tinkery.wait_for_text_gone(TITLE, WAIT);
     tinkery.wait_for_screen("the install's title and output", WAIT, |screen| {
         screen[usize::from(RUN_TITLE_ROW)].contains("install Rust")
             && screen[usize::from(RUN_OUTPUT_ROW)].contains("installing rust")
@@ -441,10 +448,10 @@ fn an_install_waits_for_the_running_command() {
     tinkery.send_keys("enter");
     tinkery.wait_for_text("install Rust is running; stop it first", WAIT);
     // The catalog stays open under the message.
-    assert_eq!(tinkery.text_col(HEADER_ROW, HEADER), Some(TEXT_X));
+    assert_eq!(tinkery.text_col(CARD_Y, TITLE), Some(CARD_X + 1));
 
     tinkery.send_keys("esc");
-    tinkery.wait_for_text_gone(HEADER, WAIT);
+    tinkery.wait_for_text_gone(TITLE, WAIT);
     tinkery.send_keys("shift+f5");
     tinkery.wait_for_screen("the install stopped", WAIT, |screen| {
         screen[usize::from(RUN_TITLE_ROW)].contains("stopped")
@@ -473,7 +480,7 @@ fn enter_copies_a_command_it_cant_run() {
         "rustup component add rust-analyzer"
     );
     // The catalog stays, and nothing ran.
-    assert_eq!(tinkery.text_col(HEADER_ROW, HEADER), Some(TEXT_X));
+    assert_eq!(tinkery.text_col(CARD_Y, TITLE), Some(CARD_X + 1));
     assert!(!tinkery.screen().iter().any(|l| l.contains("install Rust")));
     drop(tinkery);
 
@@ -507,7 +514,7 @@ fn enter_on_an_installed_row_does_nothing() {
     let mut tinkery = with_path(project.path(), path.path());
     open_catalog(&mut tinkery);
     enter_then_down(&mut tinkery);
-    assert_eq!(tinkery.text_col(HEADER_ROW, HEADER), Some(TEXT_X));
+    assert_eq!(tinkery.text_col(CARD_Y, TITLE), Some(CARD_X + 1));
     let screen = tinkery.screen();
     assert!(
         !screen.iter().any(|l| l.contains("install Rust")),
@@ -534,10 +541,10 @@ fn enter_on_a_running_row_does_nothing() {
         screen[usize::from(FIRST_ROW)].contains("running")
     });
     enter_then_down(&mut tinkery);
-    assert_eq!(tinkery.text_col(HEADER_ROW, HEADER), Some(TEXT_X));
+    assert_eq!(tinkery.text_col(CARD_Y, TITLE), Some(CARD_X + 1));
     assert!(!tinkery.screen().iter().any(|l| l.contains("install Rust")));
     tinkery.send_keys("esc");
-    tinkery.wait_for_text_gone(HEADER, WAIT);
+    tinkery.wait_for_text_gone(TITLE, WAIT);
     // Quit cleanly so the fake server exits too.
     tinkery.send_keys("ctrl+q");
     tinkery.wait_exit(WAIT);
@@ -798,7 +805,7 @@ fn enter_on_dlv_runs_its_install_and_finds_it_after() {
     select(&mut tinkery, LAST_ROW);
     tinkery.send_keys("enter");
 
-    tinkery.wait_for_text_gone(HEADER, WAIT);
+    tinkery.wait_for_text_gone(TITLE, WAIT);
     tinkery.wait_for_screen("the install's title and output", WAIT, |screen| {
         screen[usize::from(RUN_TITLE_ROW)].contains("install dlv")
             && screen[usize::from(RUN_OUTPUT_ROW)]
@@ -982,7 +989,7 @@ fn a_failed_server_says_why_and_enter_retries_it() {
 
     assert_eq!(starts(files.path()), 1);
     tinkery.send_keys("enter");
-    tinkery.wait_for_text_gone(HEADER, WAIT);
+    tinkery.wait_for_text_gone(TITLE, WAIT);
     // Started again for the open file, without reopening it.
     tinkery.wait_for_files("a second start", WAIT, || starts(files.path()) == 2);
     tinkery.send_keys("ctrl+q");
@@ -1037,10 +1044,10 @@ fn c_on_a_failed_row_copies_its_install_and_mono_reverses_it() {
         RUST_INSTALL
     );
     // Still open, still failed: copying isn't retrying.
-    assert_eq!(tinkery.text_col(HEADER_ROW, HEADER), Some(TEXT_X));
+    assert_eq!(tinkery.text_col(CARD_Y, TITLE), Some(CARD_X + 1));
     assert_eq!(starts(files.path()), 1);
     tinkery.send_keys("esc");
-    tinkery.wait_for_text_gone(HEADER, WAIT);
+    tinkery.wait_for_text_gone(TITLE, WAIT);
     tinkery.send_keys("ctrl+q");
     tinkery.wait_exit(WAIT);
 }

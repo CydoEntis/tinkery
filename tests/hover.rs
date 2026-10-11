@@ -391,7 +391,7 @@ fn the_catalog_lights_the_row_under_the_pointer() {
     });
     tinkery.send_keys("enter");
     tinkery.wait_for_screen("the catalog", WAIT, |screen| {
-        screen[6].contains("✦ language servers")
+        screen[4].contains("▁ Language servers ▁")
             && screen
                 .iter()
                 .any(|row| row.contains("copy command") && row.contains("close"))

@@ -22,11 +22,12 @@ Intent: [intent.md](intent.md) · Status: accepted · Date: 2026-10-08
 - **C1.** `>language servers` (title "Language servers", config name `language_servers`,
   no default key) in the cast palette opens the catalog — checked by PTY test.
 - **C2.** The catalog is a dimmed dialog card in the cast style (`ui::dim`, `dialog_card`):
-  header `✦ language servers`; one row per server — Rust, Go, TypeScript / JavaScript,
+  header strip with `✦` alone (the panel's edge says `Language servers`; changed with
+  [Tinkery Forge](../tinkery-forge/spec.md), 2026-10-11); one row per server — Rust, Go, TypeScript / JavaScript,
   Python, HTML, CSS, SQL — with the server command and its state: `installed` in `ok`,
   `missing` in `muted`, `needs <tool>` in `warn` when the install tool isn't on PATH, or
   `running` in `ok` when a server for it is up. ↑/↓ select (selected row on `glow_row`);
-  Esc or a click outside closes it; footer `⏎ install  c copy command  esc close`. In
+  Esc or a click outside closes it; footer `⏎ install  c copy command  Esc close`. In
   `mono` the selected row is reverse video — checked by PTY tests and unit tests.
 - **C3.** Each server has a default install command and the tool it needs: rust `rustup
   component add rust-analyzer` (rustup); go `go install golang.org/x/tools/gopls@latest`
@@ -53,7 +54,10 @@ Intent: [intent.md](intent.md) · Status: accepted · Date: 2026-10-08
 ## Design
 
 - **Screens**: the catalog card (C2), built from `src/ui/mod.rs` helpers like the cast
-  palette and folder browser; messages in the existing status line.
+  palette and folder browser. Its messages (where C2–C4 write "the status line says") are
+  no longer notes in the status line that clear on the next key: since Tinkery Forge
+  (2026-10-11) they are toasts that leave by themselves after 2.5 s, or 4.5 s for an error
+  ([Forge spec](../tinkery-forge/spec.md) F22).
 - **Data**: none stored. Install defaults live beside the server defaults in
   `src/lsp/servers.rs`; `LspServer` (`src/config.rs:27-36`) gains `install:
   Option<String>`.
