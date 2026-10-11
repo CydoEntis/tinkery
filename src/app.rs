@@ -4914,7 +4914,7 @@ impl App {
             frame.set_cursor_position(at);
         }
         if let Some(panel) = &self.project_search {
-            let at = panel.render(theme, frame, frame.area());
+            let at = panel.render(self.look, theme, frame, frame.area());
             frame.set_cursor_position(at);
         }
         if let Some(prompt) = self.prompt {
