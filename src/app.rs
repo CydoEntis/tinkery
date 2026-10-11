@@ -8260,6 +8260,91 @@ world",
     }
 
     #[test]
+    fn a_completion_scrolling_under_its_pill_leaves_it_and_the_pointers_row_alone() -> Result<()> {
+        let mut app = app_with("", &FakeClipboard::default());
+        let items = (1..=12).map(|n| CompletionItem {
+            label: format!("m{n:02}"),
+            kind: "fn",
+            detail: String::new(),
+            filter: format!("m{n:02}"),
+            text: format!("m{n:02}"),
+            edit: None,
+        });
+        let doc = app.tabs.active().id;
+        app.completion = Some(Completion::new(doc, 0, 0, items.collect()));
+        let hov = app.theme.hov;
+        let t0 = Moment::now();
+        app.clock = Some(t0);
+        shown(&mut app)?;
+        let card = app
+            .list_card(Place::Completion, app.screen)
+            .expect("the popup is open");
+        let (first, last) = (card.y + 1, card.bottom() - 2);
+        assert_eq!(app.pill, Some((Place::Completion, first)));
+        // Down to the tenth row, and the glide there over.
+        for _ in 0..9 {
+            at(&mut app, t0, key("down"));
+        }
+        let t1 = t0 + ms(200);
+        at(&mut app, t1, AppEvent::Tick);
+        shown(&mut app)?;
+        assert_eq!(app.pill, Some((Place::Completion, last)));
+        assert!(!app.moving());
+
+        // Down again: the eleventh match is selected, on the row the pill is
+        // on already. From first frame to last the pill is there and nowhere
+        // else, over the rows as they end up.
+        let text = |frame: &ratatui::buffer::Buffer, y: u16| -> String {
+            (card.x..card.right())
+                .map(|x| frame[(x, y)].symbol())
+                .collect()
+        };
+        at(&mut app, t1, key("down"));
+        app.still = true;
+        let end = frame_of(&app)?;
+        app.still = false;
+        assert!(text(&end, first).contains("fn m02"));
+        assert!(text(&end, last).contains("fn m11"));
+        for elapsed in [0, 30, 45, 60, 90] {
+            app.clock = Some(t1 + ms(elapsed));
+            let frame = frame_of(&app)?;
+            assert_eq!(kit::marked_row(&frame, card), Some(last), "{elapsed} ms");
+            assert_eq!(frame, end, "{elapsed} ms");
+        }
+        at(&mut app, t1 + ms(90), AppEvent::Tick);
+        assert_eq!(app.glide, None);
+        assert!(!app.moving());
+        shown(&mut app)?;
+        assert_eq!(app.pill, Some((Place::Completion, last)));
+
+        // The pointer lights the row it is on, with the match scrolled onto
+        // it, and that row alone beside the selected one.
+        let over = first + 2;
+        app.pointer = Some((card.x + 6, over));
+        assert_eq!(
+            app.hovered(app.screen),
+            Some(Hovered::Row(Place::Completion, over))
+        );
+        let lit = frame_of(&app)?;
+        assert!(text(&lit, over).contains("fn m04"));
+        for y in first..=last {
+            let filled = lit[(card.x + 6, y)].bg == hov;
+            assert_eq!(filled, y == over || y == last, "{y}");
+        }
+        assert_eq!(kit::marked_row(&lit, card), Some(last));
+        // And still that row once the rows have moved again under it.
+        at(&mut app, t1 + ms(90), key("down"));
+        app.clock = Some(t1 + ms(300));
+        let lit = frame_of(&app)?;
+        assert!(text(&lit, over).contains("fn m05"));
+        for y in first..=last {
+            let filled = lit[(card.x + 6, y)].bg == hov;
+            assert_eq!(filled, y == over || y == last, "{y}");
+        }
+        Ok(())
+    }
+
+    #[test]
     fn a_selection_that_moves_again_glides_on_from_where_the_pill_is() -> Result<()> {
         let (_dir, mut app) = nine_files()?;
         let t0 = Moment::now();
