@@ -1,7 +1,7 @@
 # Intent: Tinkery Aurora
 
 Type: change
-Author: Cody · Status: accepted
+Author: Cody · Status: superseded by [Tinkery Forge](../tinkery-forge/intent.md)
 Date: 2026-10-07 · Plan: [Phase 7](../../PLANNING.md#7--tinkery-wears-the-aurora-look)
 
 ## Problem
