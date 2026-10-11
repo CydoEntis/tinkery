@@ -12,7 +12,7 @@ use crate::buffer::Buffer;
 use crate::buffer::movement::{char_col_at, char_width, display_col};
 use crate::highlight::Role;
 use crate::lsp::{Diagnostic, Severity};
-use crate::theme::{Theme, grad, mix};
+use crate::theme::{Theme, mix};
 use crate::ui::tree::cut;
 
 pub use undercurl::UndercurlBackend;
@@ -30,7 +30,7 @@ pub struct Marks<'a> {
     /// severity's colour, with a mark in the gutter.
     pub diagnostics: &'a [Diagnostic],
     /// The 0-based line the debugged program is paused on, when it's in this
-    /// buffer: `▶` in the mark cell and a glow in `accent2` (tinkery-debugger
+    /// buffer: `▶` in the mark cell and a fill toward `accent2` (tinkery-debugger
     /// spec D5).
     pub paused: Option<usize>,
 }
@@ -166,36 +166,17 @@ fn text_width(buf: &Buffer, area: Rect) -> usize {
     usize::from(area.width).saturating_sub(gutter_width(buf))
 }
 
-/// The bg of the cell `dx` cells into a cursor row `width` cells wide (README
-/// §2.4): it lights up out of the gutter and settles into `cur_line` around the
-/// middle, so the eye finds the row without a bright band across the screen.
-fn glow_at(theme: &Theme, dx: u16, width: u16) -> Color {
-    glow_in(theme, theme.accent, dx, width)
-}
-
-/// The paused line's glow: the cursor row's, lit by `accent2` instead, so the
-/// line the program stopped on reads apart from the cursor.
-fn paused_glow_at(theme: &Theme, dx: u16, width: u16) -> Color {
-    glow_in(theme, theme.accent2, dx, width)
-}
-
-fn glow_in(theme: &Theme, light: Color, dx: u16, width: u16) -> Color {
-    let stops = [
-        mix(theme.bg, light, 0.20),
-        mix(theme.bg, light, 0.07),
-        theme.cur_line,
-        theme.cur_line,
-    ];
-    grad(&stops, f64::from(dx) / (f64::from(width) * 0.8))
-}
+/// How far the paused line's fill is mixed from `bg` toward `accent2` (Tinkery
+/// Forge F13): enough to read apart from the cursor line, not a bright band.
+const PAUSED_MIX: f64 = 0.12;
 
 /// Draws `buf` into `area`: a gutter of diagnostic mark and right-aligned line
 /// number, then each line cut at the right edge (Tinkery never wraps), and puts the
 /// terminal cursor on the buffer cursor when it's in view. In the `focused` split
-/// the cursor row glows and its number is lit. Diagnostics are underlined in their
-/// colour and mark the gutter with the most severe one on the line; the selection
-/// and every highlight get the selection colours on top. Pure: reads its inputs
-/// only.
+/// the cursor row is filled with `cur_line` and its number is lit. Diagnostics are
+/// underlined in their colour and mark the gutter with the most severe one on the
+/// line; the selection and every highlight get the selection colours on top. Pure:
+/// reads its inputs only.
 #[allow(clippy::too_many_arguments)]
 pub fn render_buffer(
     theme: &Theme,
@@ -226,7 +207,7 @@ pub fn render_buffer(
     };
     // `mono`'s terminal colours can't be blended, so it marks the row by the
     // number's weight alone.
-    let glow = focused && !theme.flat();
+    let fills = !theme.flat();
     let (cursor_line, _) = buf.cursor_line_col();
     let selection = buf.selection();
     let syntax = visible_spans(buf, view, area);
@@ -240,19 +221,22 @@ pub fn render_buffer(
         let y = area.y + screen_row as u16;
         let is_cursor_line = line_idx == cursor_line;
         let is_paused_line = paused == Some(line_idx);
-        // The paused line glows in every split, focused or not: it's where the
-        // program is, wherever the typing is.
-        let row_glow: Option<fn(&Theme, u16, u16) -> Color> = if is_paused_line && !theme.flat() {
-            Some(paused_glow_at)
-        } else if is_cursor_line && glow {
-            Some(glow_at)
+        // The paused line is filled in every split, focused or not: it's where
+        // the program is, wherever the typing is. Both fills are flat, so the
+        // row reads as one band rather than a light at the gutter.
+        let row_bg = if !fills {
+            None
+        } else if is_paused_line {
+            Some(mix(theme.bg, theme.accent2, PAUSED_MIX))
+        } else if is_cursor_line && focused {
+            Some(theme.cur_line)
         } else {
             None
         };
-        if let Some(glow_at) = row_glow {
+        if let Some(bg) = row_bg {
             for dx in 0..area.width {
                 if let Some(cell) = out.cell_mut((area.x + dx, y)) {
-                    cell.set_bg(glow_at(theme, dx, area.width));
+                    cell.set_bg(bg);
                 }
             }
         }
@@ -866,7 +850,7 @@ mod tests {
         assert_eq!(view.scroll_row, 8);
     }
 
-    /// Draws `buf` 30 cells wide with `marks`, unfocused so no glow sits behind.
+    /// Draws `buf` 30 cells wide with `marks`, unfocused so no fill sits behind.
     fn draw_marked(theme: &Theme, buf: &Buffer, marks: Marks) -> Result<ratatui::buffer::Buffer> {
         let mut terminal = Terminal::new(TestBackend::new(30, 2))?;
         terminal.draw(|frame| {
@@ -1075,18 +1059,13 @@ mod tests {
     }
 
     #[test]
-    fn focused_cursor_row_glows_out_of_the_gutter() -> Result<()> {
+    fn focused_cursor_row_is_flat_cur_line() -> Result<()> {
         let theme = Theme::named("aurora").expect("aurora exists");
         let screen = draw_cursor_row(&theme, true)?;
-        // The ramp starts a fifth of the way to `accent` in the mark cell...
-        assert_eq!(screen[(0, 1)].bg, mix(theme.bg, theme.accent, 0.20));
-        // ...and has settled into `cur_line` two thirds of the way along the
-        // ramp, which spans 80 % of the width.
-        assert_eq!(screen[(22, 1)].bg, theme.cur_line);
-        assert_eq!(screen[(39, 1)].bg, theme.cur_line);
-        // In between it is still brighter than `cur_line`.
-        assert_eq!(screen[(8, 1)].bg, glow_at(&theme, 8, 40));
-        assert_ne!(screen[(8, 1)].bg, theme.cur_line);
+        // One colour from the mark cell to the right edge: no ramp.
+        for x in 0..40 {
+            assert_eq!(screen[(x, 1)].bg, theme.cur_line, "column {x}");
+        }
         // Other rows keep the ground.
         assert_eq!(screen[(0, 0)].bg, Color::Reset);
         // The cursor line's number is `accent` bold; the others `gutter`.
@@ -1098,7 +1077,7 @@ mod tests {
     }
 
     #[test]
-    fn unfocused_split_has_no_glow() -> Result<()> {
+    fn unfocused_split_has_no_fill() -> Result<()> {
         let theme = Theme::named("aurora").expect("aurora exists");
         let screen = draw_cursor_row(&theme, false)?;
         assert_eq!(screen[(0, 1)].bg, Color::Reset);
@@ -1325,18 +1304,21 @@ three",
     }
 
     #[test]
-    fn the_paused_line_is_marked_and_glows_in_accent2() -> Result<()> {
+    fn the_paused_line_is_marked_and_flat_toward_accent2() -> Result<()> {
         let theme = Theme::named("aurora").expect("aurora exists");
         let screen = draw_paused(&theme)?;
         // `▶` takes the mark cell from the breakpoint it stopped at.
         assert_eq!(screen[(0, 1)].symbol(), "▶");
         assert_eq!(screen[(0, 1)].fg, theme.accent2);
-        // The row glows out of the gutter in `accent2`, though the split isn't
-        // focused, and settles into `cur_line` as the cursor row does.
-        assert_eq!(screen[(0, 1)].bg, mix(theme.bg, theme.accent2, 0.20));
-        assert_eq!(screen[(8, 1)].bg, paused_glow_at(&theme, 8, 40));
-        assert_ne!(screen[(8, 1)].bg, glow_at(&theme, 8, 40));
-        assert_eq!(screen[(39, 1)].bg, theme.cur_line);
+        // The row is one flat fill toward `accent2`, though the split isn't
+        // focused, and reads apart from the cursor row's `cur_line`.
+        let fill = mix(theme.bg, theme.accent2, 0.12);
+        for x in 0..40 {
+            assert_eq!(screen[(x, 1)].bg, fill, "column {x}");
+        }
+        assert_ne!(fill, theme.cur_line);
+        // The cursor row of this unfocused split has no fill.
+        assert_eq!(screen[(0, 0)].bg, Color::Reset);
         // The other rows keep the ground.
         assert_eq!(screen[(8, 0)].bg, Color::Reset);
         assert_eq!(screen[(8, 2)].bg, Color::Reset);
@@ -1344,7 +1326,7 @@ three",
     }
 
     #[test]
-    fn mono_marks_the_paused_line_without_a_glow() -> Result<()> {
+    fn mono_marks_the_paused_line_without_a_fill() -> Result<()> {
         let theme = Theme::named("mono").expect("mono exists");
         let screen = draw_paused(&theme)?;
         assert_eq!(screen[(0, 1)].symbol(), "▶");

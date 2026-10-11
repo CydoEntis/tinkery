@@ -160,28 +160,6 @@ const AURORA: &str = "theme = \"aurora\"\n";
 /// The first editor row, below the tab header.
 const TOP: u16 = 3;
 
-/// `a` moved `t` of the way to `b`, per channel, rounded, as the editor mixes.
-fn mix(a: Color, b: Color, t: f64) -> Color {
-    let (Color::Rgb(r1, g1, b1), Color::Rgb(r2, g2, b2)) = (a, b) else {
-        panic!("can't mix {a:?} and {b:?}");
-    };
-    let m = |p: u8, q: u8| (f64::from(p) + (f64::from(q) - f64::from(p)) * t).round() as u8;
-    Color::Rgb(m(r1, r2), m(g1, g2), m(b1, b2))
-}
-
-/// The cursor row's bg `dx` cells into an editor `width` wide (README §2.4).
-fn glow(dx: u16, width: u16) -> Color {
-    let stops = [
-        mix(AURORA_BG, AURORA_ACCENT, 0.20),
-        mix(AURORA_BG, AURORA_ACCENT, 0.07),
-        AURORA_CUR_LINE,
-        AURORA_CUR_LINE,
-    ];
-    let pos = (f64::from(dx) / (f64::from(width) * 0.8)).clamp(0.0, 1.0) * 3.0;
-    let i = (pos.floor() as usize).min(2);
-    mix(stops[i], stops[i + 1], pos - i as f64)
-}
-
 #[test]
 fn gutter_is_a_mark_cell_a_three_cell_number_and_two_blanks() {
     let mut tinkery = Tinkery::spawn(&[FIXTURE]);
@@ -200,16 +178,15 @@ fn gutter_is_a_mark_cell_a_three_cell_number_and_two_blanks() {
 }
 
 #[test]
-fn the_focused_cursor_row_glows_and_lights_its_number() {
+fn the_focused_cursor_row_is_flat_and_lights_its_number() {
     let mut tinkery = Tinkery::spawn_with_config(AURORA, &[FIXTURE]);
     tinkery.wait_for_text("fn main() {", START);
 
-    // Bright out of the gutter, fading into `cur_line` across the row.
-    tinkery.wait_for_bg(0, TOP, mix(AURORA_BG, AURORA_ACCENT, 0.20), START);
-    assert_eq!(tinkery.bg_at(3, TOP), glow(3, COLS));
-    assert_eq!(tinkery.bg_at(COLS / 2, TOP), glow(COLS / 2, COLS));
-    assert_ne!(tinkery.bg_at(COLS / 2, TOP), AURORA_CUR_LINE);
-    assert_eq!(tinkery.bg_at(COLS - 1, TOP), AURORA_CUR_LINE);
+    // `cur_line` from the mark cell to the right edge: a flat fill, no ramp.
+    tinkery.wait_for_bg(0, TOP, AURORA_CUR_LINE, START);
+    for x in 0..COLS {
+        assert_eq!(tinkery.bg_at(x, TOP), AURORA_CUR_LINE, "column {x}");
+    }
     // Other rows stay on the ground.
     assert_eq!(tinkery.bg_at(0, TOP + 1), AURORA_BG);
     assert_eq!(tinkery.bg_at(COLS / 2, TOP + 1), AURORA_BG);
@@ -219,9 +196,10 @@ fn the_focused_cursor_row_glows_and_lights_its_number() {
     assert_eq!(tinkery.fg_at(3, TOP + 1), AURORA_GUTTER);
     assert!(!tinkery.bold_at(3, TOP + 1));
 
-    // The glow follows the cursor.
+    // The fill follows the cursor.
     tinkery.send_keys("down");
-    tinkery.wait_for_bg(0, TOP + 1, glow(0, COLS), WAIT);
+    tinkery.wait_for_bg(0, TOP + 1, AURORA_CUR_LINE, WAIT);
+    assert_eq!(tinkery.bg_at(COLS - 1, TOP + 1), AURORA_CUR_LINE);
     assert_eq!(tinkery.bg_at(0, TOP), AURORA_BG);
     assert_eq!(tinkery.fg_at(3, TOP + 1), AURORA_ACCENT);
 
@@ -229,15 +207,18 @@ fn the_focused_cursor_row_glows_and_lights_its_number() {
 }
 
 #[test]
-fn an_unfocused_split_has_no_glow_and_a_text_number() {
+fn an_unfocused_split_has_no_fill_and_a_text_number() {
     let mut tinkery = Tinkery::spawn_with_config(AURORA, &[FIXTURE]);
     tinkery.wait_for_text("fn main() {", START);
     // Two splits: 0..50, the divider, then the new, focused one at 51..100.
     tinkery.send_keys("alt+v");
     let right = 51;
-    tinkery.wait_for_bg(right, TOP, glow(0, COLS - right), WAIT);
-    assert_eq!(tinkery.bg_at(right + 25, TOP), glow(25, COLS - right));
-    assert_eq!(tinkery.fg_at(right + 3, TOP), AURORA_ACCENT);
+    // The flat fill at `right` was there before the split too, so the lit
+    // number is what says the split has been drawn.
+    tinkery.wait_for_fg_at(right + 3, TOP, AURORA_ACCENT, WAIT);
+    assert_eq!(tinkery.bg_at(right, TOP), AURORA_CUR_LINE);
+    assert_eq!(tinkery.bg_at(right + 25, TOP), AURORA_CUR_LINE);
+    assert_eq!(tinkery.bg_at(COLS - 1, TOP), AURORA_CUR_LINE);
     assert!(tinkery.bold_at(right + 3, TOP));
 
     // The left split shows the same cursor row unlit.
@@ -267,7 +248,7 @@ fn comments_are_italic() {
 }
 
 #[test]
-fn mono_has_no_glow_but_a_bold_number() {
+fn mono_has_no_fill_but_a_bold_number() {
     let mut tinkery = Tinkery::spawn_with_config("theme = \"mono\"\n", &[FIXTURE]);
     tinkery.wait_for_text("fn main() {", START);
 
