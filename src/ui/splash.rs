@@ -13,19 +13,79 @@ use crate::theme::{Theme, grad, mix};
 use crate::ui::glow_row;
 use crate::ui::tree::{cut, cut_front};
 
-/// The wordmark: `tome` drawn in half-block pixels, two pixel rows per text
-/// row: the `t`'s top above the x-height, then three rows of letter bodies.
-/// `tome` has no descenders, so there's no row below them. Every row has
-/// `WORD_W` characters.
-const WORDMARK: [&str; 4] = [
-    concat!(" ▄ ", "  ", "     ", "  ", "     ", "  ", "     "),
-    concat!("▀█▀", "  ", "▄▀▀▀▄", "  ", "█▀▄▀▄", "  ", "▄▀▀▀▄"),
-    concat!(" █ ", "  ", "█   █", "  ", "█ █ █", "  ", "█▀▀▀▀"),
-    concat!(" █▄", "  ", "▀▄▄▄▀", "  ", "█ █ █", "  ", "▀▄▄▄▄"),
+/// The wordmark: `tinkery` drawn in half-block pixels, two pixel rows per text
+/// row: the `t`'s top, the `i`'s dot and the `k`'s stem above the x-height,
+/// three rows of letter bodies, then a row for the `y`'s descender. Letters
+/// are 5 cells wide, bar the 3-cell `t` and the 1-cell `i`, with 2 cells
+/// between them. Every row has `WORD_W` characters.
+const WORDMARK: [&str; 5] = [
+    concat!(
+        " ▄ ", "  ", "▀", "  ", "     ", "  ", "█    ", "  ", "     ", "  ", "     ", "  ", "     "
+    ),
+    concat!(
+        "▀█▀",
+        "  ",
+        "█",
+        "  ",
+        "█▀▀▀▄",
+        "  ",
+        "█  ▄▀",
+        "  ",
+        "▄▀▀▀▄",
+        "  ",
+        "█▄▀▀▄",
+        "  ",
+        "█   █"
+    ),
+    concat!(
+        " █ ",
+        "  ",
+        "█",
+        "  ",
+        "█   █",
+        "  ",
+        "█▀▀▄ ",
+        "  ",
+        "█▀▀▀▀",
+        "  ",
+        "█    ",
+        "  ",
+        "█   █"
+    ),
+    concat!(
+        " █▄",
+        "  ",
+        "█",
+        "  ",
+        "█   █",
+        "  ",
+        "█   █",
+        "  ",
+        "▀▄▄▄▄",
+        "  ",
+        "█    ",
+        "  ",
+        "▀▄▄▄█"
+    ),
+    concat!(
+        "   ",
+        "  ",
+        " ",
+        "  ",
+        "     ",
+        "  ",
+        "     ",
+        "  ",
+        "     ",
+        "  ",
+        "     ",
+        "  ",
+        "▄▄▄▄▀"
+    ),
 ];
 
 /// The wordmark's width in cells.
-const WORD_W: u16 = 24;
+const WORD_W: u16 = 41;
 
 /// The least width the big wordmark is drawn in: it and a cell of glow on
 /// either side.
@@ -97,7 +157,7 @@ impl Item {
 /// What one row of the splash holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Line {
-    /// One of the wordmark's four rows.
+    /// One of the wordmark's five rows.
     Word(usize),
     /// `✦ tinkery` on one row, for when the wordmark doesn't fit.
     Brand,
@@ -132,6 +192,7 @@ const FULL: &[Line] = &[
     Word(1),
     Word(2),
     Word(3),
+    Word(4),
     Rule,
     Blank,
     Path,
@@ -513,14 +574,14 @@ mod tests {
         (0..3).map(|i| (a[i] - b[i]).powi(2)).sum::<f64>().sqrt()
     }
 
-    // In 100 × 26 the 13-row splash starts on row 6: the wordmark on rows 6–9,
-    // the rule on 10, the path on 12 and the actions on 14, 16 and 18.
+    // In 100 × 26 the 14-row splash starts on row 6: the wordmark on rows 6–10,
+    // the rule on 11, the path on 13 and the actions on 15, 17 and 19.
     const TOP: u16 = 6;
-    const RULE_Y: u16 = 10;
-    const PATH_Y: u16 = 12;
-    const ITEM_YS: [u16; 3] = [14, 16, 18];
-    /// The wordmark is centred: (100 − 24) / 2.
-    const WORD_X: u16 = 38;
+    const RULE_Y: u16 = 11;
+    const PATH_Y: u16 = 13;
+    const ITEM_YS: [u16; 3] = [15, 17, 19];
+    /// The wordmark is centred: (100 − 41) / 2.
+    const WORD_X: u16 = 29;
     /// The action rows are centred too: (100 − 56) / 2.
     const ROW_X: u16 = 22;
 
@@ -570,9 +631,10 @@ mod tests {
     fn the_glow_leans_toward_accent2_and_fades_with_distance() -> anyhow::Result<()> {
         let theme = Theme::default();
         let buf = draw(&Splash::default(), &theme, 100, 26)?;
-        // Between the `m`'s stems, near the centre: blended, toward accent2.
-        let near = buf[(WORD_X + 15, TOP + 2)].bg;
-        let mid = buf[(WORD_X - 8, TOP + 2)].bg;
+        // Between the `k` and the `e`, at the centre: blended, toward accent2.
+        let near = buf[(WORD_X + 20, TOP + 2)].bg;
+        // Left of the `t`, about as far out as the rule's fade.
+        let mid = buf[(WORD_X - 4, TOP + 2)].bg;
         let far = buf[(2, TOP + 2)].bg;
         assert_ne!(near, theme.bg);
         assert!(distance(near, theme.accent2) < distance(theme.bg, theme.accent2));
@@ -693,12 +755,15 @@ mod tests {
         let theme = Theme::default();
         let splash = Splash::default();
 
-        // Thirteen rows hold the whole splash, the four-row wordmark with it.
-        let shown = rows(&draw(&splash, &theme, 100, 13)?);
-        assert_eq!(&shown[..4], &WORDMARK.map(str::trim), "{shown:?}");
+        // Fourteen rows hold the whole splash, the five-row wordmark with it,
+        // and so does the least width the action rows' hints fit in.
+        for (w, h) in [(100, 14), (ROW_W, 14)] {
+            let shown = rows(&draw(&splash, &theme, w, h)?);
+            assert_eq!(&shown[..5], &WORDMARK.map(str::trim), "{shown:?}");
+        }
 
         // Too short for the wordmark: `✦ tinkery`, the path, rows with hints.
-        let shown = rows(&draw(&splash, &theme, 100, 12)?);
+        let shown = rows(&draw(&splash, &theme, 100, 13)?);
         assert_eq!(shown[0], "✦ tinkery");
         assert_eq!(shown[1], "~/src");
         assert!(shown[2].contains("in ~/src"), "{shown:?}");
@@ -730,8 +795,8 @@ mod tests {
         let theme = Theme::default();
         for (w, h) in [
             (100, 26),
+            (100, 14),
             (100, 13),
-            (100, 12),
             (50, 13),
             (100, 8),
             (100, 4),
@@ -754,7 +819,7 @@ mod tests {
             }
             // The brand row isn't an action.
             let brand =
-                (0..h).find(|&y| row(&buf, y).contains("tome") || row(&buf, y).contains('▀'));
+                (0..h).find(|&y| row(&buf, y).contains("tinkery") || row(&buf, y).contains('▀'));
             if let Some(y) = brand {
                 assert_eq!(Splash::item_at(area, Position::new(w / 2, y)), None);
             }
