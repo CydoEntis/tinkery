@@ -30,6 +30,7 @@ use crate::ui::prompt::PromptBar;
 /// a rounded `line2` border around `raised` (design README §5.3). They don't dim
 /// the screen, so unlike dialogs (`dialog_card`) they need the border to stand
 /// apart from the text around them.
+#[expect(dead_code, reason = "removed by #228")]
 pub fn card_block(theme: &Theme) -> Block<'static> {
     Block::bordered()
         .border_type(BorderType::Rounded)
