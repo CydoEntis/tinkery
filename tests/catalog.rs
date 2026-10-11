@@ -8,7 +8,7 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
-use harness::{ROWS, Tinkery};
+use harness::{HYDRA, ROWS, Tinkery};
 use tempfile::TempDir;
 use vt100::Color;
 
@@ -245,7 +245,7 @@ fn shell(command: &str) -> String {
 /// missing server is called `nope` so the messages naming it fit the 100-cell
 /// status line beside the cursor position.
 fn rust_install(command: &str, install: &str) -> String {
-    format!("[lsp.rust]\ncommand = '''{command}'''\ninstall = '''{install}'''\n")
+    format!("{HYDRA}[lsp.rust]\ncommand = '''{command}'''\ninstall = '''{install}'''\n")
 }
 
 /// Tinkery on an empty project with `config`, the PATH it inherits, and its
@@ -831,7 +831,7 @@ fn starts(files: &Path) -> usize {
 fn a_failed_server_says_why_and_enter_retries_it() {
     let project = tempfile::tempdir().expect("create project");
     let files = tempfile::tempdir().expect("create server dir");
-    let mut tinkery = with_failing_rust(project.path(), files.path(), "");
+    let mut tinkery = with_failing_rust(project.path(), files.path(), HYDRA);
     open_catalog(&mut tinkery);
     tinkery.wait_for_screen("Rust failed", WAIT, |screen| {
         screen[usize::from(FIRST_ROW)].contains("failed")
@@ -887,7 +887,7 @@ fn a_failed_server_says_why_and_enter_retries_it() {
 fn retrying_with_no_file_open_waits_for_one_and_stops_saying_failed() {
     let project = tempfile::tempdir().expect("create project");
     let files = tempfile::tempdir().expect("create server dir");
-    let mut tinkery = with_failing_rust(project.path(), files.path(), "");
+    let mut tinkery = with_failing_rust(project.path(), files.path(), HYDRA);
     tinkery.send_keys("ctrl+w");
     tinkery.wait_for_screen("a.rs closed", WAIT, |screen| !screen[1].contains("a.rs"));
     open_catalog(&mut tinkery);

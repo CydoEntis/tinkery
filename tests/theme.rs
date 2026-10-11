@@ -11,8 +11,10 @@ const STATUS_ROW: u16 = ROWS - 1;
 
 /// nord's `sidebar_bg`.
 const NORD_SIDEBAR: Color = Color::Rgb(0x27, 0x2c, 0x36);
-/// hydra's `sidebar_bg` (`surf`).
-const HYDRA_SIDEBAR: Color = Color::Rgb(0x0c, 0x13, 0x1b);
+/// tinkery's `surface`, the status line's ground.
+const TINKERY_SURFACE: Color = Color::Rgb(0x17, 0x14, 0x13);
+/// tinkery's `bg`, the editor ground.
+const TINKERY_BG: Color = Color::Rgb(0x11, 0x0f, 0x0e);
 /// nord's `bg`, the editor ground.
 const NORD_BG: Color = Color::Rgb(0x2e, 0x34, 0x40);
 
@@ -50,24 +52,34 @@ fn an_override_changes_the_colour() {
     tinkery.wait_for_bg(50, 10, NORD_BG, WAIT);
 }
 
+/// `""` is the harness's way to ask for the real default, which `spawn` isn't.
 #[test]
-fn an_unknown_theme_falls_back_to_hydra_and_says_so() {
-    let tinkery = Tinkery::spawn_with_config("theme = \"solarized\"\n", &[]);
-    tinkery.wait_for_text("theme: unknown theme \"solarized\", using hydra", START);
-    assert_status_bg(&tinkery, HYDRA_SIDEBAR);
+fn an_empty_config_starts_in_tinkery() {
+    let mut tinkery = Tinkery::spawn_with_config("", &[]);
+    tinkery.wait_for_text("Open directory", START);
+    assert_status_bg(&tinkery, TINKERY_SURFACE);
+    tinkery.send_keys("ctrl+n");
+    tinkery.wait_for_bg(50, 10, TINKERY_BG, WAIT);
 }
 
 #[test]
-fn a_bad_override_falls_back_to_hydra_and_says_so() {
+fn an_unknown_theme_falls_back_to_tinkery_and_says_so() {
+    let tinkery = Tinkery::spawn_with_config("theme = \"solarized\"\n", &[]);
+    tinkery.wait_for_text("theme: unknown theme \"solarized\", using tinkery", START);
+    assert_status_bg(&tinkery, TINKERY_SURFACE);
+}
+
+#[test]
+fn a_bad_override_falls_back_to_tinkery_and_says_so() {
     let tinkery = Tinkery::spawn_with_config(
         "theme = \"nord\"\n[theme_overrides]\nkeyword = \"blurple\"\n",
         &[],
     );
     tinkery.wait_for_text(
-        "theme: bad colour \"blurple\" for keyword, using hydra",
+        "theme: bad colour \"blurple\" for keyword, using tinkery",
         START,
     );
-    assert_status_bg(&tinkery, HYDRA_SIDEBAR);
+    assert_status_bg(&tinkery, TINKERY_SURFACE);
     let screen = tinkery.screen();
     assert_eq!(
         screen[usize::from(STATUS_ROW)].matches("theme:").count(),

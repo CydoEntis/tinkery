@@ -209,7 +209,7 @@ impl Syntax {
 
 impl Default for Theme {
     fn default() -> Self {
-        Theme::hydra()
+        Theme::tinkery()
     }
 }
 
@@ -372,19 +372,7 @@ impl Theme {
     /// The theme called `name`, if there is one.
     pub fn named(name: &str) -> Option<Theme> {
         let theme = match name {
-            "tinkery" => Theme::forge(
-                [
-                    "#110f0e", "#0a0908", "#171413", "#1f1b19", "#292320", "#40362f", "#251f1c",
-                    "#7d7067", "#b5a89d", "#dcd2c7", "#f8f0e6", "#ff8a3d", "#ffd27a", "#1f0d02",
-                    "#ff5d4d", "#f2c14e", "#8fc7a2", "#8fb4d6", "#a8483c", "#a08544", "#5f7d99",
-                    "#3b2514", "#1a1614", "#4d423b", "#000000",
-                ],
-                ["#3a302a", "#332a25"],
-                syntax([
-                    "#ff8a3d", "#e6c98a", "#6e625a", "#f8ead6", "#8fb4d6", "#ffb86b", "#ffb86b",
-                    "#9c8e83", "#776a60", "#dcd2c7", "#c7b6a5", "#ff8a3d", "#9c8e83",
-                ]),
-            ),
+            "tinkery" => Theme::tinkery(),
             "tinkery-light" => Theme::forge(
                 [
                     "#f5f0e9", "#e8e0d5", "#ede6dc", "#e4dcd0", "#d9cfc2", "#c0b3a3", "#ddd4c7",
@@ -523,7 +511,24 @@ impl Theme {
         Some(theme)
     }
 
-    /// The default: Hydra's own palette.
+    /// The default: Tinkery's own dark palette.
+    fn tinkery() -> Theme {
+        Theme::forge(
+            [
+                "#110f0e", "#0a0908", "#171413", "#1f1b19", "#292320", "#40362f", "#251f1c",
+                "#7d7067", "#b5a89d", "#dcd2c7", "#f8f0e6", "#ff8a3d", "#ffd27a", "#1f0d02",
+                "#ff5d4d", "#f2c14e", "#8fc7a2", "#8fb4d6", "#a8483c", "#a08544", "#5f7d99",
+                "#3b2514", "#1a1614", "#4d423b", "#000000",
+            ],
+            ["#3a302a", "#332a25"],
+            syntax([
+                "#ff8a3d", "#e6c98a", "#6e625a", "#f8ead6", "#8fb4d6", "#ffb86b", "#ffb86b",
+                "#9c8e83", "#776a60", "#dcd2c7", "#c7b6a5", "#ff8a3d", "#9c8e83",
+            ]),
+        )
+    }
+
+    /// Hydra's own palette, the default before `tinkery`.
     fn hydra() -> Theme {
         Theme::design(
             [
@@ -887,7 +892,7 @@ impl Theme {
 }
 
 /// The theme `config.toml` asks for. An unknown name or a bad override gives plain
-/// `hydra` instead, with one message for the status line, so a typo is visible
+/// `tinkery` instead, with one message for the status line, so a typo is visible
 /// rather than half-applied.
 pub fn load(
     name: Option<&str>,
@@ -895,7 +900,7 @@ pub fn load(
 ) -> (Theme, Option<String>) {
     match resolve(name, overrides) {
         Ok(theme) => (theme, None),
-        Err(err) => (Theme::hydra(), Some(format!("{err}, using hydra"))),
+        Err(err) => (Theme::tinkery(), Some(format!("{err}, using tinkery"))),
     }
 }
 
@@ -905,7 +910,7 @@ pub fn resolve(
     name: Option<&str>,
     overrides: &BTreeMap<String, toml::Value>,
 ) -> Result<Theme, String> {
-    let name = name.unwrap_or("hydra");
+    let name = name.unwrap_or("tinkery");
     let mut theme = Theme::named(name).ok_or_else(|| format!("theme: unknown theme \"{name}\""))?;
     theme
         .apply(overrides)
@@ -1071,12 +1076,12 @@ mod tests {
     }
 
     #[test]
-    fn signature_themes_load_and_hydra_stays_the_default() {
+    fn signature_themes_load_and_tinkery_is_the_default() {
         assert!(Theme::named("aurora").is_some());
         assert!(Theme::named("moonlit").is_some());
         assert_eq!(
             Theme::default(),
-            Theme::named("hydra").expect("hydra exists")
+            Theme::named("tinkery").expect("tinkery exists")
         );
         let (theme, message) = load(None, &BTreeMap::new());
         assert_eq!(message, None);
@@ -1374,41 +1379,41 @@ mod tests {
     }
 
     #[test]
-    fn unknown_theme_falls_back_to_hydra_with_one_message() {
+    fn unknown_theme_falls_back_to_tinkery_with_one_message() {
         let (theme, message) = load(Some("solarized"), &BTreeMap::new());
         assert_eq!(theme, Theme::default());
         assert_eq!(
             message.as_deref(),
-            Some("theme: unknown theme \"solarized\", using hydra")
+            Some("theme: unknown theme \"solarized\", using tinkery")
         );
     }
 
     #[test]
-    fn bad_values_fall_back_to_hydra_with_one_message() {
+    fn bad_values_fall_back_to_tinkery_with_one_message() {
         for (toml, expected) in [
             (
                 r##"bg = "#12345""##,
-                r##"theme: bad colour "#12345" for bg, using hydra"##,
+                r##"theme: bad colour "#12345" for bg, using tinkery"##,
             ),
             (
                 r#"bg = "blurple""#,
-                r#"theme: bad colour "blurple" for bg, using hydra"#,
+                r#"theme: bad colour "blurple" for bg, using tinkery"#,
             ),
             (
                 "keyword = 256",
-                "theme: bad colour 256 for keyword, using hydra",
+                "theme: bad colour 256 for keyword, using tinkery",
             ),
             (
                 "keyword = -1",
-                "theme: bad colour -1 for keyword, using hydra",
+                "theme: bad colour -1 for keyword, using tinkery",
             ),
             (
                 "keyword = true",
-                "theme: bad colour true for keyword, using hydra",
+                "theme: bad colour true for keyword, using tinkery",
             ),
             (
                 r#"backgrnd = "red""#,
-                "theme: unknown colour backgrnd, using hydra",
+                "theme: unknown colour backgrnd, using tinkery",
             ),
         ] {
             let (theme, message) = load(Some("nord"), &overrides(&format!("{toml}\nfg = \"red\"")));

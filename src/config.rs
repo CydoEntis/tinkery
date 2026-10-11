@@ -16,7 +16,7 @@ use crate::theme::{self, Theme};
 #[derive(Debug, Default, Clone, Deserialize)]
 #[serde(default)]
 pub struct Config {
-    /// One of `theme::NAMES`; `None` means hydra. Checked by `theme::load`.
+    /// One of `theme::NAMES`; `None` means tinkery. Checked by `theme::load`.
     pub theme: Option<String>,
     /// Role name to colour. Values stay raw TOML so a bad one is reported by
     /// `theme::load` and costs only the theme, not the whole config.
@@ -236,7 +236,7 @@ pub const TEMPLATE: &str = r#"# Tinkery's settings. Remove the `#` in front of a
 # One of tinkery, tinkery-light, aurora, moonlit, hydra, papercolor-dark,
 # tango-dark, monokai, tokyo-night, catppuccin-mocha, catppuccin-latte, gruvbox,
 # nord, dracula, mono.
-# theme = "hydra"
+# theme = "tinkery"
 
 [editor]
 # tab_width = 4
@@ -435,7 +435,7 @@ mod tests {
         let (settings, message) = Settings::startup(parse("theme = \"nope\"\n"));
         assert_eq!(
             message.as_deref(),
-            Some("theme: unknown theme \"nope\", using hydra")
+            Some("theme: unknown theme \"nope\", using tinkery")
         );
         assert_eq!(settings.theme, Theme::default());
     }
@@ -502,7 +502,7 @@ save =",
             loaded.error
         );
         assert_eq!(loaded.config.editor, EditorConfig::default());
-        assert_eq!(loaded.config.theme.as_deref(), Some("hydra"));
+        assert_eq!(loaded.config.theme.as_deref(), Some("tinkery"));
         assert!(crate::keymap::Keymap::new(&loaded.config.keys).is_ok());
         for name in ["tab_width", "insert_spaces", "auto_pairs"] {
             assert!(TEMPLATE.contains(&format!("# {name} = ")), "{name}");

@@ -8,7 +8,7 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
-use harness::{ROWS, Tinkery};
+use harness::{HYDRA, ROWS, Tinkery};
 use vt100::Color;
 
 const START: Duration = Duration::from_secs(10);
@@ -107,7 +107,7 @@ fn erase(tinkery: &mut Tinkery, n: usize) {
 
 #[test]
 fn keybindings_in_the_cast_lists_every_command_with_its_keys_and_name() {
-    let mut tinkery = tinkery_with("");
+    let mut tinkery = tinkery_with(HYDRA);
     open_card(&mut tinkery);
 
     // The lit edge across the card, then `✦ keybindings` and a rule.
@@ -146,7 +146,7 @@ fn keybindings_in_the_cast_lists_every_command_with_its_keys_and_name() {
 
 #[test]
 fn scope_only_commands_come_under_a_muted_heading() {
-    let mut tinkery = tinkery_with("");
+    let mut tinkery = tinkery_with(HYDRA);
     open_card(&mut tinkery);
     filter(&mut tinkery, "tree", "Toggle file tree");
 
@@ -183,7 +183,7 @@ fn scope_only_commands_come_under_a_muted_heading() {
 
 #[test]
 fn typing_filters_on_title_key_or_config_name() {
-    let mut tinkery = tinkery_with("");
+    let mut tinkery = tinkery_with(HYDRA);
     open_card(&mut tinkery);
     // The header holds what's typed.
     filter(&mut tinkery, "save as", "Save as…");
@@ -204,7 +204,7 @@ fn typing_filters_on_title_key_or_config_name() {
 
 #[test]
 fn arrows_move_the_selection_and_esc_or_a_click_outside_close() {
-    let mut tinkery = tinkery_with("");
+    let mut tinkery = tinkery_with(HYDRA);
     open_card(&mut tinkery);
     let lit = mix(RAISED, ACCENT, 0.3);
 
@@ -243,7 +243,7 @@ fn arrows_move_the_selection_and_esc_or_a_click_outside_close() {
 
 #[test]
 fn a_paste_goes_into_the_filter() {
-    let mut tinkery = tinkery_with("");
+    let mut tinkery = tinkery_with(HYDRA);
     open_card(&mut tinkery);
     // A bracketed paste with a line break, which the filter leaves out.
     tinkery.write(b"\x1b[200~toggle tree\r\x1b[201~");
