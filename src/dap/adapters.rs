@@ -1,6 +1,6 @@
 //! Which debug adapter each language uses and how its program is launched: the
 //! spec's defaults, with `config.toml` `[debug.<lang>]` laid over the adapter and
-//! `.tome.toml` `[debug]` laid over the launch.
+//! `.tinkery.toml` `[debug]` laid over the launch.
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
@@ -417,7 +417,7 @@ mod tests {
 
     #[test]
     fn an_adapter_found_nowhere_starts_by_its_bare_name() {
-        let name = "tome-test-no-such-adapter";
+        let name = "tinkery-test-no-such-adapter";
         assert_eq!(program(name), PathBuf::from(name));
     }
 

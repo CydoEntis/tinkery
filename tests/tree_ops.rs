@@ -8,7 +8,7 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
-use harness::{COLS, ROWS, Tome};
+use harness::{COLS, ROWS, Tinkery};
 use vt100::Color;
 
 const START: Duration = Duration::from_secs(10);
@@ -47,18 +47,18 @@ fn copy_dir(from: &Path, to: &Path) {
     }
 }
 
-/// A temp copy of `tests/fixtures/project` with tome open on it, cwd inside it
+/// A temp copy of `tests/fixtures/project` with tinkery open on it, cwd inside it
 /// so paths stay short.
-fn open_copy() -> (tempfile::TempDir, Tome) {
+fn open_copy() -> (tempfile::TempDir, Tinkery) {
     let dir = tempfile::tempdir().expect("create temp dir");
     copy_dir(Path::new("tests/fixtures/project"), dir.path());
-    let mut tome = Tome::spawn_in(dir.path(), &["."]);
-    tome.wait_for_text("Open directory", START);
+    let mut tinkery = Tinkery::spawn_in(dir.path(), &["."]);
+    tinkery.wait_for_text("Open directory", START);
     // The splash has the keys at launch and hides the tree; these tests work
     // in the tree.
-    tome.send_keys("ctrl+e");
-    wait_for_tree(&tome, TOP);
-    (dir, tome)
+    tinkery.send_keys("ctrl+e");
+    wait_for_tree(&tinkery, TOP);
+    (dir, tinkery)
 }
 
 /// The tree pane's node rows from the first one down to the first empty one.
@@ -77,8 +77,8 @@ fn tree_rows(screen: &[String]) -> Vec<String> {
         .collect()
 }
 
-fn wait_for_tree(tome: &Tome, expected: &[&str]) {
-    tome.wait_for_screen(&format!("tree rows {expected:?}"), WAIT, |screen| {
+fn wait_for_tree(tinkery: &Tinkery, expected: &[&str]) {
+    tinkery.wait_for_screen(&format!("tree rows {expected:?}"), WAIT, |screen| {
         tree_rows(screen) == expected
     });
 }
@@ -86,19 +86,19 @@ fn wait_for_tree(tome: &Tome, expected: &[&str]) {
 /// Waits for `row` to read `text` and glow across the pane, as the focused
 /// selection and the open file do: hydra's `mix(surface, accent, .26)` at column
 /// 0 fading to `surface` at 27.
-fn wait_for_selected(tome: &Tome, row: u16, text: &str) {
-    tome.wait_for_screen(&format!("tree row {row} {text:?}"), WAIT, |screen| {
+fn wait_for_selected(tinkery: &Tinkery, row: u16, text: &str) {
+    tinkery.wait_for_screen(&format!("tree row {row} {text:?}"), WAIT, |screen| {
         let line: String = screen[usize::from(row)].chars().take(TREE).collect();
         line.trim_end() == text
     });
-    tome.wait_for_bg(0, row, Color::Rgb(0x3c, 0x4e, 0x24), WAIT);
-    tome.wait_for_bg(27, row, Color::Rgb(0x0d, 0x14, 0x1b), WAIT);
+    tinkery.wait_for_bg(0, row, Color::Rgb(0x3c, 0x4e, 0x24), WAIT);
+    tinkery.wait_for_bg(27, row, Color::Rgb(0x0d, 0x14, 0x1b), WAIT);
 }
 
 /// Waits for the prompt bar to read ` Label  value` with what Enter and Esc do
 /// right-aligned so it ends at W-2, then checks its colours: all on `raised`,
 /// the label in `text`, the hint in `muted`.
-fn wait_for_bar(tome: &Tome, label: &str, value: &str) {
+fn wait_for_bar(tinkery: &Tinkery, label: &str, value: &str) {
     let hint = if label == "Rename" {
         "⏎ rename   esc cancel"
     } else {
@@ -107,39 +107,42 @@ fn wait_for_bar(tome: &Tome, label: &str, value: &str) {
     let hint_x = COLS - u16::try_from(hint.chars().count()).expect("short hint") - 1;
     let field = format!(" {label}  {value}");
     let expected = format!("{field:<width$}{hint}", width = usize::from(hint_x));
-    tome.wait_for_screen(&format!("prompt bar {expected:?}"), WAIT, |screen| {
+    tinkery.wait_for_screen(&format!("prompt bar {expected:?}"), WAIT, |screen| {
         screen[BAR] == expected
     });
     let row = BAR as u16;
-    assert_eq!(tome.bg_text(row, RAISED).chars().count(), usize::from(COLS));
-    assert_eq!(tome.fg_at(1, row), BAR_TEXT);
-    assert_eq!(tome.fg_at(hint_x, row), MUTED);
-    assert_eq!(tome.fg_at(COLS - 2, row), MUTED);
+    assert_eq!(
+        tinkery.bg_text(row, RAISED).chars().count(),
+        usize::from(COLS)
+    );
+    assert_eq!(tinkery.fg_at(1, row), BAR_TEXT);
+    assert_eq!(tinkery.fg_at(hint_x, row), MUTED);
+    assert_eq!(tinkery.fg_at(COLS - 2, row), MUTED);
 }
 
-fn wait_for_status(tome: &Tome, text: &str) {
-    tome.wait_for_screen(&format!("status with {text:?}"), WAIT, |screen| {
+fn wait_for_status(tinkery: &Tinkery, text: &str) {
+    tinkery.wait_for_screen(&format!("status with {text:?}"), WAIT, |screen| {
         screen[STATUS].contains(text)
     });
 }
 
 #[test]
 fn a_creates_a_file_beside_the_selected_file_and_opens_it() {
-    let (dir, mut tome) = open_copy();
+    let (dir, mut tinkery) = open_copy();
     for _ in 0..4 {
-        tome.send_keys("down");
+        tinkery.send_keys("down");
     }
-    wait_for_selected(&tome, 7, "    README.md");
+    wait_for_selected(&tinkery, 7, "    README.md");
 
-    tome.send_keys("a");
-    wait_for_bar(&tome, "New file", "");
-    tome.wait_for_cursor(11, BAR as u16, WAIT);
-    tome.type_text("notes.md");
-    wait_for_bar(&tome, "New file", "notes.md");
-    tome.send_keys("enter");
+    tinkery.send_keys("a");
+    wait_for_bar(&tinkery, "New file", "");
+    tinkery.wait_for_cursor(11, BAR as u16, WAIT);
+    tinkery.type_text("notes.md");
+    wait_for_bar(&tinkery, "New file", "notes.md");
+    tinkery.send_keys("enter");
 
     wait_for_tree(
-        &tome,
+        &tinkery,
         &[
             "  ▸ docs",
             "  ▸ src",
@@ -149,15 +152,15 @@ fn a_creates_a_file_beside_the_selected_file_and_opens_it() {
             "    README.md",
         ],
     );
-    wait_for_selected(&tome, 6, "    notes.md");
+    wait_for_selected(&tinkery, 6, "    notes.md");
     // The bar is gone and the editor shows the new, empty file.
-    tome.wait_for_screen("the bar closed", WAIT, |screen| {
+    tinkery.wait_for_screen("the bar closed", WAIT, |screen| {
         !screen[BAR].contains("New file")
     });
     // The message holds the path slot until the next key.
-    wait_for_status(&tome, "✓ created notes.md");
-    wait_for_status(&tome, "Ln 1, Col 1");
-    let screen = tome.screen();
+    wait_for_status(&tinkery, "✓ created notes.md");
+    wait_for_status(&tinkery, "Ln 1, Col 1");
+    let screen = tinkery.screen();
     let editor: String = screen[3].chars().skip(TREE + 1).collect();
     assert_eq!(editor.trim_end(), "   1", "{screen:#?}");
     assert_eq!(
@@ -166,25 +169,25 @@ fn a_creates_a_file_beside_the_selected_file_and_opens_it() {
     );
 
     // Typing goes into the new file.
-    tome.type_text("hi");
-    tome.send_keys("ctrl+s");
-    tome.wait_for_files("notes.md saved", WAIT, || {
+    tinkery.type_text("hi");
+    tinkery.send_keys("ctrl+s");
+    tinkery.wait_for_files("notes.md saved", WAIT, || {
         fs::read_to_string(dir.path().join("notes.md")).is_ok_and(|text| text == "hi")
     });
 }
 
 #[test]
 fn a_and_shift_a_create_inside_the_selected_folder() {
-    let (dir, mut tome) = open_copy();
-    wait_for_selected(&tome, 3, "  ▸ docs");
+    let (dir, mut tinkery) = open_copy();
+    wait_for_selected(&tinkery, 3, "  ▸ docs");
 
-    tome.send_keys("a");
-    wait_for_bar(&tome, "New file", "");
-    tome.type_text("new.md");
-    tome.send_keys("enter");
+    tinkery.send_keys("a");
+    wait_for_bar(&tinkery, "New file", "");
+    tinkery.type_text("new.md");
+    tinkery.send_keys("enter");
     // The folder opens to show the new file, which is selected.
     wait_for_tree(
-        &tome,
+        &tinkery,
         &[
             "  ▾ docs",
             "   │  guide.md",
@@ -195,17 +198,17 @@ fn a_and_shift_a_create_inside_the_selected_folder() {
             "    README.md",
         ],
     );
-    wait_for_selected(&tome, 5, "   │  new.md");
+    wait_for_selected(&tinkery, 5, "   │  new.md");
     assert!(dir.path().join("docs").join("new.md").is_file());
 
     // Back in the tree, Shift+A makes a folder next to the selected file.
-    tome.send_keys("ctrl+e");
-    tome.send_keys("shift+a");
-    wait_for_bar(&tome, "New folder", "");
-    tome.type_text("drafts");
-    tome.send_keys("enter");
+    tinkery.send_keys("ctrl+e");
+    tinkery.send_keys("shift+a");
+    wait_for_bar(&tinkery, "New folder", "");
+    tinkery.type_text("drafts");
+    tinkery.send_keys("enter");
     wait_for_tree(
-        &tome,
+        &tinkery,
         &[
             "  ▾ docs",
             "   │▸ drafts",
@@ -217,31 +220,31 @@ fn a_and_shift_a_create_inside_the_selected_folder() {
             "    README.md",
         ],
     );
-    wait_for_selected(&tome, 4, "   │▸ drafts");
+    wait_for_selected(&tinkery, 4, "   │▸ drafts");
     assert!(dir.path().join("docs").join("drafts").is_dir());
 }
 
 #[test]
 fn r_renames_and_the_open_buffer_follows() {
-    let (dir, mut tome) = open_copy();
+    let (dir, mut tinkery) = open_copy();
     for _ in 0..3 {
-        tome.send_keys("down");
+        tinkery.send_keys("down");
     }
-    tome.send_keys("enter");
-    tome.wait_for_text("notes for the tree test", WAIT);
+    tinkery.send_keys("enter");
+    tinkery.wait_for_text("notes for the tree test", WAIT);
 
-    tome.send_keys("ctrl+e");
-    tome.send_keys("r");
-    wait_for_bar(&tome, "Rename", "notes.txt");
+    tinkery.send_keys("ctrl+e");
+    tinkery.send_keys("r");
+    wait_for_bar(&tinkery, "Rename", "notes.txt");
     for _ in 0..3 {
-        tome.send_keys("backspace");
+        tinkery.send_keys("backspace");
     }
-    tome.type_text("md");
-    wait_for_bar(&tome, "Rename", "notes.md");
-    tome.send_keys("enter");
+    tinkery.type_text("md");
+    wait_for_bar(&tinkery, "Rename", "notes.md");
+    tinkery.send_keys("enter");
 
     wait_for_tree(
-        &tome,
+        &tinkery,
         &[
             "  ▸ docs",
             "  ▸ src",
@@ -250,15 +253,15 @@ fn r_renames_and_the_open_buffer_follows() {
             "    README.md",
         ],
     );
-    wait_for_selected(&tome, 6, "    notes.md");
-    wait_for_status(&tome, "renamed to notes.md");
+    wait_for_selected(&tinkery, 6, "    notes.md");
+    wait_for_status(&tinkery, "renamed to notes.md");
     assert!(!dir.path().join("notes.txt").exists());
 
     // The buffer now belongs to notes.md: saving writes there.
-    tome.send_keys("ctrl+e");
-    tome.type_text("x");
-    tome.send_keys("ctrl+s");
-    tome.wait_for_files("notes.md saved", WAIT, || {
+    tinkery.send_keys("ctrl+e");
+    tinkery.type_text("x");
+    tinkery.send_keys("ctrl+s");
+    tinkery.wait_for_files("notes.md saved", WAIT, || {
         fs::read_to_string(dir.path().join("notes.md"))
             .is_ok_and(|text| text.starts_with("xnotes for the tree test"))
     });
@@ -267,42 +270,42 @@ fn r_renames_and_the_open_buffer_follows() {
 
 #[test]
 fn an_existing_or_invalid_name_changes_nothing() {
-    let (dir, mut tome) = open_copy();
+    let (dir, mut tinkery) = open_copy();
     let notes = fs::read(dir.path().join("notes.txt")).expect("read notes");
     for _ in 0..4 {
-        tome.send_keys("down");
+        tinkery.send_keys("down");
     }
-    wait_for_selected(&tome, 7, "    README.md");
+    wait_for_selected(&tinkery, 7, "    README.md");
 
-    tome.send_keys("a");
-    wait_for_bar(&tome, "New file", "");
-    tome.type_text("notes.txt");
-    tome.send_keys("enter");
-    wait_for_status(&tome, "notes.txt already exists");
-    wait_for_tree(&tome, TOP);
-    wait_for_selected(&tome, 7, "    README.md");
+    tinkery.send_keys("a");
+    wait_for_bar(&tinkery, "New file", "");
+    tinkery.type_text("notes.txt");
+    tinkery.send_keys("enter");
+    wait_for_status(&tinkery, "notes.txt already exists");
+    wait_for_tree(&tinkery, TOP);
+    wait_for_selected(&tinkery, 7, "    README.md");
     assert_eq!(
         fs::read(dir.path().join("notes.txt")).expect("read notes"),
         notes
     );
 
-    tome.send_keys("a");
-    wait_for_bar(&tome, "New file", "");
-    tome.type_text("bad/name");
-    tome.send_keys("enter");
-    wait_for_status(&tome, "invalid name");
-    wait_for_tree(&tome, TOP);
+    tinkery.send_keys("a");
+    wait_for_bar(&tinkery, "New file", "");
+    tinkery.type_text("bad/name");
+    tinkery.send_keys("enter");
+    wait_for_status(&tinkery, "invalid name");
+    wait_for_tree(&tinkery, TOP);
 
     // Renaming onto another entry is refused too.
-    tome.send_keys("r");
-    wait_for_bar(&tome, "Rename", "README.md");
+    tinkery.send_keys("r");
+    wait_for_bar(&tinkery, "Rename", "README.md");
     for _ in 0.."README.md".len() {
-        tome.send_keys("backspace");
+        tinkery.send_keys("backspace");
     }
-    tome.type_text("notes.txt");
-    tome.send_keys("enter");
-    wait_for_status(&tome, "notes.txt already exists");
-    wait_for_tree(&tome, TOP);
+    tinkery.type_text("notes.txt");
+    tinkery.send_keys("enter");
+    wait_for_status(&tinkery, "notes.txt already exists");
+    wait_for_tree(&tinkery, TOP);
     assert_eq!(
         fs::read(dir.path().join("notes.txt")).expect("read notes"),
         notes
@@ -310,11 +313,11 @@ fn an_existing_or_invalid_name_changes_nothing() {
     assert!(dir.path().join("README.md").exists());
 
     // Esc closes the bar without doing anything.
-    tome.send_keys("a");
-    wait_for_bar(&tome, "New file", "");
-    tome.type_text("never.md");
-    tome.send_keys("esc");
-    tome.wait_for_screen("the bar closed", WAIT, |screen| {
+    tinkery.send_keys("a");
+    wait_for_bar(&tinkery, "New file", "");
+    tinkery.type_text("never.md");
+    tinkery.send_keys("esc");
+    tinkery.wait_for_screen("the bar closed", WAIT, |screen| {
         !screen[BAR].contains("New file")
     });
     assert!(!dir.path().join("never.md").exists());

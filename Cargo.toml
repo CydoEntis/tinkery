@@ -1,11 +1,11 @@
 [package]
-name = "tome"
+name = "tinkery"
 version = "0.1.0"
 edition = "2024"
 description = "A non-modal TUI text editor"
 
 [[bin]]
-name = "tome"
+name = "tk"
 path = "src/main.rs"
 
 [dependencies]

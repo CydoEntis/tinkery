@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use harness::{ROWS, Tome};
+use harness::{ROWS, Tinkery};
 use tempfile::TempDir;
 
 const START: Duration = Duration::from_secs(10);
@@ -35,10 +35,10 @@ impl Setup {
         Self { files, data }
     }
 
-    fn launch(&self) -> Tome {
-        let tome = Tome::spawn_in_with_data(self.files.path(), self.data.path(), &["a.txt"]);
-        tome.wait_for_text("a.txt", START);
-        tome
+    fn launch(&self) -> Tinkery {
+        let tinkery = Tinkery::spawn_in_with_data(self.files.path(), self.data.path(), &["a.txt"]);
+        tinkery.wait_for_text("a.txt", START);
+        tinkery
     }
 
     fn backups(&self) -> PathBuf {
@@ -65,19 +65,19 @@ fn backup_files(dir: &Path) -> Vec<PathBuf> {
     }
 }
 
-fn status_line(tome: &Tome) -> String {
-    tome.screen()[usize::from(ROWS - 1)].clone()
+fn status_line(tinkery: &Tinkery) -> String {
+    tinkery.screen()[usize::from(ROWS - 1)].clone()
 }
 
-/// Edits `a.txt`, waits for its backup to land, then kills tome without
+/// Edits `a.txt`, waits for its backup to land, then kills tinkery without
 /// letting it clean up.
 fn edit_and_crash(setup: &Setup) {
-    let mut tome = setup.launch();
-    tome.wait_for_text("Ln 1, Col 1", START);
-    tome.type_text("xy");
-    tome.wait_for_text("xyhello", WAIT);
+    let mut tinkery = setup.launch();
+    tinkery.wait_for_text("Ln 1, Col 1", START);
+    tinkery.type_text("xy");
+    tinkery.wait_for_text("xyhello", WAIT);
     let typed = Instant::now();
-    tome.wait_for_files("a backup file", WAIT, || {
+    tinkery.wait_for_files("a backup file", WAIT, || {
         setup
             .backup_files()
             .iter()
@@ -98,14 +98,14 @@ fn edit_and_crash(setup: &Setup) {
         name.len() == 20 && name[..16].chars().all(|c| c.is_ascii_hexdigit()),
         "{name}"
     );
-    tome.kill();
+    tinkery.kill();
     assert_eq!(setup.read_a(), "hello\n", "nothing was saved");
 }
 
 /// Waits for the recover card and checks its copy, with the backup's time, and
 /// buttons sit where §7.4 puts them.
-fn wait_for_card(setup: &Setup, tome: &Tome) {
-    tome.wait_for_text(QUESTION, START);
+fn wait_for_card(setup: &Setup, tinkery: &Tinkery) {
+    tinkery.wait_for_text(QUESTION, START);
     let backups = setup.backup_files();
     let written = fs::metadata(&backups[0])
         .and_then(|m| m.modified())
@@ -114,29 +114,29 @@ fn wait_for_card(setup: &Setup, tome: &Tome) {
         "A backup from {} is newer than the file on disk.",
         chrono::DateTime::<chrono::Local>::from(written).format("%H:%M")
     );
-    let screen = tome.screen();
+    let screen = tinkery.screen();
     assert_eq!(
-        tome.text_col(CARD_Y, &"▀".repeat(59)),
+        tinkery.text_col(CARD_Y, &"▀".repeat(59)),
         Some(CARD_X),
         "{screen:#?}"
     );
     assert_eq!(
-        tome.text_col(CARD_Y + 1, QUESTION),
+        tinkery.text_col(CARD_Y + 1, QUESTION),
         Some(TEXT_X),
         "{screen:#?}"
     );
     assert_eq!(
-        tome.text_col(CARD_Y + 2, &explanation),
+        tinkery.text_col(CARD_Y + 2, &explanation),
         Some(TEXT_X),
         "{screen:#?}"
     );
     assert_eq!(
-        tome.text_col(BUTTON_ROW, "Recover    Discard"),
+        tinkery.text_col(BUTTON_ROW, "Recover    Discard"),
         Some(TEXT_X + 1),
         "{screen:#?}"
     );
-    assert_eq!(tome.bg_at(TEXT_X, BUTTON_ROW), ACCENT);
-    assert_eq!(tome.underlined_text(BUTTON_ROW), "RD");
+    assert_eq!(tinkery.bg_at(TEXT_X, BUTTON_ROW), ACCENT);
+    assert_eq!(tinkery.underlined_text(BUTTON_ROW), "RD");
 }
 
 #[test]
@@ -144,22 +144,22 @@ fn recover_after_a_crash_loads_the_backup() {
     let setup = Setup::new("hello\n");
     edit_and_crash(&setup);
 
-    let mut tome = setup.launch();
-    wait_for_card(&setup, &tome);
-    tome.type_text("r");
-    tome.wait_for_text_gone(QUESTION, WAIT);
-    tome.wait_for_text("xyhello", WAIT);
-    tome.wait_for_text("a.txt •", WAIT);
-    assert!(status_line(&tome).contains("a.txt •"));
+    let mut tinkery = setup.launch();
+    wait_for_card(&setup, &tinkery);
+    tinkery.type_text("r");
+    tinkery.wait_for_text_gone(QUESTION, WAIT);
+    tinkery.wait_for_text("xyhello", WAIT);
+    tinkery.wait_for_text("a.txt •", WAIT);
+    assert!(status_line(&tinkery).contains("a.txt •"));
     // The backup stays until the recovered text is saved.
     assert_eq!(setup.backup_files().len(), 1);
 
-    tome.send_keys("ctrl+s");
-    tome.wait_for_text("saved a.txt", WAIT);
+    tinkery.send_keys("ctrl+s");
+    tinkery.wait_for_text("saved a.txt", WAIT);
     assert_eq!(setup.read_a(), "xyhello\n");
-    tome.wait_for_files("the backup to go", WAIT, || setup.backup_files().is_empty());
-    tome.send_keys("ctrl+q");
-    assert!(tome.wait_exit(WAIT).success());
+    tinkery.wait_for_files("the backup to go", WAIT, || setup.backup_files().is_empty());
+    tinkery.send_keys("ctrl+q");
+    assert!(tinkery.wait_exit(WAIT).success());
 }
 
 #[test]
@@ -167,39 +167,39 @@ fn discard_after_a_crash_deletes_the_backup() {
     let setup = Setup::new("hello\n");
     edit_and_crash(&setup);
 
-    let mut tome = setup.launch();
-    wait_for_card(&setup, &tome);
-    tome.type_text("d");
-    tome.wait_for_text_gone(QUESTION, WAIT);
-    tome.wait_for_text("hello", WAIT);
-    let status = status_line(&tome);
+    let mut tinkery = setup.launch();
+    wait_for_card(&setup, &tinkery);
+    tinkery.type_text("d");
+    tinkery.wait_for_text_gone(QUESTION, WAIT);
+    tinkery.wait_for_text("hello", WAIT);
+    let status = status_line(&tinkery);
     assert!(!status.contains('●'), "dirty after discard: {status:?}");
-    assert!(!tome.screen().iter().any(|l| l.contains("xyhello")));
-    tome.wait_for_files("the backup to go", WAIT, || setup.backup_files().is_empty());
+    assert!(!tinkery.screen().iter().any(|l| l.contains("xyhello")));
+    tinkery.wait_for_files("the backup to go", WAIT, || setup.backup_files().is_empty());
 
     // Nothing is offered the next time.
-    tome.send_keys("ctrl+q");
-    assert!(tome.wait_exit(WAIT).success());
-    let mut tome = setup.launch();
-    tome.wait_for_text("Ln 1, Col 1", START);
-    tome.assert_running_for(Duration::from_millis(300));
-    assert!(!tome.screen().iter().any(|l| l.contains(QUESTION)));
-    tome.send_keys("ctrl+q");
-    assert!(tome.wait_exit(WAIT).success());
+    tinkery.send_keys("ctrl+q");
+    assert!(tinkery.wait_exit(WAIT).success());
+    let mut tinkery = setup.launch();
+    tinkery.wait_for_text("Ln 1, Col 1", START);
+    tinkery.assert_running_for(Duration::from_millis(300));
+    assert!(!tinkery.screen().iter().any(|l| l.contains(QUESTION)));
+    tinkery.send_keys("ctrl+q");
+    assert!(tinkery.wait_exit(WAIT).success());
 }
 
 #[test]
 fn quitting_cleanly_deletes_the_backup() {
     let setup = Setup::new("hello\n");
-    let mut tome = setup.launch();
-    tome.wait_for_text("Ln 1, Col 1", START);
-    tome.type_text("x");
-    tome.wait_for_text("a.txt •", WAIT);
-    tome.wait_for_files("a backup file", WAIT, || !setup.backup_files().is_empty());
-    tome.send_keys("ctrl+q");
-    tome.wait_for_text("has unsaved changes", WAIT);
-    tome.type_text("d");
-    assert!(tome.wait_exit(WAIT).success());
+    let mut tinkery = setup.launch();
+    tinkery.wait_for_text("Ln 1, Col 1", START);
+    tinkery.type_text("x");
+    tinkery.wait_for_text("a.txt •", WAIT);
+    tinkery.wait_for_files("a backup file", WAIT, || !setup.backup_files().is_empty());
+    tinkery.send_keys("ctrl+q");
+    tinkery.wait_for_text("has unsaved changes", WAIT);
+    tinkery.type_text("d");
+    assert!(tinkery.wait_exit(WAIT).success());
     assert!(setup.backup_files().is_empty());
     assert_eq!(setup.read_a(), "hello\n");
 }
@@ -210,20 +210,20 @@ fn enter_recovers_and_a_click_on_discard_discards() {
     edit_and_crash(&setup);
 
     // Recover is the default: Enter presses it.
-    let mut tome = setup.launch();
-    wait_for_card(&setup, &tome);
-    tome.send_keys("enter");
-    tome.wait_for_text_gone(QUESTION, WAIT);
-    tome.wait_for_text("xyhello", WAIT);
-    tome.kill();
+    let mut tinkery = setup.launch();
+    wait_for_card(&setup, &tinkery);
+    tinkery.send_keys("enter");
+    tinkery.wait_for_text_gone(QUESTION, WAIT);
+    tinkery.wait_for_text("xyhello", WAIT);
+    tinkery.kill();
 
     // The backup is still there, so it's offered again; a click discards it.
-    let mut tome = setup.launch();
-    wait_for_card(&setup, &tome);
-    tome.click(DISCARD_X + 2, BUTTON_ROW);
-    tome.wait_for_text_gone(QUESTION, WAIT);
-    tome.wait_for_files("the backup to go", WAIT, || setup.backup_files().is_empty());
-    assert!(!tome.screen().iter().any(|l| l.contains("xyhello")));
-    tome.send_keys("ctrl+q");
-    assert!(tome.wait_exit(WAIT).success());
+    let mut tinkery = setup.launch();
+    wait_for_card(&setup, &tinkery);
+    tinkery.click(DISCARD_X + 2, BUTTON_ROW);
+    tinkery.wait_for_text_gone(QUESTION, WAIT);
+    tinkery.wait_for_files("the backup to go", WAIT, || setup.backup_files().is_empty());
+    assert!(!tinkery.screen().iter().any(|l| l.contains("xyhello")));
+    tinkery.send_keys("ctrl+q");
+    assert!(tinkery.wait_exit(WAIT).success());
 }

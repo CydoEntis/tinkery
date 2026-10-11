@@ -4,5 +4,5 @@ command = "colors"
 
 [[run]]
 name = "hello"
-command = "echo hello from tome"
+command = "echo hello from tinkery"
 cwd = "."

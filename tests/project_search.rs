@@ -3,7 +3,7 @@ mod harness;
 use std::path::Path;
 use std::time::Duration;
 
-use harness::{ROWS, Tome};
+use harness::{ROWS, Tinkery};
 use vt100::Color;
 
 const START: Duration = Duration::from_secs(10);
@@ -61,30 +61,30 @@ fn hit_row((place, text): (&str, &str)) -> String {
     format!("{place:<PLACE_WIDTH$}  {text}")
 }
 
-/// Tome in `dir` with no file open, so the root is that folder.
-fn open_in(dir: &Path) -> Tome {
-    let tome = Tome::spawn_in(dir, &[]);
-    tome.wait_for_text("Open directory", START);
-    tome
+/// Tinkery in `dir` with no file open, so the root is that folder.
+fn open_in(dir: &Path) -> Tinkery {
+    let tinkery = Tinkery::spawn_in(dir, &[]);
+    tinkery.wait_for_text("Open directory", START);
+    tinkery
 }
 
 /// Opens the panel, types `query` and presses Enter.
-fn search(tome: &mut Tome, query: &str) {
-    tome.send_keys("alt+f");
-    tome.wait_for_text(FOOTER, WAIT);
-    tome.type_text(query);
-    tome.wait_for_text(&format!("Search   {query}"), WAIT);
-    tome.send_keys("enter");
+fn search(tinkery: &mut Tinkery, query: &str) {
+    tinkery.send_keys("alt+f");
+    tinkery.wait_for_text(FOOTER, WAIT);
+    tinkery.type_text(query);
+    tinkery.wait_for_text(&format!("Search   {query}"), WAIT);
+    tinkery.send_keys("enter");
 }
 
-fn row(tome: &Tome, row: u16) -> String {
-    tome.screen()[usize::from(row)].clone()
+fn row(tinkery: &Tinkery, row: u16) -> String {
+    tinkery.screen()[usize::from(row)].clone()
 }
 
 /// Waits for the row under the fields to say exactly `status`, e.g.
 /// `3 matches in 2 files`, and not `searching… 3 matches in 2 files`.
-fn wait_for_status(tome: &Tome, status: &str) {
-    tome.wait_for_screen(&format!("the panel to say {status:?}"), WAIT, |lines| {
+fn wait_for_status(tinkery: &Tinkery, status: &str) {
+    tinkery.wait_for_screen(&format!("the panel to say {status:?}"), WAIT, |lines| {
         let shown: String = lines[usize::from(STATUS_ROW)]
             .chars()
             .skip(usize::from(CARD_X) + 2)
@@ -94,191 +94,204 @@ fn wait_for_status(tome: &Tome, status: &str) {
 }
 
 /// The chips on the Search field that are on: `acc_ink` on the accent.
-fn chips_on(tome: &Tome) -> String {
-    tome.bg_text(QUERY_ROW, ACCENT).replace(' ', "")
+fn chips_on(tinkery: &Tinkery) -> String {
+    tinkery.bg_text(QUERY_ROW, ACCENT).replace(' ', "")
 }
 
 /// Waits for `hit` to be the selected row `y`: the glow row.
-fn wait_for_selected(tome: &Tome, y: u16, hit: (&str, &str)) {
-    tome.wait_for_bg(CARD_X, y, glow(), WAIT);
-    assert_eq!(tome.text_col(y, &hit_row(hit)), Some(LIST_X), "{hit:?}");
+fn wait_for_selected(tinkery: &Tinkery, y: u16, hit: (&str, &str)) {
+    tinkery.wait_for_bg(CARD_X, y, glow(), WAIT);
+    assert_eq!(tinkery.text_col(y, &hit_row(hit)), Some(LIST_X), "{hit:?}");
 }
 
 /// Waits for the status line to show `Ln <line>, Col <col>` (see `shows_position`).
-fn wait_for_position(tome: &Tome, line: usize, col: usize) {
+fn wait_for_position(tinkery: &Tinkery, line: usize, col: usize) {
     let position = format!("Ln {line}, Col {col}");
-    tome.wait_for_screen(&position, WAIT, |lines| {
+    tinkery.wait_for_screen(&position, WAIT, |lines| {
         harness::shows_position(&lines[usize::from(ROWS - 1)], &position)
     });
 }
 
 #[test]
 fn alt_f_lists_hits_as_path_line_text_respecting_gitignore_and_skipping_binaries() {
-    let mut tome = open_in(Path::new(PROJECT));
-    search(&mut tome, "TODO");
-    wait_for_status(&tome, "3 matches in 2 files");
-    assert_eq!(tome.text_col(QUERY_ROW, "Search   TODO"), Some(LABEL_X));
-    assert!(row(&tome, QUERY_ROW).contains(" Aa   .*"));
+    let mut tinkery = open_in(Path::new(PROJECT));
+    search(&mut tinkery, "TODO");
+    wait_for_status(&tinkery, "3 matches in 2 files");
+    assert_eq!(tinkery.text_col(QUERY_ROW, "Search   TODO"), Some(LABEL_X));
+    assert!(row(&tinkery, QUERY_ROW).contains(" Aa   .*"));
     // Sorted by path, then line, the text lined up after the widest place.
     for (i, hit) in [LIB_TODO, LIB_FN, MAIN_TODO].into_iter().enumerate() {
         let y = FIRST_ROW + u16::try_from(i).unwrap();
-        assert_eq!(tome.text_col(y, &hit_row(hit)), Some(LIST_X), "{hit:?}");
+        assert_eq!(tinkery.text_col(y, &hit_row(hit)), Some(LIST_X), "{hit:?}");
     }
-    let screen = tome.screen().join("\n");
+    let screen = tinkery.screen().join("\n");
     assert!(!screen.contains("ignored.log"), "{screen}");
     assert!(!screen.contains("data.bin"), "{screen}");
     // The first hit starts selected; the others show their match on
     // `find_match_bg`.
-    wait_for_selected(&tome, FIRST_ROW, LIB_TODO);
+    wait_for_selected(&tinkery, FIRST_ROW, LIB_TODO);
     let match_bg = mix(BG, WARN, 0.3);
-    assert_eq!(tome.bg_text(FIRST_ROW + 1, match_bg), "todo");
-    assert_eq!(tome.bg_text(FIRST_ROW + 2, match_bg), "TODO");
+    assert_eq!(tinkery.bg_text(FIRST_ROW + 1, match_bg), "todo");
+    assert_eq!(tinkery.bg_text(FIRST_ROW + 2, match_bg), "TODO");
     // The cursor stays in the query.
-    tome.wait_for_cursor(VALUE_X + "TODO".len() as u16, QUERY_ROW, WAIT);
+    tinkery.wait_for_cursor(VALUE_X + "TODO".len() as u16, QUERY_ROW, WAIT);
 }
 
 #[test]
 fn the_panel_is_a_lit_card_over_a_dimmed_screen() {
-    let mut tome = Tome::spawn_in(Path::new(PROJECT), &["src/lib.rs"]);
-    tome.wait_for_text("Fixture library", START);
+    let mut tinkery = Tinkery::spawn_in(Path::new(PROJECT), &["src/lib.rs"]);
+    tinkery.wait_for_text("Fixture library", START);
     let y = (0..ROWS)
-        .find(|&y| row(&tome, y).contains("Fixture library"))
+        .find(|&y| row(&tinkery, y).contains("Fixture library"))
         .unwrap();
     // Above the card, so it's only dimmed.
     assert!(y < CARD_Y, "the editor's first line is on row {y}");
-    let x = tome.text_col(y, "Fixture").unwrap();
-    let (fg, bg) = (tome.fg_at(x, y), tome.bg_at(x, y));
-    search(&mut tome, "TODO");
-    wait_for_status(&tome, "3 matches in 2 files");
-    tome.wait_for_fg_at(x, y, mix(fg, SCRIM, 0.6), WAIT);
-    tome.wait_for_bg(x, y, mix(bg, SCRIM, 0.6), WAIT);
+    let x = tinkery.text_col(y, "Fixture").unwrap();
+    let (fg, bg) = (tinkery.fg_at(x, y), tinkery.bg_at(x, y));
+    search(&mut tinkery, "TODO");
+    wait_for_status(&tinkery, "3 matches in 2 files");
+    tinkery.wait_for_fg_at(x, y, mix(fg, SCRIM, 0.6), WAIT);
+    tinkery.wait_for_bg(x, y, mix(bg, SCRIM, 0.6), WAIT);
 
     // No border: the lit edge across the top, then the card's own rows.
     assert_eq!(
-        tome.text_col(CARD_Y, &"▀".repeat(80)),
+        tinkery.text_col(CARD_Y, &"▀".repeat(80)),
         Some(CARD_X),
         "{}",
-        row(&tome, CARD_Y)
+        row(&tinkery, CARD_Y)
     );
-    assert_eq!(tome.fg_at(CARD_X, CARD_Y), ACCENT);
-    let right_edge = row(&tome, QUERY_ROW).chars().nth(usize::from(CARD_X + 79));
+    assert_eq!(tinkery.fg_at(CARD_X, CARD_Y), ACCENT);
+    let right_edge = row(&tinkery, QUERY_ROW)
+        .chars()
+        .nth(usize::from(CARD_X + 79));
     assert_ne!(right_edge, Some('│'), "no border");
-    assert_eq!(tome.text_col(QUERY_ROW, "✦ Search"), Some(LABEL_X - 2));
-    assert_eq!(tome.text_col(QUERY_ROW + 1, "✦ Replace"), Some(LABEL_X - 2));
-    assert_eq!(tome.text_col(CARD_Y + 21, FOOTER), Some(CARD_X + 2));
+    assert_eq!(tinkery.text_col(QUERY_ROW, "✦ Search"), Some(LABEL_X - 2));
+    assert_eq!(
+        tinkery.text_col(QUERY_ROW + 1, "✦ Replace"),
+        Some(LABEL_X - 2)
+    );
+    assert_eq!(tinkery.text_col(CARD_Y + 21, FOOTER), Some(CARD_X + 2));
     // The selected row ends in `⏎`.
-    assert_eq!(tome.text_col(FIRST_ROW, "⏎"), Some(CARD_X + 80 - 5));
+    assert_eq!(tinkery.text_col(FIRST_ROW, "⏎"), Some(CARD_X + 80 - 5));
 }
 
 #[test]
 fn a_click_outside_the_card_closes_it_and_one_inside_does_not() {
-    let mut tome = open_in(Path::new(PROJECT));
-    tome.send_keys("alt+f");
-    tome.wait_for_text(FOOTER, WAIT);
-    tome.click(50, 15);
+    let mut tinkery = open_in(Path::new(PROJECT));
+    tinkery.send_keys("alt+f");
+    tinkery.wait_for_text(FOOTER, WAIT);
+    tinkery.click(50, 15);
     // Still open: typing goes to the query.
-    tome.type_text("x");
-    tome.wait_for_text("Search   x", WAIT);
-    tome.click(2, 2);
-    tome.wait_for_text_gone(FOOTER, WAIT);
+    tinkery.type_text("x");
+    tinkery.wait_for_text("Search   x", WAIT);
+    tinkery.click(2, 2);
+    tinkery.wait_for_text_gone(FOOTER, WAIT);
 }
 
 #[test]
 fn mono_dims_with_the_modifier_and_reverses_the_selected_row() {
-    let mut tome = Tome::spawn_in_with_config(Path::new(PROJECT), "theme = \"mono\"\n", &[]);
-    tome.wait_for_text("Open directory", START);
-    search(&mut tome, "TODO");
-    wait_for_status(&tome, "3 matches in 2 files");
+    let mut tinkery = Tinkery::spawn_in_with_config(Path::new(PROJECT), "theme = \"mono\"\n", &[]);
+    tinkery.wait_for_text("Open directory", START);
+    search(&mut tinkery, "TODO");
+    wait_for_status(&tinkery, "3 matches in 2 files");
     // The frame with the count has the selection and the dim too.
     assert!(
-        tome.reversed_text(FIRST_ROW).contains(&hit_row(LIB_TODO)),
+        tinkery
+            .reversed_text(FIRST_ROW)
+            .contains(&hit_row(LIB_TODO)),
         "{:?}",
-        tome.reversed_text(FIRST_ROW)
+        tinkery.reversed_text(FIRST_ROW)
     );
     let status = ROWS - 1;
     // The splash is still up under the card, so its keys are in the status line.
-    let position = tome.text_col(status, "quit").unwrap();
-    assert!(tome.dim_at(position, status), "the status line is dimmed");
-    assert!(!tome.dim_at(CARD_X + 2, STATUS_ROW), "the card isn't");
+    let position = tinkery.text_col(status, "quit").unwrap();
+    assert!(
+        tinkery.dim_at(position, status),
+        "the status line is dimmed"
+    );
+    assert!(!tinkery.dim_at(CARD_X + 2, STATUS_ROW), "the card isn't");
 }
 
 #[test]
 fn alt_c_and_alt_r_toggle_case_and_regex_and_search_again() {
-    let mut tome = open_in(Path::new(PROJECT));
-    search(&mut tome, "T.DO");
-    wait_for_status(&tome, "no matches");
+    let mut tinkery = open_in(Path::new(PROJECT));
+    search(&mut tinkery, "T.DO");
+    wait_for_status(&tinkery, "no matches");
     // As a regex `.` matches the `O`; case still ignored, so `todo_free` too.
-    tome.send_keys("alt+r");
-    wait_for_status(&tome, "3 matches in 2 files");
-    assert_eq!(chips_on(&tome), ".*");
-    tome.send_keys("alt+c");
-    wait_for_status(&tome, "2 matches in 2 files");
-    assert_eq!(chips_on(&tome), "Aa.*");
-    tome.wait_for_text_gone("todo_free", WAIT);
-    assert_eq!(tome.text_col(FIRST_ROW, &hit_row(LIB_TODO)), Some(LIST_X));
+    tinkery.send_keys("alt+r");
+    wait_for_status(&tinkery, "3 matches in 2 files");
+    assert_eq!(chips_on(&tinkery), ".*");
+    tinkery.send_keys("alt+c");
+    wait_for_status(&tinkery, "2 matches in 2 files");
+    assert_eq!(chips_on(&tinkery), "Aa.*");
+    tinkery.wait_for_text_gone("todo_free", WAIT);
     assert_eq!(
-        tome.text_col(FIRST_ROW + 1, &hit_row(MAIN_TODO)),
+        tinkery.text_col(FIRST_ROW, &hit_row(LIB_TODO)),
+        Some(LIST_X)
+    );
+    assert_eq!(
+        tinkery.text_col(FIRST_ROW + 1, &hit_row(MAIN_TODO)),
         Some(LIST_X)
     );
 
     // A bad regex says so instead of listing anything.
-    tome.type_text("(");
-    tome.send_keys("enter");
-    wait_for_status(&tome, "invalid regex");
-    tome.wait_for_text_gone("src/lib.rs", WAIT);
+    tinkery.type_text("(");
+    tinkery.send_keys("enter");
+    wait_for_status(&tinkery, "invalid regex");
+    tinkery.wait_for_text_gone("src/lib.rs", WAIT);
 
-    tome.send_keys("esc");
-    tome.wait_for_text_gone(FOOTER, WAIT);
+    tinkery.send_keys("esc");
+    tinkery.wait_for_text_gone(FOOTER, WAIT);
 }
 
 #[test]
 fn arrows_move_through_hits_and_enter_opens_the_file_at_the_match() {
-    let mut tome = open_in(Path::new(PROJECT));
-    search(&mut tome, "TODO");
-    wait_for_status(&tome, "3 matches in 2 files");
-    tome.send_keys("down");
-    tome.send_keys("down");
-    wait_for_selected(&tome, FIRST_ROW + 2, MAIN_TODO);
-    tome.send_keys("up");
-    wait_for_selected(&tome, FIRST_ROW + 1, LIB_FN);
-    tome.send_keys("down");
-    wait_for_selected(&tome, FIRST_ROW + 2, MAIN_TODO);
-    tome.send_keys("enter");
-    tome.wait_for_text_gone(FOOTER, WAIT);
-    tome.wait_for_text("1  fn main() {", WAIT);
+    let mut tinkery = open_in(Path::new(PROJECT));
+    search(&mut tinkery, "TODO");
+    wait_for_status(&tinkery, "3 matches in 2 files");
+    tinkery.send_keys("down");
+    tinkery.send_keys("down");
+    wait_for_selected(&tinkery, FIRST_ROW + 2, MAIN_TODO);
+    tinkery.send_keys("up");
+    wait_for_selected(&tinkery, FIRST_ROW + 1, LIB_FN);
+    tinkery.send_keys("down");
+    wait_for_selected(&tinkery, FIRST_ROW + 2, MAIN_TODO);
+    tinkery.send_keys("enter");
+    tinkery.wait_for_text_gone(FOOTER, WAIT);
+    tinkery.wait_for_text("1  fn main() {", WAIT);
     // `    // TODO`: the match starts in column 8.
-    wait_for_position(&tome, 2, 8);
-    tome.wait_for_screen("main.rs in the tab bar", WAIT, |screen| {
+    wait_for_position(&tinkery, 2, 8);
+    tinkery.wait_for_screen("main.rs in the tab bar", WAIT, |screen| {
         screen[1].contains("main.rs")
     });
 
     // Another hit opens beside it in a second tab.
-    search(&mut tome, "TODO");
-    wait_for_status(&tome, "3 matches in 2 files");
-    tome.send_keys("enter");
-    tome.wait_for_text_gone(FOOTER, WAIT);
-    tome.wait_for_text("1  //! Fixture library.", WAIT);
-    wait_for_position(&tome, 3, 4);
-    tome.wait_for_screen("both files in the tab bar", WAIT, |screen| {
+    search(&mut tinkery, "TODO");
+    wait_for_status(&tinkery, "3 matches in 2 files");
+    tinkery.send_keys("enter");
+    tinkery.wait_for_text_gone(FOOTER, WAIT);
+    tinkery.wait_for_text("1  //! Fixture library.", WAIT);
+    wait_for_position(&tinkery, 3, 4);
+    tinkery.wait_for_screen("both files in the tab bar", WAIT, |screen| {
         screen[1].contains("main.rs") && screen[1].contains("lib.rs")
     });
 }
 
 #[test]
 fn unsaved_edits_in_open_buffers_are_searched_from_memory() {
-    let mut tome = open_in(Path::new(PROJECT));
-    search(&mut tome, "tidy");
-    wait_for_status(&tome, "1 match in 1 file");
-    tome.send_keys("enter");
-    wait_for_position(&tome, 2, 13);
+    let mut tinkery = open_in(Path::new(PROJECT));
+    search(&mut tinkery, "tidy");
+    wait_for_status(&tinkery, "1 match in 1 file");
+    tinkery.send_keys("enter");
+    wait_for_position(&tinkery, 2, 13);
     // Unsaved, so only the buffer has it.
-    tome.type_text("XYZZY");
-    tome.wait_for_text("// TODO XYZZYtidy", WAIT);
-    search(&mut tome, "xyzzy");
-    wait_for_status(&tome, "1 match in 1 file");
-    tome.wait_for_bg(CARD_X, FIRST_ROW, glow(), WAIT);
+    tinkery.type_text("XYZZY");
+    tinkery.wait_for_text("// TODO XYZZYtidy", WAIT);
+    search(&mut tinkery, "xyzzy");
+    wait_for_status(&tinkery, "1 match in 1 file");
+    tinkery.wait_for_bg(CARD_X, FIRST_ROW, glow(), WAIT);
     assert_eq!(
-        tome.text_col(FIRST_ROW, "src/main.rs:2  // TODO XYZZYtidy"),
+        tinkery.text_col(FIRST_ROW, "src/main.rs:2  // TODO XYZZYtidy"),
         Some(LIST_X)
     );
 }
@@ -292,20 +305,19 @@ fn many_files_stream_in_and_the_panel_keeps_taking_keys() -> std::io::Result<()>
             "nothing\nneedle here\n",
         )?;
     }
-    let mut tome = open_in(dir.path());
-    search(&mut tome, "needle");
+    let mut tinkery = open_in(dir.path());
+    search(&mut tinkery, "needle");
     // Keys reach the panel straight away, while the search may still be going.
-    tome.send_keys("down");
-    wait_for_status(&tome, "3000 matches in 3000 files");
+    tinkery.send_keys("down");
+    wait_for_status(&tinkery, "3000 matches in 3000 files");
     // The frame with the final count has the selection drawn too.
     assert!(
-        (FIRST_ROW..ROWS)
-            .any(|y| tome.bg_at(CARD_X, y) == glow()
-                && row(&tome, y).contains(".txt:2  needle here")),
+        (FIRST_ROW..ROWS).any(|y| tinkery.bg_at(CARD_X, y) == glow()
+            && row(&tinkery, y).contains(".txt:2  needle here")),
         "{}",
-        tome.screen().join("\n")
+        tinkery.screen().join("\n")
     );
-    tome.send_keys("esc");
-    tome.wait_for_text_gone(FOOTER, WAIT);
+    tinkery.send_keys("esc");
+    tinkery.wait_for_text_gone(FOOTER, WAIT);
     Ok(())
 }

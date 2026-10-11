@@ -1,5 +1,5 @@
 //! `>language servers`: the catalog card listing each server and whether it's
-//! installed (tome-catalog spec C1, C2).
+//! installed (tinkery-catalog spec C1, C2).
 
 mod harness;
 
@@ -8,7 +8,7 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
-use harness::{ROWS, Tome};
+use harness::{ROWS, Tinkery};
 use tempfile::TempDir;
 use vt100::Color;
 
@@ -47,8 +47,8 @@ fn mix(a: Color, b: Color, t: f64) -> Color {
     Color::Rgb(m(r1, r2), m(g1, g2), m(b1, b2))
 }
 
-fn row(tome: &Tome, row: u16) -> String {
-    tome.screen()[usize::from(row)].clone()
+fn row(tinkery: &Tinkery, row: u16) -> String {
+    tinkery.screen()[usize::from(row)].clone()
 }
 
 /// A folder of empty programs named `names`, runnable as the PATH lookup
@@ -73,26 +73,26 @@ fn programs(names: &[&str]) -> TempDir {
     dir
 }
 
-/// Tome on an empty project with only `path` on its PATH.
-fn with_path(project: &Path, path: &Path) -> Tome {
+/// Tinkery on an empty project with only `path` on its PATH.
+fn with_path(project: &Path, path: &Path) -> Tinkery {
     let env = [("PATH", OsString::from(path))];
-    let tome = Tome::spawn_in_with_env(project, &env, &["."]);
-    tome.wait_for_text("Open directory", START);
-    tome
+    let tinkery = Tinkery::spawn_in_with_env(project, &env, &["."]);
+    tinkery.wait_for_text("Open directory", START);
+    tinkery
 }
 
 /// Ctrl+P, `>language servers`, Enter.
-fn open_catalog(tome: &mut Tome) {
-    tome.send_keys("ctrl+p");
-    tome.wait_for_text("cast · files · commands", WAIT);
-    tome.type_text(">language servers");
-    tome.wait_for_text("cast · commands", WAIT);
-    tome.wait_for_screen("Language servers listed", WAIT, |screen| {
+fn open_catalog(tinkery: &mut Tinkery) {
+    tinkery.send_keys("ctrl+p");
+    tinkery.wait_for_text("cast · files · commands", WAIT);
+    tinkery.type_text(">language servers");
+    tinkery.wait_for_text("cast · commands", WAIT);
+    tinkery.wait_for_screen("Language servers listed", WAIT, |screen| {
         // The cast's first command row, under its `COMMANDS` label.
         screen[9].contains("Language servers")
     });
-    tome.send_keys("enter");
-    tome.wait_for_text(HEADER, WAIT);
+    tinkery.send_keys("enter");
+    tinkery.wait_for_text(HEADER, WAIT);
 }
 
 /// Column where `state` starts on a server row: it ends at `RIGHT`.
@@ -104,16 +104,16 @@ fn state_x(state: &str) -> u16 {
 fn language_servers_in_the_cast_lists_each_server_and_its_state() {
     let project = tempfile::tempdir().expect("create project");
     let path = programs(&["rust-analyzer", "npm", "vscode-css-language-server"]);
-    let mut tome = with_path(project.path(), path.path());
-    open_catalog(&mut tome);
+    let mut tinkery = with_path(project.path(), path.path());
+    open_catalog(&mut tinkery);
 
     // The lit edge across the cast's card, then `✦ language servers` and a rule.
     assert_eq!(
-        row(&tome, CARD_Y).chars().nth(usize::from(CARD_X)),
+        row(&tinkery, CARD_Y).chars().nth(usize::from(CARD_X)),
         Some('▀')
     );
-    assert_eq!(tome.text_col(HEADER_ROW, HEADER), Some(TEXT_X));
-    assert_eq!(row(&tome, RULE_ROW).chars().nth(9), Some('─'));
+    assert_eq!(tinkery.text_col(HEADER_ROW, HEADER), Some(TEXT_X));
+    assert_eq!(row(&tinkery, RULE_ROW).chars().nth(9), Some('─'));
 
     let expect = [
         ("Rust", "rust-analyzer", "installed"),
@@ -130,22 +130,25 @@ fn language_servers_in_the_cast_lists_each_server_and_its_state() {
     ];
     for (i, (name, command, state)) in expect.into_iter().enumerate() {
         let y = FIRST_ROW + u16::try_from(i).expect("seven rows");
-        assert_eq!(tome.text_col(y, name), Some(TEXT_X), "{name}");
-        assert_eq!(tome.text_col(y, command), Some(COMMAND_X), "{name}");
-        assert_eq!(tome.text_col(y, state), Some(state_x(state)), "{name}");
+        assert_eq!(tinkery.text_col(y, name), Some(TEXT_X), "{name}");
+        assert_eq!(tinkery.text_col(y, command), Some(COMMAND_X), "{name}");
+        assert_eq!(tinkery.text_col(y, state), Some(state_x(state)), "{name}");
     }
     // Each state has its own colour: `ok`, `warn` and `muted`.
-    let installed = tome.fg_at(state_x("installed"), FIRST_ROW);
-    let needs = tome.fg_at(state_x("needs go"), FIRST_ROW + 1);
-    let missing = tome.fg_at(state_x("missing"), FIRST_ROW + 2);
+    let installed = tinkery.fg_at(state_x("installed"), FIRST_ROW);
+    let needs = tinkery.fg_at(state_x("needs go"), FIRST_ROW + 1);
+    let missing = tinkery.fg_at(state_x("missing"), FIRST_ROW + 2);
     assert_ne!(installed, needs);
     assert_ne!(installed, missing);
     assert_ne!(needs, missing);
-    assert_eq!(tome.fg_at(state_x("installed"), FIRST_ROW + 5), installed);
+    assert_eq!(
+        tinkery.fg_at(state_x("installed"), FIRST_ROW + 5),
+        installed
+    );
 
     // A blank, then the footer.
-    assert_eq!(row(&tome, FOOTER_ROW - 1).trim(), "");
-    assert_eq!(tome.text_col(FOOTER_ROW, FOOTER), Some(CARD_X + 2));
+    assert_eq!(row(&tinkery, FOOTER_ROW - 1).trim(), "");
+    assert_eq!(tinkery.text_col(FOOTER_ROW, FOOTER), Some(CARD_X + 2));
 }
 
 #[test]
@@ -161,14 +164,15 @@ fn a_running_server_says_so() {
         "FAKE_LSP_LOG",
         log.path().join("log.jsonl").into_os_string(),
     )];
-    let mut tome = Tome::spawn_in_with_config_and_env(project.path(), &config, &env, &["a.rs"]);
-    tome.wait_for_text("Ln 1, Col 1", START);
-    open_catalog(&mut tome);
-    tome.wait_for_screen("Rust running", WAIT, |screen| {
+    let mut tinkery =
+        Tinkery::spawn_in_with_config_and_env(project.path(), &config, &env, &["a.rs"]);
+    tinkery.wait_for_text("Ln 1, Col 1", START);
+    open_catalog(&mut tinkery);
+    tinkery.wait_for_screen("Rust running", WAIT, |screen| {
         screen[usize::from(FIRST_ROW)].contains("running")
     });
     assert_eq!(
-        tome.text_col(FIRST_ROW, "running"),
+        tinkery.text_col(FIRST_ROW, "running"),
         Some(state_x("running"))
     );
 }
@@ -177,35 +181,35 @@ fn a_running_server_says_so() {
 fn arrows_move_the_selection_and_esc_or_a_click_outside_close() {
     let project = tempfile::tempdir().expect("create project");
     let path = programs(&[]);
-    let mut tome = with_path(project.path(), path.path());
-    open_catalog(&mut tome);
+    let mut tinkery = with_path(project.path(), path.path());
+    open_catalog(&mut tinkery);
     let lit = mix(RAISED, ACCENT, 0.3);
 
     // The first row starts selected, on the glow.
-    tome.wait_for_bg(CARD_X, FIRST_ROW, lit, WAIT);
-    assert_ne!(tome.bg_at(CARD_X, FIRST_ROW + 1), lit);
-    tome.send_keys("down");
-    tome.wait_for_bg(CARD_X, FIRST_ROW + 1, lit, WAIT);
-    assert_ne!(tome.bg_at(CARD_X, FIRST_ROW), lit);
+    tinkery.wait_for_bg(CARD_X, FIRST_ROW, lit, WAIT);
+    assert_ne!(tinkery.bg_at(CARD_X, FIRST_ROW + 1), lit);
+    tinkery.send_keys("down");
+    tinkery.wait_for_bg(CARD_X, FIRST_ROW + 1, lit, WAIT);
+    assert_ne!(tinkery.bg_at(CARD_X, FIRST_ROW), lit);
     // ↓ stops at the last row, ↑ at the first.
     for _ in 0..10 {
-        tome.send_keys("down");
+        tinkery.send_keys("down");
     }
-    tome.wait_for_bg(CARD_X, LAST_ROW, lit, WAIT);
+    tinkery.wait_for_bg(CARD_X, LAST_ROW, lit, WAIT);
     for _ in 0..10 {
-        tome.send_keys("up");
+        tinkery.send_keys("up");
     }
-    tome.wait_for_bg(CARD_X, FIRST_ROW, lit, WAIT);
+    tinkery.wait_for_bg(CARD_X, FIRST_ROW, lit, WAIT);
 
     // Typed letters go nowhere; the catalog stays.
-    tome.type_text("x");
-    tome.send_keys("esc");
-    tome.wait_for_text_gone(HEADER, WAIT);
+    tinkery.type_text("x");
+    tinkery.send_keys("esc");
+    tinkery.wait_for_text_gone(HEADER, WAIT);
 
     // A click outside the card closes it too.
-    open_catalog(&mut tome);
-    tome.click(2, ROWS - 3);
-    tome.wait_for_text_gone(HEADER, WAIT);
+    open_catalog(&mut tinkery);
+    tinkery.click(2, ROWS - 3);
+    tinkery.wait_for_text_gone(HEADER, WAIT);
 }
 
 #[test]
@@ -213,17 +217,17 @@ fn mono_reverses_the_selected_row() {
     let project = tempfile::tempdir().expect("create project");
     let path = programs(&[]);
     let env = [("PATH", OsString::from(path.path()))];
-    let mut tome =
-        Tome::spawn_in_with_config_and_env(project.path(), "theme = \"mono\"\n", &env, &["."]);
-    tome.wait_for_text("Open directory", START);
-    open_catalog(&mut tome);
+    let mut tinkery =
+        Tinkery::spawn_in_with_config_and_env(project.path(), "theme = \"mono\"\n", &env, &["."]);
+    tinkery.wait_for_text("Open directory", START);
+    open_catalog(&mut tinkery);
     // The whole card's width, the state four cells in from its right edge.
     let rust = format!("    {:<25}{:<41}needs rustup    ", "Rust", "rust-analyzer");
-    tome.wait_for_reversed(FIRST_ROW, &rust, WAIT);
-    tome.send_keys("down");
+    tinkery.wait_for_reversed(FIRST_ROW, &rust, WAIT);
+    tinkery.send_keys("down");
     let go = format!("    {:<25}{:<45}needs go    ", "Go", "gopls");
-    tome.wait_for_reversed(FIRST_ROW + 1, &go, WAIT);
-    assert_eq!(tome.reversed_text(FIRST_ROW), "");
+    tinkery.wait_for_reversed(FIRST_ROW + 1, &go, WAIT);
+    assert_eq!(tinkery.reversed_text(FIRST_ROW), "");
 }
 
 /// `command` as the platform shell runs it, so the install's first word (the
@@ -244,13 +248,13 @@ fn rust_install(command: &str, install: &str) -> String {
     format!("[lsp.rust]\ncommand = '''{command}'''\ninstall = '''{install}'''\n")
 }
 
-/// Tome on an empty project with `config`, the PATH it inherits, and its
+/// Tinkery on an empty project with `config`, the PATH it inherits, and its
 /// clipboard in the file `clipboard`.
-fn with_config(project: &Path, config: &str, clipboard: &Path) -> Tome {
-    let env = [("TOME_CLIPBOARD_FILE", OsString::from(clipboard))];
-    let tome = Tome::spawn_in_with_config_and_env(project, config, &env, &["."]);
-    tome.wait_for_text("Open directory", START);
-    tome
+fn with_config(project: &Path, config: &str, clipboard: &Path) -> Tinkery {
+    let env = [("TINKERY_CLIPBOARD_FILE", OsString::from(clipboard))];
+    let tinkery = Tinkery::spawn_in_with_config_and_env(project, config, &env, &["."]);
+    tinkery.wait_for_text("Open directory", START);
+    tinkery
 }
 
 /// At 30 rows the run panel's title is row 20 and its output starts on row 21.
@@ -258,8 +262,8 @@ const RUN_TITLE_ROW: u16 = 20;
 const RUN_OUTPUT_ROW: u16 = 21;
 
 /// Waits for the first server row to say `missing`.
-fn wait_missing(tome: &Tome) {
-    tome.wait_for_screen("Rust missing", WAIT, |screen| {
+fn wait_missing(tinkery: &Tinkery) {
+    tinkery.wait_for_screen("Rust missing", WAIT, |screen| {
         screen[usize::from(FIRST_ROW)].contains("missing")
     });
 }
@@ -269,19 +273,19 @@ fn enter_on_a_missing_row_runs_its_install_in_the_run_panel() {
     let project = tempfile::tempdir().expect("create project");
     let clip = tempfile::tempdir().expect("create clipboard dir");
     let config = rust_install("nope", &shell("echo installing rust"));
-    let mut tome = with_config(project.path(), &config, &clip.path().join("clip"));
-    open_catalog(&mut tome);
-    wait_missing(&tome);
-    tome.send_keys("enter");
+    let mut tinkery = with_config(project.path(), &config, &clip.path().join("clip"));
+    open_catalog(&mut tinkery);
+    wait_missing(&tinkery);
+    tinkery.send_keys("enter");
 
     // The card closes and the panel, hidden until now, shows the install.
-    tome.wait_for_text_gone(HEADER, WAIT);
-    tome.wait_for_screen("the install's title and output", WAIT, |screen| {
+    tinkery.wait_for_text_gone(HEADER, WAIT);
+    tinkery.wait_for_screen("the install's title and output", WAIT, |screen| {
         screen[usize::from(RUN_TITLE_ROW)].contains("install Rust")
             && screen[usize::from(RUN_OUTPUT_ROW)].contains("installing rust")
     });
     // It exited 0, but the server is still nowhere on PATH.
-    tome.wait_for_text(
+    tinkery.wait_for_text(
         "installed, but nope isn't on PATH; restart your terminal",
         WAIT,
     );
@@ -292,12 +296,12 @@ fn a_failed_install_says_its_exit_code() {
     let project = tempfile::tempdir().expect("create project");
     let clip = tempfile::tempdir().expect("create clipboard dir");
     let config = rust_install("nope", &shell("exit 3"));
-    let mut tome = with_config(project.path(), &config, &clip.path().join("clip"));
-    open_catalog(&mut tome);
-    wait_missing(&tome);
-    tome.send_keys("enter");
-    tome.wait_for_text("install failed (exit 3); see the run panel", WAIT);
-    assert!(row(&tome, RUN_TITLE_ROW).contains("install Rust"));
+    let mut tinkery = with_config(project.path(), &config, &clip.path().join("clip"));
+    open_catalog(&mut tinkery);
+    wait_missing(&tinkery);
+    tinkery.send_keys("enter");
+    tinkery.wait_for_text("install failed (exit 3); see the run panel", WAIT);
+    assert!(row(&tinkery, RUN_TITLE_ROW).contains("install Rust"));
 }
 
 #[test]
@@ -312,25 +316,25 @@ fn an_install_waits_for_the_running_command() {
         shell("echo started; sleep 60")
     };
     let config = rust_install("nope", &long);
-    let mut tome = with_config(project.path(), &config, &clip.path().join("clip"));
-    open_catalog(&mut tome);
-    wait_missing(&tome);
-    tome.send_keys("enter");
-    tome.wait_for_screen("the install running", WAIT, |screen| {
+    let mut tinkery = with_config(project.path(), &config, &clip.path().join("clip"));
+    open_catalog(&mut tinkery);
+    wait_missing(&tinkery);
+    tinkery.send_keys("enter");
+    tinkery.wait_for_screen("the install running", WAIT, |screen| {
         screen[usize::from(RUN_OUTPUT_ROW)].contains("started")
     });
 
-    open_catalog(&mut tome);
-    wait_missing(&tome);
-    tome.send_keys("enter");
-    tome.wait_for_text("install Rust is running; stop it first", WAIT);
+    open_catalog(&mut tinkery);
+    wait_missing(&tinkery);
+    tinkery.send_keys("enter");
+    tinkery.wait_for_text("install Rust is running; stop it first", WAIT);
     // The catalog stays open under the message.
-    assert_eq!(tome.text_col(HEADER_ROW, HEADER), Some(TEXT_X));
+    assert_eq!(tinkery.text_col(HEADER_ROW, HEADER), Some(TEXT_X));
 
-    tome.send_keys("esc");
-    tome.wait_for_text_gone(HEADER, WAIT);
-    tome.send_keys("shift+f5");
-    tome.wait_for_screen("the install stopped", WAIT, |screen| {
+    tinkery.send_keys("esc");
+    tinkery.wait_for_text_gone(HEADER, WAIT);
+    tinkery.send_keys("shift+f5");
+    tinkery.wait_for_screen("the install stopped", WAIT, |screen| {
         screen[usize::from(RUN_TITLE_ROW)].contains("stopped")
     });
 }
@@ -345,30 +349,30 @@ fn enter_copies_a_command_it_cant_run() {
     let path = programs(&[]);
     let env = [
         ("PATH", OsString::from(path.path())),
-        ("TOME_CLIPBOARD_FILE", OsString::from(&clipboard)),
+        ("TINKERY_CLIPBOARD_FILE", OsString::from(&clipboard)),
     ];
-    let mut tome = Tome::spawn_in_with_env(project.path(), &env, &["."]);
-    tome.wait_for_text("Open directory", START);
-    open_catalog(&mut tome);
-    tome.send_keys("enter");
-    tome.wait_for_text("copied: rustup component add rust-analyzer", WAIT);
+    let mut tinkery = Tinkery::spawn_in_with_env(project.path(), &env, &["."]);
+    tinkery.wait_for_text("Open directory", START);
+    open_catalog(&mut tinkery);
+    tinkery.send_keys("enter");
+    tinkery.wait_for_text("copied: rustup component add rust-analyzer", WAIT);
     assert_eq!(
         fs::read_to_string(&clipboard).expect("read clipboard"),
         "rustup component add rust-analyzer"
     );
     // The catalog stays, and nothing ran.
-    assert_eq!(tome.text_col(HEADER_ROW, HEADER), Some(TEXT_X));
-    assert!(!tome.screen().iter().any(|l| l.contains("install Rust")));
-    drop(tome);
+    assert_eq!(tinkery.text_col(HEADER_ROW, HEADER), Some(TEXT_X));
+    assert!(!tinkery.screen().iter().any(|l| l.contains("install Rust")));
+    drop(tinkery);
 
     // `sudo` would ask for a password the run panel can't take: copied too.
     let sudo = format!("sudo {}", shell("echo hi"));
     let config = rust_install("nope", &sudo);
-    let mut tome = with_config(project.path(), &config, &clipboard);
-    open_catalog(&mut tome);
-    wait_missing(&tome);
-    tome.send_keys("enter");
-    tome.wait_for_text(&format!("copied: {sudo}"), WAIT);
+    let mut tinkery = with_config(project.path(), &config, &clipboard);
+    open_catalog(&mut tinkery);
+    wait_missing(&tinkery);
+    tinkery.send_keys("enter");
+    tinkery.wait_for_text(&format!("copied: {sudo}"), WAIT);
     assert_eq!(
         fs::read_to_string(&clipboard).expect("read clipboard"),
         sudo
@@ -377,23 +381,23 @@ fn enter_copies_a_command_it_cant_run() {
 
 /// Presses Enter on the selected row, then ↓: keys are handled in order, so
 /// once the selection has moved, Enter has been handled too.
-fn enter_then_down(tome: &mut Tome) {
+fn enter_then_down(tinkery: &mut Tinkery) {
     let lit = mix(RAISED, ACCENT, 0.3);
-    tome.wait_for_bg(CARD_X, FIRST_ROW, lit, WAIT);
-    tome.send_keys("enter");
-    tome.send_keys("down");
-    tome.wait_for_bg(CARD_X, FIRST_ROW + 1, lit, WAIT);
+    tinkery.wait_for_bg(CARD_X, FIRST_ROW, lit, WAIT);
+    tinkery.send_keys("enter");
+    tinkery.send_keys("down");
+    tinkery.wait_for_bg(CARD_X, FIRST_ROW + 1, lit, WAIT);
 }
 
 #[test]
 fn enter_on_an_installed_row_does_nothing() {
     let project = tempfile::tempdir().expect("create project");
     let path = programs(&["rust-analyzer"]);
-    let mut tome = with_path(project.path(), path.path());
-    open_catalog(&mut tome);
-    enter_then_down(&mut tome);
-    assert_eq!(tome.text_col(HEADER_ROW, HEADER), Some(TEXT_X));
-    let screen = tome.screen();
+    let mut tinkery = with_path(project.path(), path.path());
+    open_catalog(&mut tinkery);
+    enter_then_down(&mut tinkery);
+    assert_eq!(tinkery.text_col(HEADER_ROW, HEADER), Some(TEXT_X));
+    let screen = tinkery.screen();
     assert!(
         !screen.iter().any(|l| l.contains("install Rust")),
         "{screen:#?}"
@@ -411,20 +415,21 @@ fn enter_on_a_running_row_does_nothing() {
         "FAKE_LSP_LOG",
         log.path().join("log.jsonl").into_os_string(),
     )];
-    let mut tome = Tome::spawn_in_with_config_and_env(project.path(), &config, &env, &["a.rs"]);
-    tome.wait_for_text("Ln 1, Col 1", START);
-    open_catalog(&mut tome);
-    tome.wait_for_screen("Rust running", WAIT, |screen| {
+    let mut tinkery =
+        Tinkery::spawn_in_with_config_and_env(project.path(), &config, &env, &["a.rs"]);
+    tinkery.wait_for_text("Ln 1, Col 1", START);
+    open_catalog(&mut tinkery);
+    tinkery.wait_for_screen("Rust running", WAIT, |screen| {
         screen[usize::from(FIRST_ROW)].contains("running")
     });
-    enter_then_down(&mut tome);
-    assert_eq!(tome.text_col(HEADER_ROW, HEADER), Some(TEXT_X));
-    assert!(!tome.screen().iter().any(|l| l.contains("install Rust")));
-    tome.send_keys("esc");
-    tome.wait_for_text_gone(HEADER, WAIT);
+    enter_then_down(&mut tinkery);
+    assert_eq!(tinkery.text_col(HEADER_ROW, HEADER), Some(TEXT_X));
+    assert!(!tinkery.screen().iter().any(|l| l.contains("install Rust")));
+    tinkery.send_keys("esc");
+    tinkery.wait_for_text_gone(HEADER, WAIT);
     // Quit cleanly so the fake server exits too.
-    tome.send_keys("ctrl+q");
-    tome.wait_exit(WAIT);
+    tinkery.send_keys("ctrl+q");
+    tinkery.wait_exit(WAIT);
 }
 
 #[test]
@@ -435,9 +440,9 @@ fn a_server_found_after_its_install_starts_for_the_open_files() {
     let log = files.path().join("log.jsonl");
     // The fake server, copied into place by the install: absent until then.
     let server = files.path().join(if cfg!(windows) {
-        "tome-fake-server.exe"
+        "tinkery-fake-server.exe"
     } else {
-        "tome-fake-server"
+        "tinkery-fake-server"
     });
     let fake = env!("CARGO_BIN_EXE_fake_lsp");
     let install = if cfg!(windows) {
@@ -447,21 +452,22 @@ fn a_server_found_after_its_install_starts_for_the_open_files() {
     };
     let config = rust_install(&server.display().to_string(), &install);
     let env = [("FAKE_LSP_LOG", log.clone().into_os_string())];
-    let mut tome = Tome::spawn_in_with_config_and_env(project.path(), &config, &env, &["a.rs"]);
-    tome.wait_for_text("rust: server not found", START);
+    let mut tinkery =
+        Tinkery::spawn_in_with_config_and_env(project.path(), &config, &env, &["a.rs"]);
+    tinkery.wait_for_text("rust: server not found", START);
 
-    open_catalog(&mut tome);
-    wait_missing(&tome);
-    tome.send_keys("enter");
-    tome.wait_for_text("Rust installed", WAIT);
-    // Without restarting Tome, the server now follows a.rs.
-    tome.wait_for_files("the server to open a.rs", WAIT, || {
+    open_catalog(&mut tinkery);
+    wait_missing(&tinkery);
+    tinkery.send_keys("enter");
+    tinkery.wait_for_text("Rust installed", WAIT);
+    // Without restarting Tinkery, the server now follows a.rs.
+    tinkery.wait_for_files("the server to open a.rs", WAIT, || {
         fs::read_to_string(&log)
             .is_ok_and(|log| log.contains("textDocument/didOpen") && log.contains("a.rs"))
     });
     // Quit cleanly so the server exits and its folder can go.
-    tome.send_keys("ctrl+q");
-    tome.wait_exit(WAIT);
+    tinkery.send_keys("ctrl+q");
+    tinkery.wait_exit(WAIT);
 }
 
 #[test]
@@ -469,8 +475,8 @@ fn server_not_found_says_the_catalog_installs_it() {
     let project = tempfile::tempdir().expect("create project");
     fs::write(project.path().join("a.rs"), "fn a() {}\n").expect("write a.rs");
     let config = "[lsp.rust]\ncommand = 'nope'\n";
-    let tome = Tome::spawn_in_with_config(project.path(), config, &["a.rs"]);
-    tome.wait_for_text(
+    let tinkery = Tinkery::spawn_in_with_config(project.path(), config, &["a.rs"]);
+    tinkery.wait_for_text(
         "rust: server not found (nope) · >language servers installs it",
         START,
     );
@@ -513,20 +519,20 @@ fn path_with_shell(dir: &Path) -> OsString {
     std::env::join_paths(std::iter::once(dir.to_path_buf()).chain(system)).expect("join PATH")
 }
 
-/// Tome on an empty project with `path` as its PATH, an empty LLVM folder, and
-/// its clipboard in the file `clipboard`. Windows can still hand Tome the real
+/// Tinkery on an empty project with `path` as its PATH, an empty LLVM folder, and
+/// its clipboard in the file `clipboard`. Windows can still hand Tinkery the real
 /// `ProgramFiles` (CI's windows-latest has LLVM there), so a test that asserts
 /// lldb-dap's state asks `lldb_state` what to expect.
-fn with_adapters_path(project: &Path, path: OsString, clipboard: &Path) -> (Tome, TempDir) {
+fn with_adapters_path(project: &Path, path: OsString, clipboard: &Path) -> (Tinkery, TempDir) {
     let program_files = tempfile::tempdir().expect("create Program Files");
     let env = [
         ("PATH", path),
         ("ProgramFiles", program_files.path().as_os_str().to_owned()),
-        ("TOME_CLIPBOARD_FILE", clipboard.as_os_str().to_owned()),
+        ("TINKERY_CLIPBOARD_FILE", clipboard.as_os_str().to_owned()),
     ];
-    let tome = Tome::spawn_in_with_env(project, &env, &["."]);
-    tome.wait_for_text("Open directory", START);
-    (tome, program_files)
+    let tinkery = Tinkery::spawn_in_with_env(project, &env, &["."]);
+    tinkery.wait_for_text("Open directory", START);
+    (tinkery, program_files)
 }
 
 /// lldb-dap's state when it isn't on PATH: `installed` when LLVM's own folder
@@ -546,15 +552,15 @@ fn lldb_state() -> &'static str {
 }
 
 /// Moves the selection from the first row down to row `y`.
-fn select(tome: &mut Tome, y: u16) {
+fn select(tinkery: &mut Tinkery, y: u16) {
     let lit = mix(RAISED, ACCENT, 0.3);
-    tome.wait_for_bg(CARD_X, FIRST_ROW, lit, WAIT);
+    tinkery.wait_for_bg(CARD_X, FIRST_ROW, lit, WAIT);
     // The heading isn't a row: the adapters follow SQL a ↓ each, so this
     // stops short of `y` by the heading and its blank.
     for _ in FIRST_ROW..y - 2 {
-        tome.send_keys("down");
+        tinkery.send_keys("down");
     }
-    tome.wait_for_bg(CARD_X, y, lit, WAIT);
+    tinkery.wait_for_bg(CARD_X, y, lit, WAIT);
 }
 
 #[test]
@@ -571,12 +577,12 @@ fn debuggers_are_listed_under_their_heading_and_copy_their_install() {
         "@exit /b 1\r\n",
         "#!/bin/sh\nexit 1\n",
     );
-    let (mut tome, _llvm) =
+    let (mut tinkery, _llvm) =
         with_adapters_path(project.path(), OsString::from(path.path()), &clipboard);
-    open_catalog(&mut tome);
+    open_catalog(&mut tinkery);
     // The header can arrive before the rest of the card (ConPTY streams the
     // redraw in pieces), so wait for every adapter's state and the footer.
-    tome.wait_for_screen("the debuggers' states", WAIT, |screen| {
+    tinkery.wait_for_screen("the debuggers' states", WAIT, |screen| {
         let at = |y: u16| &screen[usize::from(y)];
         at(DEBUGGERS_ROW + 1).contains(lldb_state())
             && at(DEBUGGERS_ROW + 2).contains("missing")
@@ -584,9 +590,9 @@ fn debuggers_are_listed_under_their_heading_and_copy_their_install() {
             && at(FOOTER_ROW).contains(FOOTER)
     });
 
-    assert_eq!(row(&tome, DEBUGGERS_ROW - 1).trim(), "");
-    assert_eq!(tome.text_col(DEBUGGERS_ROW, "debuggers"), Some(TEXT_X));
-    assert!(tome.bold_at(TEXT_X, DEBUGGERS_ROW));
+    assert_eq!(row(&tinkery, DEBUGGERS_ROW - 1).trim(), "");
+    assert_eq!(tinkery.text_col(DEBUGGERS_ROW, "debuggers"), Some(TEXT_X));
+    assert!(tinkery.bold_at(TEXT_X, DEBUGGERS_ROW));
     let expect = [
         ("lldb-dap", "lldb-dap", lldb_state()),
         ("debugpy", "python -m debugpy.adapter", "missing"),
@@ -594,34 +600,37 @@ fn debuggers_are_listed_under_their_heading_and_copy_their_install() {
     ];
     for (i, (name, command, state)) in expect.into_iter().enumerate() {
         let y = DEBUGGERS_ROW + 1 + u16::try_from(i).expect("three rows");
-        assert_eq!(tome.text_col(y, name), Some(TEXT_X), "{name}");
+        assert_eq!(tinkery.text_col(y, name), Some(TEXT_X), "{name}");
         // lldb-dap's command is its name, so look from the command column.
-        let from_command: String = row(&tome, y).chars().skip(usize::from(COMMAND_X)).collect();
+        let from_command: String = row(&tinkery, y)
+            .chars()
+            .skip(usize::from(COMMAND_X))
+            .collect();
         assert!(from_command.starts_with(command), "{from_command:?}");
-        assert_eq!(tome.text_col(y, state), Some(state_x(state)), "{name}");
+        assert_eq!(tinkery.text_col(y, state), Some(state_x(state)), "{name}");
     }
     // The states take the servers' colours.
-    let missing = tome.fg_at(state_x("missing"), DEBUGGERS_ROW + 2);
-    let needs = tome.fg_at(state_x("needs go"), LAST_ROW);
+    let missing = tinkery.fg_at(state_x("missing"), DEBUGGERS_ROW + 2);
+    let needs = tinkery.fg_at(state_x("needs go"), LAST_ROW);
     assert_ne!(missing, needs);
-    assert_eq!(tome.fg_at(state_x("needs go"), FIRST_ROW + 6), needs);
-    assert_eq!(row(&tome, FOOTER_ROW - 1).trim(), "");
-    assert_eq!(tome.text_col(FOOTER_ROW, FOOTER), Some(CARD_X + 2));
+    assert_eq!(tinkery.fg_at(state_x("needs go"), FIRST_ROW + 6), needs);
+    assert_eq!(row(&tinkery, FOOTER_ROW - 1).trim(), "");
+    assert_eq!(tinkery.text_col(FOOTER_ROW, FOOTER), Some(CARD_X + 2));
 
     // `c` on lldb-dap copies its install command.
-    select(&mut tome, DEBUGGERS_ROW + 1);
-    tome.send_keys("c");
-    tome.wait_for_text("copied: ", WAIT);
+    select(&mut tinkery, DEBUGGERS_ROW + 1);
+    tinkery.send_keys("c");
+    tinkery.wait_for_text("copied: ", WAIT);
     assert_eq!(
         fs::read_to_string(&clipboard).expect("read clipboard"),
         LLDB_INSTALL
     );
     // Enter on dlv, whose install needs Go, copies too.
-    tome.send_keys("down");
-    tome.send_keys("down");
-    tome.wait_for_bg(CARD_X, LAST_ROW, mix(RAISED, ACCENT, 0.3), WAIT);
-    tome.send_keys("enter");
-    tome.wait_for_text(
+    tinkery.send_keys("down");
+    tinkery.send_keys("down");
+    tinkery.wait_for_bg(CARD_X, LAST_ROW, mix(RAISED, ACCENT, 0.3), WAIT);
+    tinkery.send_keys("enter");
+    tinkery.wait_for_text(
         "copied: go install github.com/go-delve/delve/cmd/dlv@latest",
         WAIT,
     );
@@ -629,17 +638,17 @@ fn debuggers_are_listed_under_their_heading_and_copy_their_install() {
     // than running it.
     if !cfg!(windows) {
         fs::remove_file(&clipboard).expect("clear clipboard");
-        tome.send_keys("up");
-        tome.send_keys("up");
-        tome.wait_for_bg(CARD_X, DEBUGGERS_ROW + 1, mix(RAISED, ACCENT, 0.3), WAIT);
-        tome.send_keys("enter");
-        tome.wait_for_text("copied: sudo apt install lldb", WAIT);
+        tinkery.send_keys("up");
+        tinkery.send_keys("up");
+        tinkery.wait_for_bg(CARD_X, DEBUGGERS_ROW + 1, mix(RAISED, ACCENT, 0.3), WAIT);
+        tinkery.send_keys("enter");
+        tinkery.wait_for_text("copied: sudo apt install lldb", WAIT);
         assert_eq!(
             fs::read_to_string(&clipboard).expect("read clipboard"),
             LLDB_INSTALL
         );
     }
-    assert!(!tome.screen().iter().any(|l| l.contains("install dlv")));
+    assert!(!tinkery.screen().iter().any(|l| l.contains("install dlv")));
 }
 
 /// A fake `go` that says what it was asked and, when `creates`, leaves an
@@ -665,33 +674,33 @@ fn enter_on_dlv_runs_its_install_and_finds_it_after() {
     let clip = tempfile::tempdir().expect("create clipboard dir");
     let bin = tempfile::tempdir().expect("create PATH folder");
     fake_go(bin.path(), true);
-    let (mut tome, _llvm) = with_adapters_path(
+    let (mut tinkery, _llvm) = with_adapters_path(
         project.path(),
         path_with_shell(bin.path()),
         &clip.path().join("clip"),
     );
-    open_catalog(&mut tome);
-    tome.wait_for_screen("dlv missing", WAIT, |screen| {
+    open_catalog(&mut tinkery);
+    tinkery.wait_for_screen("dlv missing", WAIT, |screen| {
         screen[usize::from(LAST_ROW)].contains("missing")
     });
-    select(&mut tome, LAST_ROW);
-    tome.send_keys("enter");
+    select(&mut tinkery, LAST_ROW);
+    tinkery.send_keys("enter");
 
-    tome.wait_for_text_gone(HEADER, WAIT);
-    tome.wait_for_screen("the install's title and output", WAIT, |screen| {
+    tinkery.wait_for_text_gone(HEADER, WAIT);
+    tinkery.wait_for_screen("the install's title and output", WAIT, |screen| {
         screen[usize::from(RUN_TITLE_ROW)].contains("install dlv")
             && screen[usize::from(RUN_OUTPUT_ROW)]
                 .contains("fake go install github.com/go-delve/delve/cmd/dlv@latest")
     });
-    tome.wait_for_text("dlv installed", WAIT);
+    tinkery.wait_for_text("dlv installed", WAIT);
 
     // Opened again, the catalog finds it.
-    open_catalog(&mut tome);
-    tome.wait_for_screen("dlv installed", WAIT, |screen| {
+    open_catalog(&mut tinkery);
+    tinkery.wait_for_screen("dlv installed", WAIT, |screen| {
         screen[usize::from(LAST_ROW)].contains("installed")
     });
     assert_eq!(
-        tome.text_col(LAST_ROW, "installed"),
+        tinkery.text_col(LAST_ROW, "installed"),
         Some(state_x("installed"))
     );
 }
@@ -702,18 +711,18 @@ fn an_adapter_still_missing_after_its_install_says_so() {
     let clip = tempfile::tempdir().expect("create clipboard dir");
     let bin = tempfile::tempdir().expect("create PATH folder");
     fake_go(bin.path(), false);
-    let (mut tome, _llvm) = with_adapters_path(
+    let (mut tinkery, _llvm) = with_adapters_path(
         project.path(),
         path_with_shell(bin.path()),
         &clip.path().join("clip"),
     );
-    open_catalog(&mut tome);
-    tome.wait_for_screen("dlv missing", WAIT, |screen| {
+    open_catalog(&mut tinkery);
+    tinkery.wait_for_screen("dlv missing", WAIT, |screen| {
         screen[usize::from(LAST_ROW)].contains("missing")
     });
-    select(&mut tome, LAST_ROW);
-    tome.send_keys("enter");
-    tome.wait_for_text(
+    select(&mut tinkery, LAST_ROW);
+    tinkery.send_keys("enter");
+    tinkery.wait_for_text(
         "installed, but dlv isn't on PATH; restart your terminal",
         WAIT,
     );
@@ -745,27 +754,27 @@ fn debugpy_is_installed_once_python_can_import_it() {
          echo \"fake pip $*\"\n\
          : > \"$d/debugpy-installed\"\n",
     );
-    let (mut tome, _llvm) = with_adapters_path(
+    let (mut tinkery, _llvm) = with_adapters_path(
         project.path(),
         path_with_shell(bin.path()),
         &clip.path().join("clip"),
     );
-    open_catalog(&mut tome);
+    open_catalog(&mut tinkery);
     // Python is there, but it can't import debugpy yet.
     let debugpy = DEBUGGERS_ROW + 2;
-    tome.wait_for_screen("debugpy missing", WAIT, |screen| {
+    tinkery.wait_for_screen("debugpy missing", WAIT, |screen| {
         screen[usize::from(debugpy)].contains("missing")
     });
-    select(&mut tome, debugpy);
-    tome.send_keys("enter");
-    tome.wait_for_screen("the install's title and output", WAIT, |screen| {
+    select(&mut tinkery, debugpy);
+    tinkery.send_keys("enter");
+    tinkery.wait_for_screen("the install's title and output", WAIT, |screen| {
         screen[usize::from(RUN_TITLE_ROW)].contains("install debugpy")
             && screen[usize::from(RUN_OUTPUT_ROW)].contains("fake pip -m pip install debugpy")
     });
-    tome.wait_for_text("debugpy installed", WAIT);
+    tinkery.wait_for_text("debugpy installed", WAIT);
 
-    open_catalog(&mut tome);
-    tome.wait_for_screen("debugpy installed", WAIT, |screen| {
+    open_catalog(&mut tinkery);
+    tinkery.wait_for_screen("debugpy installed", WAIT, |screen| {
         screen[usize::from(debugpy)].contains("installed")
     });
 }
@@ -784,11 +793,11 @@ const FOOTER_RETRY: &str = "⏎ retry  c copy command  esc close";
 const ERR: Color = Color::Rgb(0xff, 0x6b, 0x6b);
 const MUTED: Color = Color::Rgb(0x71, 0x80, 0x8f);
 
-/// Tome editing `a.rs` in `project`, its Rust server the fake one refusing
+/// Tinkery editing `a.rs` in `project`, its Rust server the fake one refusing
 /// `initialize` with `REASON` and logging to `files/log.jsonl`, its clipboard
 /// `files/clip`, and `top` (a theme, say) at the top of its config. Waits for
 /// the failure to reach the status line.
-fn with_failing_rust(project: &Path, files: &Path, top: &str) -> Tome {
+fn with_failing_rust(project: &Path, files: &Path, top: &str) -> Tinkery {
     fs::write(project.join("a.rs"), "fn a() {}\n").expect("write a.rs");
     let script = files.join("script.json");
     let error = serde_json::json!({"errors": {"initialize": {"code": -32603, "message": REASON}}});
@@ -800,10 +809,13 @@ fn with_failing_rust(project: &Path, files: &Path, top: &str) -> Tome {
         files.join("log.jsonl").display(),
         script.display(),
     );
-    let env = [("TOME_CLIPBOARD_FILE", files.join("clip").into_os_string())];
-    let tome = Tome::spawn_in_with_config_and_env(project, &config, &env, &["a.rs"]);
-    tome.wait_for_text("rust: server failed to start", START);
-    tome
+    let env = [(
+        "TINKERY_CLIPBOARD_FILE",
+        files.join("clip").into_os_string(),
+    )];
+    let tinkery = Tinkery::spawn_in_with_config_and_env(project, &config, &env, &["a.rs"]);
+    tinkery.wait_for_text("rust: server failed to start", START);
+    tinkery
 }
 
 /// How many `initialize` requests the fake servers logged: one per start.
@@ -819,19 +831,22 @@ fn starts(files: &Path) -> usize {
 fn a_failed_server_says_why_and_enter_retries_it() {
     let project = tempfile::tempdir().expect("create project");
     let files = tempfile::tempdir().expect("create server dir");
-    let mut tome = with_failing_rust(project.path(), files.path(), "");
-    open_catalog(&mut tome);
-    tome.wait_for_screen("Rust failed", WAIT, |screen| {
+    let mut tinkery = with_failing_rust(project.path(), files.path(), "");
+    open_catalog(&mut tinkery);
+    tinkery.wait_for_screen("Rust failed", WAIT, |screen| {
         screen[usize::from(FIRST_ROW)].contains("failed")
     });
-    assert_eq!(tome.text_col(FIRST_ROW, "failed"), Some(state_x("failed")));
-    assert_eq!(tome.fg_at(state_x("failed"), FIRST_ROW), ERR);
+    assert_eq!(
+        tinkery.text_col(FIRST_ROW, "failed"),
+        Some(state_x("failed"))
+    );
+    assert_eq!(tinkery.fg_at(state_x("failed"), FIRST_ROW), ERR);
 
     // The reason on the line below, in `muted`, cut where the states end.
     let shown: String = REASON.chars().take(REASON_WIDTH).collect();
-    let line = row(&tome, FIRST_ROW + 1);
+    let line = row(&tinkery, FIRST_ROW + 1);
     assert_eq!(
-        tome.text_col(FIRST_ROW + 1, &shown),
+        tinkery.text_col(FIRST_ROW + 1, &shown),
         Some(REASON_X),
         "{line:?}"
     );
@@ -843,83 +858,83 @@ fn a_failed_server_says_why_and_enter_retries_it() {
         "",
         "{line:?}"
     );
-    assert_eq!(tome.fg_at(REASON_X, FIRST_ROW + 1), MUTED);
+    assert_eq!(tinkery.fg_at(REASON_X, FIRST_ROW + 1), MUTED);
     // The rows below make room for it, and the footer offers a retry.
-    assert_eq!(tome.text_col(FIRST_ROW + 2, "Go"), Some(TEXT_X));
+    assert_eq!(tinkery.text_col(FIRST_ROW + 2, "Go"), Some(TEXT_X));
     assert_eq!(
-        tome.text_col(FOOTER_ROW + 1, FOOTER_RETRY),
+        tinkery.text_col(FOOTER_ROW + 1, FOOTER_RETRY),
         Some(CARD_X + 2)
     );
 
     // Off the failed row, the reason and the retry go.
-    tome.send_keys("down");
-    tome.wait_for_text_gone(&shown, WAIT);
-    assert_eq!(tome.text_col(FIRST_ROW + 1, "Go"), Some(TEXT_X));
-    assert_eq!(tome.text_col(FOOTER_ROW, FOOTER), Some(CARD_X + 2));
-    tome.send_keys("up");
-    tome.wait_for_text(FOOTER_RETRY, WAIT);
+    tinkery.send_keys("down");
+    tinkery.wait_for_text_gone(&shown, WAIT);
+    assert_eq!(tinkery.text_col(FIRST_ROW + 1, "Go"), Some(TEXT_X));
+    assert_eq!(tinkery.text_col(FOOTER_ROW, FOOTER), Some(CARD_X + 2));
+    tinkery.send_keys("up");
+    tinkery.wait_for_text(FOOTER_RETRY, WAIT);
 
     assert_eq!(starts(files.path()), 1);
-    tome.send_keys("enter");
-    tome.wait_for_text_gone(HEADER, WAIT);
+    tinkery.send_keys("enter");
+    tinkery.wait_for_text_gone(HEADER, WAIT);
     // Started again for the open file, without reopening it.
-    tome.wait_for_files("a second start", WAIT, || starts(files.path()) == 2);
-    tome.send_keys("ctrl+q");
-    tome.wait_exit(WAIT);
+    tinkery.wait_for_files("a second start", WAIT, || starts(files.path()) == 2);
+    tinkery.send_keys("ctrl+q");
+    tinkery.wait_exit(WAIT);
 }
 
 #[test]
 fn retrying_with_no_file_open_waits_for_one_and_stops_saying_failed() {
     let project = tempfile::tempdir().expect("create project");
     let files = tempfile::tempdir().expect("create server dir");
-    let mut tome = with_failing_rust(project.path(), files.path(), "");
-    tome.send_keys("ctrl+w");
-    tome.wait_for_screen("a.rs closed", WAIT, |screen| !screen[1].contains("a.rs"));
-    open_catalog(&mut tome);
-    tome.wait_for_screen("Rust failed", WAIT, |screen| {
+    let mut tinkery = with_failing_rust(project.path(), files.path(), "");
+    tinkery.send_keys("ctrl+w");
+    tinkery.wait_for_screen("a.rs closed", WAIT, |screen| !screen[1].contains("a.rs"));
+    open_catalog(&mut tinkery);
+    tinkery.wait_for_screen("Rust failed", WAIT, |screen| {
         screen[usize::from(FIRST_ROW)].contains("failed")
     });
-    tome.send_keys("enter");
-    tome.wait_for_text("Rust will start when you open a file", WAIT);
-    assert!(!tome.screen().iter().any(|l| l.contains("retrying")));
+    tinkery.send_keys("enter");
+    tinkery.wait_for_text("Rust will start when you open a file", WAIT);
+    assert!(!tinkery.screen().iter().any(|l| l.contains("retrying")));
     assert_eq!(starts(files.path()), 1);
 
     // The reason is gone with nothing left to retry.
-    open_catalog(&mut tome);
-    tome.wait_for_screen("Rust no longer failed", WAIT, |screen| {
+    open_catalog(&mut tinkery);
+    tinkery.wait_for_screen("Rust no longer failed", WAIT, |screen| {
         let rust = &screen[usize::from(FIRST_ROW)];
         rust.contains("Rust") && !rust.contains("failed")
     });
-    assert_eq!(tome.text_col(FOOTER_ROW, FOOTER), Some(CARD_X + 2));
+    assert_eq!(tinkery.text_col(FOOTER_ROW, FOOTER), Some(CARD_X + 2));
 }
 
 #[test]
 fn c_on_a_failed_row_copies_its_install_and_mono_reverses_it() {
     let project = tempfile::tempdir().expect("create project");
     let files = tempfile::tempdir().expect("create server dir");
-    let mut tome = with_failing_rust(project.path(), files.path(), "theme = \"mono\"\n");
-    open_catalog(&mut tome);
-    tome.wait_for_screen("Rust failed", WAIT, |screen| {
+    let mut tinkery = with_failing_rust(project.path(), files.path(), "theme = \"mono\"\n");
+    open_catalog(&mut tinkery);
+    tinkery.wait_for_screen("Rust failed", WAIT, |screen| {
         screen[usize::from(FIRST_ROW)].contains("failed")
     });
     // The whole row across the card, not the reason under it.
-    let selected = tome.reversed_text(FIRST_ROW);
+    let selected = tinkery.reversed_text(FIRST_ROW);
     assert!(selected.starts_with("    Rust "), "{selected:?}");
     assert!(selected.ends_with(" failed    "), "{selected:?}");
     assert_eq!(selected.chars().count(), 86, "{selected:?}");
-    assert_eq!(tome.reversed_text(FIRST_ROW + 1), "");
+    assert_eq!(tinkery.reversed_text(FIRST_ROW + 1), "");
 
-    tome.send_keys("c");
-    tome.wait_for_text(&format!("copied: {RUST_INSTALL}"), WAIT);
+    tinkery.send_keys("c");
+    tinkery.wait_for_text(&format!("copied: {RUST_INSTALL}"), WAIT);
     assert_eq!(
         fs::read_to_string(files.path().join("clip")).expect("read clipboard"),
         RUST_INSTALL
     );
     // Still open, still failed: copying isn't retrying.
-    assert_eq!(tome.text_col(HEADER_ROW, HEADER), Some(TEXT_X));
+    assert_eq!(tinkery.text_col(HEADER_ROW, HEADER), Some(TEXT_X));
     assert_eq!(starts(files.path()), 1);
-    tome.send_keys("esc");
-    tome.wait_for_text_gone(HEADER, WAIT);
-    tome.send_keys("ctrl+q");
-    tome.wait_exit(WAIT);
+    tinkery.send_keys("esc");
+    tinkery.wait_for_text_gone(HEADER, WAIT);
+    tinkery.send_keys("ctrl+q");
+    tinkery.wait_exit(WAIT);
 }
