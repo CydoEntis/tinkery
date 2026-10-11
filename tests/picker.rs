@@ -330,7 +330,7 @@ fn gt_lists_only_commands_with_their_keys_and_enter_runs_one() {
     tinkery.send_keys("enter");
     tinkery.wait_for_text_gone("cast · commands", WAIT);
     // Two editors on the file, side by side; text starts on row 3, under the
-    // pills and the thread.
+    // pills and the blank row below them.
     tinkery.wait_for_screen("two splits", WAIT, |screen| {
         screen[3].matches("1  line 1").count() == 2
     });

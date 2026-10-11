@@ -3,7 +3,7 @@ mod harness;
 use std::fs;
 use std::time::Duration;
 
-use harness::{ROWS, Tinkery};
+use harness::{ROWS, Tinkery, pill_text};
 use vt100::Color;
 
 const START: Duration = Duration::from_secs(10);
@@ -376,7 +376,7 @@ fn opening_another_file_keeps_unsaved_changes_in_their_tab() {
     // The other file opens in a tab of its own, without asking.
     tinkery.click(5, FIRST + 4);
     tinkery.wait_for_text("# Project fixture", WAIT);
-    tinkery.wait_for_text(" notes.txt •   ▐ README.md ▌", WAIT);
+    tinkery.wait_for_text(&pill_text(&["notes.txt •", "README.md"]), WAIT);
     assert!(
         !tinkery
             .screen()
