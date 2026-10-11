@@ -1491,6 +1491,51 @@ fn mono_reverses_the_selected_completion_row() {
 }
 
 #[test]
+fn the_pointer_lights_a_completion_row_and_enter_takes_the_selected_one() {
+    let (project, mut tinkery) = completion_project(&completion_script(""));
+    open_completion(&project, &mut tinkery, 2);
+    tinkery.wait_for_cursor(12, 4, WAIT);
+    tinkery.wait_for_bg(LABEL_COL, ITEM_ROW, HOV, WAIT);
+    let row = ITEM_ROW + 1;
+    assert_eq!(tinkery.bg_at(LABEL_COL, row), CARD);
+    let label = |tinkery: &Tinkery, row: u16| -> String {
+        tinkery.screen()[usize::from(row)]
+            .chars()
+            .skip(usize::from(LABEL_COL))
+            .take_while(|c| !c.is_whitespace())
+            .collect()
+    };
+    let (first, second) = (label(&tinkery, ITEM_ROW), label(&tinkery, row));
+    assert_ne!(first, second);
+
+    // The row under the pointer is the pill without the mark, its label as
+    // it was; the selected row keeps its mark and the popup stays open.
+    tinkery.move_to(LABEL_COL, row);
+    tinkery.wait_for_bg(LABEL_COL, row, HOV, WAIT);
+    assert_eq!(tinkery.text_col(row, "›"), None);
+    assert!(!tinkery.bold_at(LABEL_COL, row));
+    assert_eq!(tinkery.fg_at(LABEL_COL, row), FG);
+    assert!(is_selected(&tinkery, ITEM_ROW, 0, LABEL_COL));
+    // Off the card it rests again, and the popup is still there.
+    tinkery.move_to(70, 22);
+    tinkery.wait_for_bg(LABEL_COL, row, CARD, WAIT);
+    assert!(is_selected(&tinkery, ITEM_ROW, 0, LABEL_COL));
+    assert_eq!(label(&tinkery, row), second);
+
+    // Enter takes the selected item, not the one the pointer is on.
+    tinkery.move_to(LABEL_COL, row);
+    tinkery.wait_for_bg(LABEL_COL, row, HOV, WAIT);
+    tinkery.send_keys("enter");
+    tinkery.wait_for_text_gone("capacity", WAIT);
+    let screen = tinkery.screen();
+    assert!(
+        screen[4].contains(&format!("s.{first}")),
+        "{first} {screen:#?}"
+    );
+    assert!(!screen[4].contains(&second), "{second} {screen:#?}");
+}
+
+#[test]
 fn typing_filters_and_the_arrows_move_the_selection() {
     let (project, mut tinkery) = completion_project(&completion_script(""));
     open_completion(&project, &mut tinkery, 2);

@@ -152,15 +152,20 @@ impl Confirm {
     /// What a left click at `at` does when the card is drawn in `area`: a button
     /// presses it, anywhere outside the card is Esc (SPEC_V1_LAYOUT §7).
     pub fn click(&self, area: Rect, at: Position) -> Option<Reply> {
-        let card = self.card(area);
-        if !card.contains(at) {
+        if !self.card(area).contains(at) {
             return Some(Reply::Answer(Answer::Dismissed));
         }
-        self.buttons(card)
+        self.button_at(area, at)
+            .and_then(|button| self.choices.get(button))
+            .map(|choice| Reply::Answer(Answer::Picked(choice.key)))
+    }
+
+    /// The button under `at` when the card is drawn in `area`: the one a
+    /// click there presses, and the one the pointer there lights.
+    pub fn button_at(&self, area: Rect, at: Position) -> Option<usize> {
+        self.buttons(self.card(area))
             .into_iter()
-            .zip(self.choices)
-            .find(|(button, _)| button.contains(at))
-            .map(|(_, choice)| Reply::Answer(Answer::Picked(choice.key)))
+            .position(|button| button.contains(at))
     }
 
     /// Where the card goes in `area`: centred, 9 tall, and as wide as its
@@ -202,8 +207,17 @@ impl Confirm {
 
     /// Dims `area` and draws the card centred in it: a panel with the question
     /// in `strong` bold, the explanation in `text`, and the buttons, the
-    /// `focused` one filled.
-    pub fn render(&self, look: Look, theme: &Theme, frame: &mut Frame, area: Rect, focused: usize) {
+    /// `focused` one filled and the one at `hovered`, under the pointer, lit
+    /// unless it is the filled one.
+    pub fn render(
+        &self,
+        look: Look,
+        theme: &Theme,
+        frame: &mut Frame,
+        area: Rect,
+        focused: usize,
+        hovered: Option<usize>,
+    ) {
         let buf = frame.buffer_mut();
         kit::dim(theme, buf, area);
         let card = self.card(area);
@@ -231,7 +245,7 @@ impl Confirm {
                 choice.label,
                 &choice.key_label(),
                 choice.kind(i == focused),
-                false,
+                hovered == Some(i),
                 ground,
             );
             kit::put(buf, button.x, button.y, &spans, button.right());
@@ -290,6 +304,16 @@ mod tests {
 
     /// The card over a screen of `x`s in the theme's editor colours.
     fn draw(look: Look, theme: &Theme, focused: usize) -> anyhow::Result<Buffer> {
+        draw_under(look, theme, focused, None)
+    }
+
+    /// The card with the pointer on the button at `hovered`.
+    fn draw_under(
+        look: Look,
+        theme: &Theme,
+        focused: usize,
+        hovered: Option<usize>,
+    ) -> anyhow::Result<Buffer> {
         let mut terminal = Terminal::new(TestBackend::new(100, 30))?;
         terminal.draw(|frame| {
             let area = frame.area();
@@ -299,7 +323,7 @@ mod tests {
                     .buffer_mut()
                     .set_string(0, y, "x".repeat(usize::from(area.width)), behind);
             }
-            CARD.render(look, theme, frame, area, focused);
+            CARD.render(look, theme, frame, area, focused, hovered);
         })?;
         Ok(terminal.backend().buffer().clone())
     }
@@ -408,6 +432,57 @@ mod tests {
         for choice in CARD.choices {
             assert_eq!(choice.kind(false), ButtonKind::Normal, "{}", choice.label);
         }
+    }
+
+    #[test]
+    fn the_pointer_lights_a_waiting_button_and_never_the_filled_one() -> anyhow::Result<()> {
+        let area = Rect::new(0, 0, 100, 30);
+        // The button a click presses is the one the pointer lights.
+        let at = |x: u16| Position::new(x, BUTTONS_Y);
+        assert_eq!(CARD.button_at(area, at(SAVE_X)), Some(0));
+        assert_eq!(CARD.button_at(area, at(DISCARD_X + 10)), Some(1));
+        assert_eq!(CARD.button_at(area, at(DISCARD_X + 11)), None);
+        assert_eq!(CARD.button_at(area, at(CANCEL_X)), Some(2));
+        assert_eq!(
+            CARD.button_at(area, Position::new(SAVE_X, BUTTONS_Y - 1)),
+            None
+        );
+        assert_eq!(CARD.button_at(area, Position::new(0, 0)), None);
+        for x in [SAVE_X, DISCARD_X, CANCEL_X] {
+            let button = CARD.button_at(area, at(x)).map(|i| CARD.choices[i].key);
+            let pressed = CARD.click(area, at(x));
+            assert_eq!(
+                pressed,
+                button.map(|key| Reply::Answer(Answer::Picked(key)))
+            );
+        }
+
+        let theme = Theme::default();
+        assert_ne!(theme.hov, theme.btn);
+        let rest = draw(SQUARE, &theme, 0)?;
+        let lit = draw_under(SQUARE, &theme, 0, Some(1))?;
+        for x in DISCARD_X..DISCARD_X + 11 {
+            assert_eq!(rest[(x, BUTTONS_Y)].bg, theme.btn, "{x}");
+            assert_eq!(lit[(x, BUTTONS_Y)].bg, theme.hov, "{x}");
+        }
+        // Nothing else on the card changes.
+        assert_eq!(lit[(SAVE_X, BUTTONS_Y)].bg, theme.accent);
+        assert_eq!(lit[(CANCEL_X, BUTTONS_Y)].bg, theme.btn);
+        assert_eq!(row(&lit, BUTTONS_Y), row(&rest, BUTTONS_Y));
+        // The focused button is filled whatever the pointer is on: accent,
+        // or red when it loses work.
+        for focused in [0, 1] {
+            let rest = draw(SQUARE, &theme, focused)?;
+            let over = draw_under(SQUARE, &theme, focused, Some(focused))?;
+            assert_eq!(over, rest, "{focused}");
+        }
+        // `mono` tells its buttons apart by weight, and the pointer changes
+        // none of it.
+        let mono = Theme::named("mono").expect("mono exists");
+        let rest = draw(SQUARE, &mono, 0)?;
+        let over = draw_under(SQUARE, &mono, 0, Some(1))?;
+        assert_eq!(over, rest);
+        Ok(())
     }
 
     #[test]
@@ -631,7 +706,7 @@ mod tests {
         let theme = Theme::default();
         for (width, height) in [(40, 6), (20, 9), (5, 3), (2, 2), (1, 1)] {
             let mut terminal = Terminal::new(TestBackend::new(width, height))?;
-            terminal.draw(|frame| CARD.render(FLUSH, &theme, frame, frame.area(), 0))?;
+            terminal.draw(|frame| CARD.render(FLUSH, &theme, frame, frame.area(), 0, None))?;
             // No button is offered where none is drawn.
             let area = Rect::new(0, 0, width, height);
             let card = CARD.card(area);
@@ -642,7 +717,7 @@ mod tests {
         // At 40x6 the card is 38x4: the question and explanation, cut at the
         // inset, and no buttons.
         let mut terminal = Terminal::new(TestBackend::new(40, 6))?;
-        terminal.draw(|frame| CARD.render(SQUARE, &theme, frame, frame.area(), 0))?;
+        terminal.draw(|frame| CARD.render(SQUARE, &theme, frame, frame.area(), 0, None))?;
         let buffer = terminal.backend().buffer();
         let line = |y: u16| -> String { (0..40).map(|x| buffer[(x, y)].symbol()).collect() };
         assert_eq!(line(1), format!("  {}  ", "▁".repeat(36)));

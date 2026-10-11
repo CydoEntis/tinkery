@@ -23,7 +23,8 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::Parser;
 use crossterm::event::{
-    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
+    EnableFocusChange, EnableMouseCapture,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -115,7 +116,12 @@ fn setup_terminal() -> Result<Tui> {
     execute!(
         stdout,
         EnterAlternateScreen,
+        // Any-motion tracking included: a move with no button held is what
+        // lights the thing under the pointer.
         EnableMouseCapture,
+        // A terminal doesn't say when the pointer leaves it; losing the focus
+        // is the nearest it comes, and clears what the pointer lit.
+        EnableFocusChange,
         EnableBracketedPaste
     )?;
     let mut terminal = Terminal::new(UndercurlBackend::new(stdout))?;
@@ -130,6 +136,7 @@ fn restore_terminal() -> Result<()> {
     let screen = execute!(
         io::stdout(),
         DisableBracketedPaste,
+        DisableFocusChange,
         DisableMouseCapture,
         LeaveAlternateScreen,
         crossterm::cursor::Show

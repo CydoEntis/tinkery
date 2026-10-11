@@ -5,16 +5,20 @@
 use std::ops::Range;
 
 use ratatui::Frame;
-use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::layout::{Position, Rect};
+use ratatui::style::Style;
 use ratatui::text::Span;
 use ropey::Rope;
+use unicode_width::UnicodeWidthStr;
 
 use crate::keymap::{Action, Input};
 use crate::search::{self, Query};
 use crate::theme::Theme;
 use crate::ui::kit::{self, Look};
 use crate::ui::prompt::{Outcome, PromptBar};
+
+/// A chip's cells: its two letters between two ends.
+const CHIP_WIDTH: u16 = 4;
 
 /// What a key did to the find bar, for the editor to follow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -231,27 +235,52 @@ impl FindBar {
         }
     }
 
+    /// How many cells the chips and the count take at the right of the strip:
+    /// ` Aa   .*   1/3 `.
+    fn right_width(&self) -> u16 {
+        let count = u16::try_from(self.status().width()).unwrap_or(u16::MAX);
+        (2 * CHIP_WIDTH + 4).saturating_add(count)
+    }
+
+    /// Where the `Aa` chip starts on a strip whose inside is `inside`.
+    fn chips_x(&self, inside: Rect) -> u16 {
+        inside
+            .right()
+            .saturating_sub(self.right_width())
+            .max(inside.x)
+    }
+
+    /// The chip under `at` when the bar is drawn in `area`: 0 for `Aa`, 1 for
+    /// `.*`. The one the pointer there lights.
+    pub fn chip_at(&self, area: Rect, at: Position) -> Option<usize> {
+        let inside = kit::strip_inside(area);
+        if !inside.contains(at) {
+            return None;
+        }
+        let offset = at.x.checked_sub(self.chips_x(inside))?;
+        let (chip, within) = (offset / (CHIP_WIDTH + 1), offset % (CHIP_WIDTH + 1));
+        (chip < 2 && within < CHIP_WIDTH).then_some(usize::from(chip))
+    }
+
     /// Draws a strip of `raised2` on the editor's ground holding ` Find  text`
     /// (and, when it's there, a `│` rule at the middle and ` Replace  text` after
     /// it) with, at the right, the `Aa` and `.*` chips (`acc_ink` on `accent`
     /// while on, `muted` on `btn` while off) and the match count, and returns
-    /// where the cursor goes.
-    pub fn render(&self, look: Look, theme: &Theme, frame: &mut Frame, area: Rect) -> (u16, u16) {
+    /// where the cursor goes. The chip at `hovered`, the one under the
+    /// pointer, is lit while it's off.
+    pub fn render(
+        &self,
+        look: Look,
+        theme: &Theme,
+        frame: &mut Frame,
+        area: Rect,
+        hovered: Option<usize>,
+    ) -> (u16, u16) {
         let status = self.status();
         let fill = theme.raised2;
         let base = Style::new().bg(fill);
-        let chip = |text: &str, on: bool| {
-            let style = if on {
-                Style::new()
-                    .bg(theme.accent)
-                    .fg(theme.acc_ink)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::new()
-                    .bg(theme.btn)
-                    .fg(kit::ink(theme, theme.muted, theme.btn))
-            };
-            kit::chip(look, theme, text, style, fill)
+        let chip = |index: usize, text: &str, on: bool| {
+            kit::toggle(look, theme, text, on, hovered == Some(index), fill)
         };
         // A bad pattern is drawn in `err` along with the count saying why.
         let (pattern, status_style) = if self.error.is_some() {
@@ -260,13 +289,13 @@ impl FindBar {
             (Style::new(), base.fg(theme.strong))
         };
         // Right-aligned, each chip as wide as ` Aa `: ` Aa   .*   1/3 `.
-        let mut right = chip("Aa", self.case_sensitive);
+        let mut right = chip(0, "Aa", self.case_sensitive);
         right.push(Span::styled(" ", base));
-        right.extend(chip(".*", self.regex));
+        right.extend(chip(1, ".*", self.regex));
         right.push(Span::styled("  ", base));
         right.push(Span::styled(status, status_style));
         right.push(Span::styled(" ", base));
-        let width = kit::width(&right);
+        let width = self.right_width();
         let buf = frame.buffer_mut();
         let area = kit::strip(look, theme, buf, area, fill, theme.bg);
         let at = match &self.replace {
@@ -305,8 +334,7 @@ impl FindBar {
             }
         };
         // A row too narrow for them cuts the count, not the chips.
-        let x = area.right().saturating_sub(width).max(area.x);
-        kit::put(buf, x, area.y, &right, area.right());
+        kit::put(buf, self.chips_x(area), area.y, &right, area.right());
         at
     }
 }
@@ -317,6 +345,7 @@ mod tests {
     use crate::config::Corners;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::style::Modifier;
 
     fn rope() -> Rope {
         Rope::from_str("foo bar\nFoo foo\n")
@@ -452,8 +481,62 @@ mod tests {
     ) -> anyhow::Result<(ratatui::buffer::Buffer, (u16, u16))> {
         let mut terminal = Terminal::new(TestBackend::new(width, 1))?;
         let mut at = (0, 0);
-        terminal.draw(|frame| at = find.render(look, theme, frame, frame.area()))?;
+        terminal.draw(|frame| at = find.render(look, theme, frame, frame.area(), None))?;
         Ok((terminal.backend().buffer().clone(), at))
+    }
+
+    #[test]
+    fn the_pointer_lights_an_off_chip_where_it_is_drawn() -> anyhow::Result<()> {
+        let theme = Theme::default();
+        assert_ne!(theme.hov, theme.btn);
+        let rope = rope();
+        let mut find = FindBar::new("foo", 0, &rope);
+        find.handle(Input::Action(Action::FindCase), &rope);
+        let area = Rect::new(0, 0, 60, 1);
+        let (rest, _) = drawn(&find, SQUARE, &theme, 60)?;
+        // `Aa` is on and `.*` off: each chip is the cells its fill covers.
+        let chip = |x: u16| find.chip_at(area, Position::new(x, 0));
+        for x in 0..60 {
+            let fill = rest[(x, 0)].bg;
+            let expected = if fill == theme.accent {
+                Some(0)
+            } else if fill == theme.btn {
+                Some(1)
+            } else {
+                None
+            };
+            assert_eq!(chip(x), expected, "{x}");
+        }
+        assert_eq!((0..60).filter(|x| chip(*x) == Some(0)).count(), 4);
+        assert_eq!((0..60).filter(|x| chip(*x) == Some(1)).count(), 4);
+        assert_eq!(find.chip_at(area, Position::new(50, 1)), None);
+
+        let draw = |theme: &Theme, hovered: Option<usize>| -> anyhow::Result<_> {
+            let mut terminal = Terminal::new(TestBackend::new(60, 1))?;
+            terminal.draw(|frame| {
+                find.render(SQUARE, theme, frame, frame.area(), hovered);
+            })?;
+            Ok(terminal.backend().buffer().clone())
+        };
+        // The off chip turns `hov`, its text `text`; nothing else changes.
+        let lit = draw(&theme, Some(1))?;
+        for x in 0..60 {
+            let (was, now) = (&rest[(x, 0)], &lit[(x, 0)]);
+            assert_eq!(was.symbol(), now.symbol(), "{x}");
+            if chip(x) == Some(1) {
+                assert_eq!(now.bg, theme.hov, "{x}");
+            } else {
+                assert_eq!(was, now, "{x}");
+            }
+        }
+        let dot = (0..60).find(|x| lit[(*x, 0)].symbol() == ".").expect(".*");
+        assert_eq!(lit[(dot, 0)].fg, theme.text);
+        // The chip that is on stays the accent.
+        assert_eq!(draw(&theme, Some(0))?, rest);
+        // `mono` has no fills to turn.
+        let mono = Theme::named("mono").expect("mono exists");
+        assert_eq!(draw(&mono, Some(1))?, draw(&mono, None)?);
+        Ok(())
     }
 
     fn row(buffer: &ratatui::buffer::Buffer) -> String {
