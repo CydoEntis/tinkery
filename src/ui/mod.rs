@@ -7,6 +7,7 @@ pub mod find;
 pub mod hover;
 pub mod keybindings;
 pub mod kit;
+pub mod motion;
 pub mod nofile;
 pub mod picker;
 pub mod prompt;

@@ -49,6 +49,7 @@ use crate::ui::find::{FindBar, Step};
 use crate::ui::hover::render_hover;
 use crate::ui::keybindings::{self, Keybindings};
 use crate::ui::kit::{self, Look};
+use crate::ui::motion::{self, Pose};
 use crate::ui::nofile;
 use crate::ui::picker::{self, Picked, Picker};
 use crate::ui::prompt::{Outcome, PromptBar};
@@ -112,6 +113,11 @@ pub enum AppEvent {
     NoteExpired {
         note: u64,
     },
+    /// A note is `motion::TOAST_FADE` short of its hold, where it starts to
+    /// fade. Only sent with motion on.
+    NoteFading,
+    /// The next frame of a movement is due. Only sent while something moves.
+    Tick,
 }
 
 /// A question that takes over the keyboard until it's answered.
@@ -854,9 +860,27 @@ fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
-/// A screen with rows or chips for the pointer to be over.
+/// The time movements run on: tokio's, as the timers that send their frames
+/// do, so a test's paused clock moves both.
+type Moment = tokio::time::Instant;
+
+/// The selection pill on its way to the selected row of a list
+/// (tinkery-forge spec F23). Where it is going isn't kept: it is wherever the
+/// list draws its selected row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Glide {
+    place: Place,
+    /// The screen row it left, where the frame before drew it.
+    from: u16,
+    start: Moment,
+}
+
+/// A screen with rows or chips for the pointer to be over, or with a selected
+/// row for the pill to glide to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Place {
+    /// The tree; the pointer's row in it is `Hovered::Tree`.
+    Tree,
     Search,
     Keybindings,
     Catalog,
@@ -987,6 +1011,22 @@ pub struct App {
     /// moves and once the terminal loses the focus. Drawing lights what is
     /// under it (see `hovered`); nothing else reads it.
     pointer: Option<(u16, u16)>,
+    /// `TINKERY_MOTION=0`: nothing moves, whatever `[ui] motion` says.
+    still: bool,
+    /// The time of the event being handled, which is the time the frame drawn
+    /// after it shows. Rendering reads this and never a clock, so a frame is
+    /// a function of `App`. `None` outside the event loop (unit tests set it
+    /// by hand); with none, nothing moves.
+    clock: Option<Moment>,
+    /// The selection pill's glide, from when the selection last moved.
+    glide: Option<Glide>,
+    /// The list and screen row the last frame drew the selection pill on,
+    /// where a glide starts from. `draw` reads it back off the frame.
+    pill: Option<(Place, u16)>,
+    /// When the note on show went up, for its slide and its fade.
+    note_at: Option<Moment>,
+    /// A `Tick` is on its way; there is never more than one.
+    ticking: bool,
     backups: Backups,
     /// The backup text the recover prompt is offering.
     recovery: Option<String>,
@@ -1090,6 +1130,13 @@ impl App {
         self
     }
 
+    /// Lets `[ui] motion` decide whether things move, or, with `allowed`
+    /// false, keeps everything still whatever it says.
+    pub fn with_motion(mut self, allowed: bool) -> Self {
+        self.still = !allowed;
+        self
+    }
+
     /// Starts language servers from `[lsp.<lang>]` as files of each language open.
     pub fn with_lsp(mut self, lsp: Lsp) -> Self {
         self.lsp = lsp;
@@ -1145,10 +1192,13 @@ impl App {
         let (tx, mut rx) = mpsc::unbounded_channel();
         self.edits = Some(backup::spawn_timer(tx.clone()));
         self.events = Some(tx.clone());
+        self.clock = Some(Moment::now());
         // A note from startup (a bad config, a file that wouldn't open) was
         // raised before there was a channel to time it on.
         if self.message.is_some() {
+            self.note_at = self.clock;
             self.expire_note();
+            self.keep_moving();
         }
         self.lsp.connect(tx.clone());
         let input = tokio::spawn(read_input(tx));
@@ -1175,6 +1225,9 @@ impl App {
             if let AppEvent::Input(Event::Resize(width, height)) = event {
                 self.screen = Rect::new(0, 0, width, height);
             }
+            // Read once per event: what the event starts, starts now, and the
+            // frame drawn after it shows this moment.
+            self.clock = Some(Moment::now());
             // The pointer moving over the same thing changes nothing on
             // screen, and a terminal reports every cell it crosses.
             if !self.apply(event) {
@@ -1189,7 +1242,18 @@ impl App {
     /// Handles `event` and says whether the screen needs drawing again. Only
     /// the pointer moving can leave it as it was: within one row, button, tab
     /// or chip, or across cells that light nothing.
+    ///
+    /// A selection the event moved starts the pill's glide, and while anything
+    /// is moving the next frame's `Tick` is sent for.
     fn apply(&mut self, event: AppEvent) -> bool {
+        let was = self.selection();
+        let redraw = self.apply_event(event);
+        self.glide_from(was);
+        self.keep_moving();
+        redraw
+    }
+
+    fn apply_event(&mut self, event: AppEvent) -> bool {
         let moved = matches!(
             &event,
             AppEvent::Input(Event::Mouse(mouse)) if mouse.kind == MouseEventKind::Moved
@@ -1201,6 +1265,186 @@ impl App {
         let before = self.hovered(self.screen);
         self.handle_event(event);
         self.hovered(self.screen) != before
+    }
+
+    /// The time to draw movements at, or `None` when nothing moves: `[ui]
+    /// motion` is off, `TINKERY_MOTION=0` says so, the theme is `mono`, which
+    /// has no fills to move or blend, or there is no clock.
+    fn moving_at(&self) -> Option<Moment> {
+        let on = self.look.motion && !self.still && !self.theme.flat();
+        self.clock.filter(|_| on)
+    }
+
+    /// The list that has the keys and which of its rows is selected: the tree
+    /// while it has the focus, or the list in the dialog on top. The debug
+    /// panel's lists aren't among them; their selection moves at once.
+    fn selection(&self) -> Option<(Place, usize)> {
+        if self.prompt.is_some() {
+            return None;
+        }
+        if let Some(panel) = &self.project_search {
+            return Some((Place::Search, panel.selected_index()));
+        }
+        if let Some(card) = &self.keybindings {
+            return Some((Place::Keybindings, card.selected_index()));
+        }
+        if let Some(catalog) = &self.catalog {
+            return Some((Place::Catalog, catalog.selected_index()));
+        }
+        if let Some(browser) = &self.folders {
+            return Some((Place::Folders, browser.selected_index()));
+        }
+        if let Some(picker) = &self.picker {
+            return Some((Place::Picker, picker.selected_index()));
+        }
+        if self.find.is_some() || self.name_prompt.is_some() {
+            return None;
+        }
+        if let Some(open) = &self.completion
+            && open.doc == self.tabs.active().id
+        {
+            return Some((Place::Completion, open.selected_index()));
+        }
+        (self.focus == Focus::Tree && self.tree_visible)
+            .then(|| (Place::Tree, self.tree.selected()))
+    }
+
+    /// The card the list at `place` draws its rows in, on a screen of
+    /// `screen`; `None` when it isn't on show.
+    fn list_card(&self, place: Place, screen: Rect) -> Option<Rect> {
+        match place {
+            Place::Tree => self.panes_in(screen).tree,
+            Place::Search => self
+                .project_search
+                .as_ref()
+                .map(|_| ProjectSearch::card(screen)),
+            Place::Keybindings => self.keybindings.as_ref().map(|card| card.card(screen)),
+            Place::Catalog => self.catalog.as_ref().map(|catalog| catalog.card(screen)),
+            Place::Folders => self.folders.as_ref().map(|browser| browser.card(screen)),
+            Place::Picker => self.picker.as_ref().map(|picker| picker.card(screen)),
+            Place::Completion => {
+                let panes = self.panes_in(screen);
+                let (open, typed, cell, bounds) = self.completion_shown(&panes, screen)?;
+                open.card(&typed, cell, bounds)
+            }
+            Place::Find => None,
+        }
+    }
+
+    /// Starts the pill's glide when the event just handled moved the selection
+    /// of the list that had the keys before it (`was`): from the row the last
+    /// frame drew the pill on. A list that opened, closed or gave way to
+    /// another has nothing to glide from.
+    fn glide_from(&mut self, was: Option<(Place, usize)>) {
+        let moved = match (was, self.selection()) {
+            (Some((before, old)), Some((place, new))) if before == place => old != new,
+            _ => {
+                self.glide = None;
+                return;
+            }
+        };
+        if !moved {
+            return;
+        }
+        self.glide = match (self.moving_at(), self.pill, was) {
+            (Some(start), Some((on, from)), Some((place, _))) if on == place => {
+                Some(Glide { place, from, start })
+            }
+            _ => None,
+        };
+    }
+
+    /// How far the pill of the list at `place` is through its glide, with the
+    /// row it left: `None` when it isn't gliding, or has arrived.
+    fn glide_of(&self, place: Place) -> Option<(u16, f64)> {
+        let now = self.moving_at()?;
+        let glide = self.glide.filter(|glide| glide.place == place)?;
+        let p = motion::progress(now.saturating_duration_since(glide.start), motion::GLIDE);
+        (p < 1.0).then_some((glide.from, p))
+    }
+
+    /// Where the toast is in its slide and fade at the frame's time.
+    fn toast_pose(&self) -> Pose {
+        match (self.moving_at(), self.note_at) {
+            (Some(now), Some(at)) => Pose::at(
+                now.saturating_duration_since(at),
+                toast::hold(self.message_tone),
+            ),
+            _ => Pose::STILL,
+        }
+    }
+
+    /// Whether a frame drawn a moment from now would differ from one drawn
+    /// now: the pill is gliding, or the toast is sliding in or fading.
+    fn moving(&self) -> bool {
+        let Some(now) = self.moving_at() else {
+            return false;
+        };
+        let gliding = self
+            .glide
+            .is_some_and(|glide| now.saturating_duration_since(glide.start) < motion::GLIDE);
+        let toast = self.message.is_some()
+            && self.note_at.is_some_and(|at| {
+                Pose::moving(
+                    now.saturating_duration_since(at),
+                    toast::hold(self.message_tone),
+                )
+            });
+        gliding || toast
+    }
+
+    /// Sends for the next frame's `Tick` while something is moving. One at a
+    /// time: each `Tick` that finds things still moving sends for the next, and
+    /// the one that finds them at rest is the last, so an idle editor is sent
+    /// nothing. Without a channel (in tests, which send the event themselves)
+    /// nothing is sent.
+    fn keep_moving(&mut self) {
+        if self.ticking || !self.moving() {
+            return;
+        }
+        let Some(events) = self.events.clone() else {
+            return;
+        };
+        self.ticking = true;
+        tokio::spawn(async move {
+            tokio::time::sleep(motion::FRAME).await;
+            // The loop has stopped if this fails; nothing is waiting.
+            let _ = events.send(AppEvent::Tick);
+        });
+    }
+
+    /// Draws the list at `place` with `draw`, its selection pill where its
+    /// glide has it at this frame's time. `draw` is the list's own drawing
+    /// with the look it is handed. A list knows where its selected row is
+    /// only by drawing it, so a gliding one is drawn to find that row, and,
+    /// unless the pill is there already, drawn again over what was behind it
+    /// with the pill on the row it is passing.
+    fn draw_list(&self, place: Place, frame: &mut Frame, draw: impl Fn(Look, &mut Frame)) {
+        let gliding = self
+            .glide_of(place)
+            .zip(self.list_card(place, frame.area()));
+        let Some(((from, p), card)) = gliding else {
+            return draw(self.look, frame);
+        };
+        let behind = frame.buffer_mut().clone();
+        draw(self.look, frame);
+        let Some(to) = kit::marked_row(frame.buffer_mut(), card) else {
+            return;
+        };
+        let at = motion::glide_row(from, to, p);
+        if at != to {
+            *frame.buffer_mut() = behind;
+            draw(self.look.gliding(at), frame);
+        }
+    }
+
+    /// Notes where `frame`, just drawn, has the selection pill of the list
+    /// with the keys: the row the next glide leaves from.
+    fn saw(&mut self, frame: &ratatui::buffer::Buffer) {
+        self.pill = self.selection().and_then(|(place, _)| {
+            let card = self.list_card(place, frame.area)?;
+            Some((place, kit::marked_row(frame, card)?))
+        });
     }
 
     /// What the pointer is over, on a screen of `screen`: the one row, button,
@@ -1302,7 +1546,9 @@ impl App {
     fn draw(&mut self, terminal: &mut Tui) -> Result<()> {
         self.sync_highlights();
         execute!(terminal.backend_mut(), BeginSynchronizedUpdate)?;
-        self.screen = terminal.draw(|frame| self.render(frame))?.area;
+        let drawn = terminal.draw(|frame| self.render(frame))?;
+        self.screen = drawn.area;
+        self.saw(drawn.buffer);
         execute!(terminal.backend_mut(), EndSynchronizedUpdate)?;
         Ok(())
     }
@@ -1546,6 +1792,19 @@ impl App {
                 // A newer note has its own timer; this one's is stale.
                 if note == self.notes {
                     self.message = None;
+                }
+            }
+            // Both only wake the loop: the frame drawn after them shows the
+            // movement at the time they arrived, and `apply` sends for the
+            // next `Tick` while there is more to show.
+            AppEvent::NoteFading => {}
+            AppEvent::Tick => {
+                self.ticking = false;
+                if self
+                    .glide
+                    .is_some_and(|glide| self.glide_of(glide.place).is_none())
+                {
+                    self.glide = None;
                 }
             }
             AppEvent::FormatTimedOut { format } => {
@@ -4758,7 +5017,9 @@ impl App {
         self.message = Some(text.into());
         self.message_tone = tone;
         self.notes += 1;
+        self.note_at = self.clock;
         self.expire_note();
+        self.keep_moving();
     }
 
     /// Starts the clock on the note on show: `NoteExpired` with its number
@@ -4776,6 +5037,17 @@ impl App {
             // The loop has stopped if this fails; nothing is waiting.
             let _ = events.send(AppEvent::NoteExpired { note });
         });
+        // Nothing draws between the slide in and the fade; this wakes the
+        // loop for the fade, which is the end of the hold and not after it.
+        if self.moving_at().is_some()
+            && let Some(events) = self.events.clone()
+        {
+            let fading = due - motion::TOAST_FADE;
+            tokio::spawn(async move {
+                tokio::time::sleep_until(fading).await;
+                let _ = events.send(AppEvent::NoteFading);
+            });
+        }
     }
 
     /// Whether a prompt, picker, bar or panel is taking the keys.
@@ -5003,11 +5275,13 @@ impl App {
                     _ => None,
                 },
             };
-            let selected = render_tree(self.look, theme, &self.tree, &marks, focused, tree, frame);
-            // The cursor marks the focused pane; `render_buffer` put it in the editor.
-            if focused && let Some(at) = selected {
-                frame.set_cursor_position(at);
-            }
+            self.draw_list(Place::Tree, frame, |look, frame| {
+                let selected = render_tree(look, theme, &self.tree, &marks, focused, tree, frame);
+                // The cursor marks the focused pane; `render_buffer` put it in the editor.
+                if focused && let Some(at) = selected {
+                    frame.set_cursor_position(at);
+                }
+            });
         }
         if let Some(area) = panes.run {
             match &self.debug {
@@ -5099,7 +5373,9 @@ impl App {
         }
         if let Some((open, typed, at, bounds)) = self.completion_shown(&panes, screen) {
             let row = hovered_row(Place::Completion);
-            open.render(self.look, theme, &typed, at, bounds, row, frame);
+            self.draw_list(Place::Completion, frame, |look, frame| {
+                open.render(look, theme, &typed, at, bounds, row, frame);
+            });
         }
         if let (Some(name_prompt), Some(area)) = (&self.name_prompt, panes.bar) {
             let hint = name_prompt.op.hint();
@@ -5113,28 +5389,38 @@ impl App {
         }
         if let Some(picker) = &self.picker {
             let row = hovered_row(Place::Picker);
-            let at = picker.render(self.look, theme, frame, frame.area(), row);
-            frame.set_cursor_position(at);
+            self.draw_list(Place::Picker, frame, |look, frame| {
+                let at = picker.render(look, theme, frame, frame.area(), row);
+                frame.set_cursor_position(at);
+            });
         }
         if let Some(browser) = &self.folders {
             let row = hovered_row(Place::Folders);
-            let at = browser.render(self.look, theme, frame, frame.area(), row);
-            frame.set_cursor_position(at);
+            self.draw_list(Place::Folders, frame, |look, frame| {
+                let at = browser.render(look, theme, frame, frame.area(), row);
+                frame.set_cursor_position(at);
+            });
         }
         // Nothing is typed into the catalog, so it shows no cursor.
         if let Some(catalog) = &self.catalog {
             let row = hovered_row(Place::Catalog);
-            catalog.render(self.look, theme, frame, frame.area(), row);
+            self.draw_list(Place::Catalog, frame, |look, frame| {
+                catalog.render(look, theme, frame, frame.area(), row);
+            });
         }
         if let Some(card) = &self.keybindings {
             let row = hovered_row(Place::Keybindings);
-            let at = card.render(self.look, theme, frame, frame.area(), row);
-            frame.set_cursor_position(at);
+            self.draw_list(Place::Keybindings, frame, |look, frame| {
+                let at = card.render(look, theme, frame, frame.area(), row);
+                frame.set_cursor_position(at);
+            });
         }
         if let Some(panel) = &self.project_search {
             let over = (hovered_row(Place::Search), hovered_chip(Place::Search));
-            let at = panel.render(self.look, theme, frame, frame.area(), over);
-            frame.set_cursor_position(at);
+            self.draw_list(Place::Search, frame, |look, frame| {
+                let at = panel.render(look, theme, frame, frame.area(), over);
+                frame.set_cursor_position(at);
+            });
         }
         if let Some(prompt) = self.prompt {
             let button = match hovered {
@@ -5159,6 +5445,7 @@ impl App {
                 theme,
                 self.message_tone,
                 text,
+                self.toast_pose(),
                 area,
                 frame.buffer_mut(),
             );
@@ -7837,6 +8124,452 @@ world",
             .map(|at| buffer[at].symbol())
             .collect();
         assert!(!all.contains("saved a.txt"), "{all}");
+        Ok(())
+    }
+
+    /// `app` drawn at 100x30 as the event loop draws it: the frame, with
+    /// `app` told where it put the selection pill.
+    fn shown(app: &mut App) -> Result<ratatui::buffer::Buffer> {
+        let frame = frame_of(app)?;
+        app.saw(&frame);
+        Ok(frame)
+    }
+
+    /// Handles `event` at `now`, as the event loop does.
+    fn at(app: &mut App, now: Moment, event: AppEvent) -> bool {
+        app.clock = Some(now);
+        app.apply(event)
+    }
+
+    fn ms(n: u64) -> Duration {
+        Duration::from_millis(n)
+    }
+
+    /// Presses `keys` in the list at `place` and checks its pill glides to
+    /// the row they select: on the row it left at 0 %, on the eased row
+    /// between at 50 %, there at 100 %, and the same at once with motion off.
+    fn assert_glides(app: &mut App, place: Place, keys: &[&str]) -> Result<()> {
+        let hov = app.theme.hov;
+        let t0 = Moment::now();
+        app.clock = Some(t0);
+        let before = shown(app)?;
+        let card = app.list_card(place, app.screen).expect("the list is open");
+        let from = kit::marked_row(&before, card).expect("a row is selected");
+        assert_eq!(app.pill, Some((place, from)));
+        assert!(!app.moving(), "{place:?}: at rest before the move");
+        for k in keys {
+            at(app, t0, key(k));
+        }
+        // Where it ends is where the list draws its selection with motion off.
+        app.still = true;
+        assert_eq!(app.glide_of(place), None);
+        let end = frame_of(app)?;
+        app.still = false;
+        let to = kit::marked_row(&end, card).expect("a row is selected");
+        assert!(to.abs_diff(from) >= 5, "{place:?}: {from} to {to}");
+        let half = motion::glide_row(from, to, 0.5);
+        assert!(half != from && half != to, "{place:?}: {half}");
+
+        let (cap_l, mark, cap_r) = (card.x + 1, card.x + 2, card.right() - 2);
+        for (elapsed, row) in [(0, from), (45, half), (90, to)] {
+            app.clock = Some(t0 + ms(elapsed));
+            let frame = frame_of(app)?;
+            let what = format!("{place:?} at {elapsed} ms");
+            // The pill is on exactly one row, and it is this one.
+            let marked: Vec<u16> = (0..30)
+                .filter(|&y| frame[(mark, y)].symbol() == kit::SEL_MARK)
+                .collect();
+            assert_eq!(marked, [row], "{what}");
+            assert_eq!(frame[(mark + 3, row)].bg, hov, "{what}");
+            if row != to {
+                // The selected row waits unlit, and frames keep coming.
+                assert_ne!(frame[(mark + 3, to)].bg, hov, "{what}");
+                assert!(app.moving(), "{what}");
+            }
+            // Text never moves: only the pill's ends and mark differ from
+            // the frame it ends on.
+            for y in 0..30 {
+                for x in (0..100).filter(|x| ![cap_l, mark, cap_r].contains(x)) {
+                    let (now, then) = (frame[(x, y)].symbol(), end[(x, y)].symbol());
+                    assert_eq!(now, then, "{what}: ({x}, {y})");
+                }
+            }
+            if elapsed == 90 {
+                assert_eq!(frame, end, "{what}");
+                assert!(!app.moving(), "{what}");
+            }
+        }
+        // The tick that finds it arrived puts the glide away.
+        at(app, t0 + ms(90), AppEvent::Tick);
+        assert_eq!(app.glide, None, "{place:?}");
+        // With no clock at all, as in every other unit test, it is there too.
+        app.clock = None;
+        assert_eq!(frame_of(app)?, end);
+        Ok(())
+    }
+
+    /// A folder of nine files, opened as the project with the tree focused.
+    fn nine_files() -> Result<(tempfile::TempDir, App)> {
+        let dir = tempfile::tempdir()?;
+        for n in 1..=9 {
+            std::fs::write(dir.path().join(format!("f{n}.txt")), "x")?;
+        }
+        let mut app = App::new(
+            Keymap::default(),
+            EditorConfig::default(),
+            Some(dir.path().to_path_buf()),
+            None,
+        );
+        app.screen = Rect::new(0, 0, 100, 30);
+        press(&mut app, &["ctrl+e"]);
+        assert_eq!(app.focus, Focus::Tree);
+        Ok((dir, app))
+    }
+
+    #[test]
+    fn the_trees_selection_glides_to_its_new_row() -> Result<()> {
+        let (_dir, mut app) = nine_files()?;
+        assert_glides(&mut app, Place::Tree, &["ctrl+end"])?;
+        assert_eq!(selected_name(&app), Some("f9.txt"));
+        // And back up.
+        assert_glides(&mut app, Place::Tree, &["up", "up", "up", "up", "up"])?;
+        assert_eq!(selected_name(&app), Some("f4.txt"));
+        Ok(())
+    }
+
+    #[test]
+    fn the_keybindings_cards_selection_glides() -> Result<()> {
+        let mut app = app_with("", &FakeClipboard::default());
+        app.handle_action(Action::Keybindings);
+        assert_glides(&mut app, Place::Keybindings, &["down"; 5])
+    }
+
+    #[test]
+    fn the_catalogs_selection_glides() -> Result<()> {
+        let mut app = app_with("", &FakeClipboard::default());
+        app.open_catalog();
+        assert_glides(&mut app, Place::Catalog, &["down"; 5])
+    }
+
+    #[test]
+    fn the_casts_selection_glides() -> Result<()> {
+        let (_dir, mut app) = nine_files()?;
+        // Its commands, which it lists more of than files.
+        press(&mut app, &["ctrl+p", ">"]);
+        assert_glides(&mut app, Place::Picker, &["down"; 6])
+    }
+
+    #[test]
+    fn a_selection_that_moves_again_glides_on_from_where_the_pill_is() -> Result<()> {
+        let (_dir, mut app) = nine_files()?;
+        let t0 = Moment::now();
+        app.clock = Some(t0);
+        shown(&mut app)?;
+        at(&mut app, t0, key("ctrl+end"));
+        // Half way there the pill is on row 10; the frame is drawn, and then
+        // Ctrl+Home sends it back: it leaves from row 10, not from the end.
+        app.clock = Some(t0 + ms(45));
+        shown(&mut app)?;
+        assert_eq!(app.pill, Some((Place::Tree, 10)));
+        at(&mut app, t0 + ms(45), key("ctrl+home"));
+        let glide = app.glide.expect("the pill is gliding");
+        assert_eq!((glide.from, glide.start), (10, t0 + ms(45)));
+        let frame = frame_of(&app)?;
+        assert_eq!(kit::marked_row(&frame, Rect::new(0, 0, 28, 29)), Some(10));
+        app.clock = Some(t0 + ms(135));
+        let frame = frame_of(&app)?;
+        assert_eq!(kit::marked_row(&frame, Rect::new(0, 0, 28, 29)), Some(3));
+        Ok(())
+    }
+
+    #[test]
+    fn nothing_glides_when_a_list_opens_closes_or_keeps_its_selection() -> Result<()> {
+        let (_dir, mut app) = nine_files()?;
+        let t0 = Moment::now();
+        app.clock = Some(t0);
+        shown(&mut app)?;
+        // A key that moves nothing: the selection is on the first row already.
+        at(&mut app, t0, key("up"));
+        assert_eq!(app.glide, None);
+        assert!(!app.moving());
+        // Another list opening over the tree is not the tree's pill moving.
+        at(&mut app, t0, key("ctrl+end"));
+        assert!(app.moving());
+        at(&mut app, t0, key("ctrl+p"));
+        assert_eq!(app.glide, None);
+        assert!(!app.moving());
+        shown(&mut app)?;
+        at(&mut app, t0, key("esc"));
+        assert_eq!(app.glide, None);
+        assert!(!app.moving());
+        Ok(())
+    }
+
+    /// A way motion is off, and what makes `app` so.
+    type Still = (&'static str, fn(&mut App));
+
+    /// The three ways motion is off.
+    fn stills() -> [Still; 3] {
+        [
+            ("[ui] motion = false", |app| app.look.motion = false),
+            ("mono", |app| {
+                app.theme = Theme::named("mono").expect("mono exists");
+            }),
+            ("TINKERY_MOTION=0", |app| app.still = true),
+        ]
+    }
+
+    #[test]
+    fn with_motion_off_the_first_frame_after_a_move_is_the_last() -> Result<()> {
+        for (how, off) in stills() {
+            let (_dir, mut app) = nine_files()?;
+            off(&mut app);
+            let t0 = Moment::now();
+            app.clock = Some(t0);
+            shown(&mut app)?;
+            at(&mut app, t0, key("ctrl+end"));
+            assert_eq!(app.glide, None, "{how}");
+            assert!(!app.moving(), "{how}");
+            // Drawn at the moment of the move, the pill is on its new row,
+            // and no later frame differs.
+            let first = frame_of(&app)?;
+            assert_eq!(
+                kit::marked_row(&first, Rect::new(0, 0, 28, 29)),
+                Some(11),
+                "{how}"
+            );
+            for later in [16, 45, 90, 5000] {
+                app.clock = Some(t0 + ms(later));
+                assert_eq!(frame_of(&app)?, first, "{how} at {later} ms");
+            }
+            // The same frame as an editor that never knew the time.
+            app.clock = None;
+            assert_eq!(frame_of(&app)?, first, "{how}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_toast_slides_in_and_fades_at_the_time_of_the_frame() -> Result<()> {
+        let mut app = app_with("hello", &FakeClipboard::default());
+        let t0 = Moment::now();
+        app.clock = Some(t0);
+        app.say(Tone::Ok, "saved a.txt");
+        assert_eq!(app.note_at, Some(t0));
+        let frame = |app: &mut App, elapsed: u64| {
+            app.clock = Some(t0 + ms(elapsed));
+            frame_of(app)
+        };
+        app.still = true;
+        let still = frame(&mut app, 0)?;
+        app.still = false;
+        let text = |frame: &ratatui::buffer::Buffer| -> String {
+            (0..100).map(|x| frame[(x, 4)].symbol()).collect()
+        };
+        assert!(text(&still).ends_with(" ✓ saved a.txt \u{e0b4}  "));
+
+        // Sliding in: off the edge at 0 %; at 50 % an eighth of its nineteen
+        // cells short, which is its two-cell margin; in place at 100 %.
+        let start = frame(&mut app, 0)?;
+        assert!(!text(&start).contains("saved"), "{:?}", text(&start));
+        assert!(app.moving());
+        let half = frame(&mut app, 60)?;
+        assert!(text(&half).ends_with(" ✓ saved a.txt \u{e0b4}"));
+        assert!(app.moving());
+        assert_eq!(frame(&mut app, 120)?, still);
+        assert!(!app.moving());
+        // Between the slide and the fade nothing moves.
+        assert_eq!(frame(&mut app, 1000)?, still);
+        assert!(!app.moving());
+
+        // Fading over the last 350 ms of its 2.5 s: as drawn at 0 %, half
+        // way to the ground at 50 %, the ground's colour at 100 %.
+        let (theme, x) = (app.theme.clone(), 90);
+        assert_eq!(still[(x, 4)].bg, theme.raised2);
+        assert_eq!(frame(&mut app, 2150)?, still);
+        assert!(app.moving());
+        let half = frame(&mut app, 2325)?;
+        assert_eq!(text(&half), text(&still));
+        assert_eq!(
+            half[(x, 4)].bg,
+            crate::theme::mix(theme.raised2, theme.bg, 0.5)
+        );
+        assert_eq!(
+            half[(x, 4)].fg,
+            crate::theme::mix(theme.strong, theme.bg, 0.5)
+        );
+        assert!(app.moving());
+        let gone = frame(&mut app, 2500)?;
+        assert_eq!((gone[(x, 4)].fg, gone[(x, 4)].bg), (theme.bg, theme.bg));
+        // Its hold is up: it is taken down, as it always was, not moved.
+        assert!(!app.moving());
+        app.handle_event(AppEvent::NoteExpired { note: app.notes });
+        assert!(!text(&frame(&mut app, 2500)?).contains("saved"));
+        Ok(())
+    }
+
+    #[test]
+    fn with_motion_off_a_toast_is_in_place_at_once_and_leaves_in_one_step() -> Result<()> {
+        for (how, off) in stills() {
+            let mut app = app_with("hello", &FakeClipboard::default());
+            off(&mut app);
+            let t0 = Moment::now();
+            app.clock = Some(t0);
+            app.say(Tone::Ok, "saved a.txt");
+            assert!(!app.moving(), "{how}");
+            let first = frame_of(&app)?;
+            let text: String = (0..100).map(|x| first[(x, 4)].symbol()).collect();
+            assert!(text.contains("✓ saved a.txt"), "{how}: {text:?}");
+            for later in [16, 60, 120, 2150, 2325, 2499] {
+                app.clock = Some(t0 + ms(later));
+                assert_eq!(frame_of(&app)?, first, "{how} at {later} ms");
+                assert!(!app.moving(), "{how} at {later} ms");
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn saving_the_config_file_applies_motion() {
+        let mut app = app_with("", &FakeClipboard::default());
+        app.clock = Some(Moment::now());
+        assert!(app.moving_at().is_some());
+        app.apply_config_text("[ui]\nmotion = false\n").unwrap();
+        assert!(!app.look.motion);
+        assert_eq!(app.moving_at(), None);
+        app.apply_config_text("").unwrap();
+        assert!(app.moving_at().is_some());
+        // `TINKERY_MOTION=0` outlasts a save that asks for motion.
+        let mut app = app_with("", &FakeClipboard::default()).with_motion(false);
+        app.clock = Some(Moment::now());
+        app.apply_config_text("[ui]\nmotion = true\n").unwrap();
+        assert!(app.look.motion);
+        assert_eq!(app.moving_at(), None);
+    }
+
+    /// Hands `app` every event on `rx` as the loop would, at the paused
+    /// clock's time, until nothing has come for a minute; returns what came
+    /// and how long after `t0`.
+    async fn run_dry(
+        app: &mut App,
+        rx: &mut mpsc::UnboundedReceiver<AppEvent>,
+        t0: Moment,
+    ) -> Vec<(&'static str, u64)> {
+        let mut seen = Vec::new();
+        while let Ok(Some(event)) = tokio::time::timeout(Duration::from_secs(60), rx.recv()).await {
+            let name = match &event {
+                AppEvent::Tick => "tick",
+                AppEvent::NoteFading => "fading",
+                AppEvent::NoteExpired { .. } => "expired",
+                _ => "other",
+            };
+            let after = u64::try_from(t0.elapsed().as_millis()).expect("a short test");
+            seen.push((name, after));
+            at(app, Moment::now(), event);
+        }
+        seen
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_glide_is_ticked_every_16_ms_until_it_arrives_and_then_no_more() -> Result<()> {
+        let (_dir, mut app) = nine_files()?;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        app.events = Some(tx);
+        let t0 = Moment::now();
+        app.clock = Some(t0);
+        shown(&mut app)?;
+        assert!(!app.ticking);
+        at(&mut app, t0, key("ctrl+end"));
+        assert!(app.ticking);
+        // A second move while one tick is on its way sends for no second one.
+        at(&mut app, t0, key("up"));
+        let seen = run_dry(&mut app, &mut rx, t0).await;
+        // 90 ms of glide: the tick at 96 ms draws the last frame and is the
+        // last tick.
+        let ticks: Vec<(&str, u64)> = (1..=6).map(|n| ("tick", n * 16)).collect();
+        assert_eq!(seen, ticks);
+        assert!(!app.ticking);
+        assert_eq!(app.glide, None);
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_toast_is_ticked_while_it_slides_in_and_while_it_fades_only() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut app = App {
+            events: Some(tx),
+            ..App::default()
+        };
+        let t0 = Moment::now();
+        app.clock = Some(t0);
+        app.say(Tone::Ok, "saved a.txt");
+        let seen = run_dry(&mut app, &mut rx, t0).await;
+        // Sliding in for 120 ms: the tick at 128 ms draws it in place.
+        let mut expected: Vec<(&str, u64)> = (1..=8).map(|n| ("tick", n * 16)).collect();
+        // Nothing for two seconds, then the fade over the last 350 ms.
+        expected.push(("fading", 2150));
+        expected.extend((1..=21).map(|n| ("tick", 2150 + n * 16)));
+        // It leaves when its hold is up, exactly as with motion off; the tick
+        // already on its way finds nothing moving and is the last.
+        expected.push(("expired", 2500));
+        expected.push(("tick", 2502));
+        assert_eq!(seen, expected);
+        assert_eq!(app.message, None);
+        assert!(!app.ticking);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn no_tick_is_sent_for_with_motion_off() -> Result<()> {
+        for (how, off) in stills() {
+            let (_dir, mut app) = nine_files()?;
+            off(&mut app);
+            let (tx, mut rx) = mpsc::unbounded_channel();
+            app.events = Some(tx);
+            let t0 = Moment::now();
+            app.clock = Some(t0);
+            shown(&mut app)?;
+            // The selection moves and a note goes up: with motion on, both
+            // would be ticked.
+            at(&mut app, t0, key("ctrl+end"));
+            app.say(Tone::Ok, "saved a.txt");
+            assert!(!app.ticking, "{how}");
+            let seen = run_dry(&mut app, &mut rx, t0).await;
+            assert_eq!(seen, [("expired", 2500)], "{how}");
+            assert!(!app.ticking, "{how}");
+        }
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn no_tick_is_sent_for_while_nothing_moves() -> Result<()> {
+        let (_dir, mut app) = nine_files()?;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        app.events = Some(tx);
+        let t0 = Moment::now();
+        app.clock = Some(t0);
+        shown(&mut app)?;
+        assert!(app.moving_at().is_some(), "motion is on");
+        // Keys that move no selection, the pointer, a resize, a stray tick.
+        let moved = AppEvent::Input(Event::Mouse(mouse(MouseEventKind::Moved, 40, 10)));
+        let events = [
+            key("up"),
+            key("right"),
+            moved,
+            AppEvent::Input(Event::Resize(100, 30)),
+            AppEvent::Input(Event::FocusLost),
+            AppEvent::Tick,
+        ];
+        for event in events {
+            at(&mut app, t0, event);
+            assert!(!app.ticking);
+        }
+        // Typing in the editor, with the tree and its pill on show.
+        at(&mut app, t0, key("ctrl+n"));
+        for k in ["a", "b", "enter", "left"] {
+            at(&mut app, t0, key(k));
+            assert!(!app.ticking, "{k}");
+        }
+        assert_eq!(run_dry(&mut app, &mut rx, t0).await, []);
         Ok(())
     }
 

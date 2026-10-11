@@ -131,6 +131,11 @@ impl Completion {
         }
     }
 
+    /// The selected row, as a number that changes when the selection moves.
+    pub fn selected_index(&self) -> usize {
+        self.selected
+    }
+
     /// Where the card listing the items that match `typed` goes, anchored at
     /// the cursor cell `cursor` inside `bounds`: as wide as its widest kind,
     /// label and detail and a row per item. None when nothing matches or
@@ -353,10 +358,14 @@ mod tests {
         Look {
             pill_caps: true,
             corners: Corners::Flush,
+            motion: true,
+            glide: None,
         },
         Look {
             pill_caps: false,
             corners: Corners::Rounded,
+            motion: true,
+            glide: None,
         },
     ];
 

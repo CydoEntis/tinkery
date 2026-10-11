@@ -277,14 +277,20 @@ mod tests {
     const FLUSH: Look = Look {
         pill_caps: true,
         corners: Corners::Flush,
+        motion: true,
+        glide: None,
     };
     const SQUARE: Look = Look {
         pill_caps: false,
         corners: Corners::Flush,
+        motion: true,
+        glide: None,
     };
     const ROUNDED: Look = Look {
         pill_caps: true,
         corners: Corners::Rounded,
+        motion: true,
+        glide: None,
     };
 
     /// At 100x30 the card is 46 wide and 9 tall at (27, 10): its text starts

@@ -466,10 +466,14 @@ mod tests {
     const ROUND: Look = Look {
         pill_caps: true,
         corners: Corners::Flush,
+        motion: true,
+        glide: None,
     };
     const SQUARE: Look = Look {
         pill_caps: false,
         corners: Corners::Flush,
+        motion: true,
+        glide: None,
     };
 
     /// Draws `find` across a one-row screen `width` cells wide.

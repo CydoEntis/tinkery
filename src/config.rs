@@ -87,6 +87,9 @@ pub struct UiConfig {
     pub pill_caps: bool,
     /// The edge cards and panels are drawn with.
     pub corners: Corners,
+    /// The selection glides between rows and toasts slide in and fade; off,
+    /// everything is at once where it ends. `mono` never moves.
+    pub motion: bool,
 }
 
 impl Default for UiConfig {
@@ -94,6 +97,7 @@ impl Default for UiConfig {
         Self {
             pill_caps: true,
             corners: Corners::default(),
+            motion: true,
         }
     }
 }
@@ -283,6 +287,8 @@ pub const TEMPLATE: &str = r#"# Tinkery's settings. Remove the `#` in front of a
 # pill_caps = true
 # The edge of cards and dialogs: "flush" or "rounded".
 # corners = "flush"
+# The selection glides and toasts slide and fade; false turns motion off.
+# motion = true
 
 [keys]
 # action = "key" or ["key", "key"]
@@ -640,6 +646,52 @@ corners = \"square\"
         let shown = TEMPLATE
             .replace("# pill_caps", "pill_caps")
             .replace("# corners", "corners");
+        assert_eq!(parse(&shown).config.ui, UiConfig::default());
+    }
+
+    #[test]
+    fn motion_is_read_from_ui_and_listed_in_the_template_with_its_default() {
+        assert!(UiConfig::default().motion);
+        assert!(parse("").config.ui.motion);
+        let text = "[ui]
+motion = false
+";
+        let loaded = parse(text);
+        assert!(loaded.error.is_none(), "{:?}", loaded.error);
+        assert!(!loaded.config.ui.motion);
+        // The other `[ui]` settings keep their defaults beside it.
+        assert!(loaded.config.ui.pill_caps);
+        assert_eq!(loaded.config.ui.corners, Corners::Flush);
+        // Both readings of a file carry it: startup's and a save's.
+        let (settings, message) = Settings::startup(loaded);
+        assert_eq!(message, None);
+        assert!(!settings.ui.motion);
+        assert!(!Settings::from_text(text).unwrap().ui.motion);
+        assert!(Settings::from_text("").unwrap().ui.motion);
+        // Only a boolean will do.
+        assert!(
+            parse(
+                "[ui]
+motion = \"slow\"
+"
+            )
+            .error
+            .is_some()
+        );
+        // The template shows the default under `[ui]`, commented out, after
+        // the other two.
+        let line = format!(
+            "# motion = {}
+",
+            UiConfig::default().motion
+        );
+        assert!(TEMPLATE.contains(&line), "{line}");
+        let at = |name: &str| TEMPLATE.find(&format!("# {name} = "));
+        assert!(at("pill_caps") < at("corners") && at("corners") < at("motion"));
+        let shown = TEMPLATE
+            .replace("# pill_caps", "pill_caps")
+            .replace("# corners", "corners")
+            .replace("# motion", "motion");
         assert_eq!(parse(&shown).config.ui, UiConfig::default());
     }
 

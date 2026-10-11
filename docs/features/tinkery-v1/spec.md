@@ -104,7 +104,8 @@ flipping above or shifting left near the screen edges), with no dimming
 | toggle comment | Ctrl+/ (or Ctrl+7) | | |
 
 **Config** at the OS config dir (`%APPDATA%\tinkery\config.toml`,
-`~/.config/tinkery/config.toml`; `TINKERY_CONFIG` overrides):
+`~/.config/tinkery/config.toml`; `TINKERY_CONFIG` overrides; `TINKERY_MOTION=0` turns
+`[ui] motion` off whatever the file says):
 
 ```toml
 theme = "tinkery"

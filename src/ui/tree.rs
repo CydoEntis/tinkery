@@ -259,6 +259,8 @@ mod tests {
     const LOOK: Look = Look {
         pill_caps: true,
         corners: Corners::Flush,
+        motion: true,
+        glide: None,
     };
 
     fn draw(

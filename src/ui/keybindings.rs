@@ -273,6 +273,11 @@ impl Keybindings {
         lines
     }
 
+    /// The selected row, as a number that changes when the selection moves.
+    pub fn selected_index(&self) -> usize {
+        self.selected
+    }
+
     /// Where the card goes in `area`: the catalog's width, centred, from row
     /// 4, as tall as every row needs or down to a row short of the bottom. Its
     /// height doesn't follow the query, so the card holds still while typing.

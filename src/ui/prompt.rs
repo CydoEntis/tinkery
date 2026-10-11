@@ -253,10 +253,14 @@ mod tests {
     const ROUND: Look = Look {
         pill_caps: true,
         corners: Corners::Flush,
+        motion: true,
+        glide: None,
     };
     const SQUARE: Look = Look {
         pill_caps: false,
         corners: Corners::Flush,
+        motion: true,
+        glide: None,
     };
     const HINT: [(&str, &str); 2] = [("⏎", "create"), ("esc", "cancel")];
 

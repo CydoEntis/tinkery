@@ -416,6 +416,11 @@ impl Picker {
         indices.dedup();
     }
 
+    /// The selected row, as a number that changes when the selection moves.
+    pub fn selected_index(&self) -> usize {
+        self.selected
+    }
+
     /// Where the picker is drawn in `area`, so a click outside it can close it.
     pub fn card(&self, area: Rect) -> Rect {
         if self.choices.is_some() {
