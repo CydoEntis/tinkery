@@ -51,4 +51,6 @@ libc = "0.2"
 [dev-dependencies]
 portable-pty = "0.9"
 tempfile = "3"
+# The paused clock, so tests of timers (a toast's hold) never wait.
+tokio = { version = "1", features = ["test-util"] }
 vt100 = "0.16"
