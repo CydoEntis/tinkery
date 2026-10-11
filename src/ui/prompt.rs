@@ -1,6 +1,6 @@
-//! The one-row prompt bar above the status line: a label and a single line of
-//! text being typed, e.g. ` New file  notes.md`, with what Enter and Esc do at
-//! the right.
+//! The one-row prompt bar above the status line: a strip holding a label and a
+//! single line of text being typed, e.g. ` New file  notes.md`, with what Enter
+//! and Esc do at the right, each key a keycap.
 
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
@@ -11,6 +11,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use crate::buffer::movement::Motion;
 use crate::keymap::{Action, Input};
 use crate::theme::Theme;
+use crate::ui::kit::{self, Look};
 
 /// What a key did to the bar, when it did more than edit the text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,37 +103,42 @@ impl PromptBar {
             .map_or(self.text.len(), |(at, _)| at)
     }
 
-    /// Draws the prompt bar: ` Label  text` on `raised`, with `hint` (what Enter
-    /// and Esc do) right-aligned in `muted` so it ends one cell short of the edge.
-    /// Returns where the cursor goes.
-    pub fn render(&self, theme: &Theme, frame: &mut Frame, area: Rect, hint: &str) -> (u16, u16) {
+    /// Draws the prompt bar: a strip of `raised2` on the editor's ground holding
+    /// ` Label  text`, with `hint` (each key and what it does: Enter, then Esc)
+    /// as keycaps and words at the right, ending one cell short of the strip's
+    /// end. Returns where the cursor goes.
+    pub fn render(
+        &self,
+        look: Look,
+        theme: &Theme,
+        frame: &mut Frame,
+        area: Rect,
+        hint: &[(&str, &str)],
+    ) -> (u16, u16) {
         let buf = frame.buffer_mut();
-        buf.set_style(area, Style::new().bg(theme.raised).fg(theme.strong));
-        let hint_width = u16::try_from(hint.width()).unwrap_or(u16::MAX);
+        let inner = kit::strip(look, theme, buf, area, theme.raised2, theme.bg);
+        let hint = kit::hints(look, theme, hint, theme.raised2);
+        let hint_width = kit::width(&hint);
         let label_width = u16::try_from(self.label.width()).unwrap_or(u16::MAX);
         // The hint goes before the field is squeezed below its label and a few
         // letters of text.
-        let field_width = area.width.saturating_sub(hint_width.saturating_add(2));
+        let field_width = inner.width.saturating_sub(hint_width.saturating_add(2));
         if field_width < label_width.saturating_add(8) {
-            return self.render_field(theme, buf, area, true, Style::new());
+            return self.render_field(theme, buf, inner, true, Style::new());
         }
-        buf.set_string(
-            area.right() - hint_width - 1,
-            area.y,
-            hint,
-            Style::new().bg(theme.raised).fg(theme.muted),
-        );
+        let hint_x = inner.right() - hint_width - 1;
+        kit::put(buf, hint_x, inner.y, &hint, inner.right());
         let field = Rect {
             width: field_width,
-            ..area
+            ..inner
         };
         self.render_field(theme, buf, field, true, Style::new())
     }
 
-    /// Draws one field of a bar across `area` on `raised`: ` Label  text`, the
-    /// label in `text` while the field has focus and `muted` while it doesn't, the
-    /// text in `strong` patched with `value`. Returns where the cursor goes when
-    /// the field has focus.
+    /// Draws one field of a bar across `area` on `raised2`, the fill of the strip
+    /// it sits in: ` Label  text`, the label in `text` while the field has focus
+    /// and `muted` while it doesn't, the text in `strong` patched with `value`.
+    /// Returns where the cursor goes when the field has focus.
     pub fn render_field(
         &self,
         theme: &Theme,
@@ -141,12 +147,13 @@ impl PromptBar {
         focused: bool,
         value: Style,
     ) -> (u16, u16) {
-        let base = Style::new().bg(theme.raised).fg(theme.strong);
+        let base = Style::new().bg(theme.raised2).fg(theme.strong);
         buf.set_style(area, base);
         if area.width == 0 {
             return (area.x, area.y);
         }
-        let label = base.fg(if focused { theme.text } else { theme.muted });
+        let quiet = kit::ink(theme, theme.muted, theme.raised2);
+        let label = base.fg(if focused { theme.text } else { quiet });
         buf.set_stringn(
             area.x + 1,
             area.y,
@@ -203,6 +210,7 @@ mod tests {
     use super::*;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::style::Modifier;
 
     fn act(action: Action) -> Input {
         Input::Action(action)
@@ -241,24 +249,99 @@ mod tests {
         assert_eq!(bar.text(), "ab");
     }
 
-    #[test]
-    fn renders_label_text_hint_and_cursor() -> anyhow::Result<()> {
-        const HINT: &str = "⏎ create   esc cancel";
-        let theme = Theme::default();
-        let bar = PromptBar::new("New file", "notes.md");
+    const ROUND: Look = Look { pill_caps: true };
+    const SQUARE: Look = Look { pill_caps: false };
+    const HINT: [(&str, &str); 2] = [("⏎", "create"), ("esc", "cancel")];
+
+    /// Draws `bar` with `HINT` across row 1 of a 50-cell screen filled with the
+    /// theme's `bg`, as the app's frame is.
+    fn drawn(bar: &PromptBar, look: Look, theme: &Theme) -> anyhow::Result<(Buffer, (u16, u16))> {
         let mut terminal = Terminal::new(TestBackend::new(50, 2))?;
         let mut at = (0, 0);
-        terminal.draw(|frame| at = bar.render(&theme, frame, Rect::new(0, 1, 50, 1), HINT))?;
-        let buffer = terminal.backend().buffer();
-        let row: String = (0..50).map(|x| buffer[(x, 1)].symbol()).collect();
-        // The hint ends at W-2.
-        assert_eq!(row, format!("{:<28}{HINT} ", " New file  notes.md"));
-        assert_eq!(at, (19, 1));
-        assert_eq!(buffer[(1, 1)].fg, theme.text);
-        assert_eq!(buffer[(11, 1)].fg, theme.strong);
-        assert_eq!(buffer[(28, 1)].fg, theme.muted);
-        for x in 0..50 {
-            assert_eq!(buffer[(x, 1)].bg, theme.raised, "{x}");
+        terminal.draw(|frame| {
+            let screen = frame.area();
+            frame
+                .buffer_mut()
+                .set_style(screen, Style::new().bg(theme.bg));
+            at = bar.render(look, theme, frame, Rect::new(0, 1, 50, 1), &HINT);
+        })?;
+        Ok((terminal.backend().buffer().clone(), at))
+    }
+
+    fn row(buffer: &Buffer, y: u16) -> String {
+        (0..buffer.area.width)
+            .map(|x| buffer[(x, y)].symbol())
+            .collect()
+    }
+
+    #[test]
+    fn renders_a_strip_with_label_text_keycap_hint_and_cursor() -> anyhow::Result<()> {
+        let theme = Theme::default();
+        let bar = PromptBar::new("New file", "notes.md");
+        let (buffer, at) = drawn(&bar, ROUND, &theme)?;
+        let (l, r) = (kit::CAP_L, kit::CAP_R);
+        // The strip's ends are the first and last cells; the hint ends a cell
+        // short of the right one.
+        assert_eq!(
+            row(&buffer, 1),
+            format!(
+                "{l}{:<22}{l}⏎{r} create   {l}esc{r} cancel {r}",
+                " New file  notes.md"
+            )
+        );
+        assert_eq!(at, (20, 1));
+        // The ends are `raised2` on the ground; everything between is on
+        // `raised2`, but for the keycaps, which are `btn`.
+        for x in [0, 49] {
+            let end = &buffer[(x, 1)];
+            assert_eq!((end.fg, end.bg), (theme.raised2, theme.bg), "{x}");
+        }
+        for x in (1..49).filter(|x| ![24, 37, 38, 39].contains(x)) {
+            assert_eq!(buffer[(x, 1)].bg, theme.raised2, "{x}");
+        }
+        assert_eq!(buffer[(2, 1)].fg, theme.text);
+        assert_eq!(buffer[(12, 1)].fg, theme.strong);
+        // A keycap: its ends `btn` on the strip, the key `strong` on `btn`, bold.
+        for x in [23, 25, 36, 40] {
+            let end = &buffer[(x, 1)];
+            assert_eq!((end.fg, end.bg), (theme.btn, theme.raised2), "{x}");
+        }
+        for x in [24, 37, 38, 39] {
+            let key = &buffer[(x, 1)];
+            assert_eq!((key.fg, key.bg), (theme.strong, theme.btn), "{x}");
+            assert!(key.modifier.contains(Modifier::BOLD), "{x}");
+        }
+        // The words are `muted`.
+        assert_eq!(buffer[(27, 1)].fg, theme.muted);
+        assert_eq!(buffer[(42, 1)].fg, theme.muted);
+        // The row above is untouched.
+        assert_eq!(buffer[(0, 0)].symbol(), " ");
+        Ok(())
+    }
+
+    #[test]
+    fn without_pill_caps_or_in_mono_the_bar_has_no_cap_glyphs() -> anyhow::Result<()> {
+        let bar = PromptBar::new("New file", "notes.md");
+        let mono = Theme::named("mono").expect("mono exists");
+        for (look, theme) in [(SQUARE, Theme::default()), (ROUND, mono)] {
+            let (buffer, at) = drawn(&bar, look, &theme)?;
+            // Every end is a blank, so nothing moved.
+            assert_eq!(
+                row(&buffer, 1),
+                format!("{:<23} ⏎  create    esc  cancel  ", "  New file  notes.md")
+            );
+            assert_eq!(at, (20, 1));
+            for x in [0, 49] {
+                assert_eq!(buffer[(x, 1)].bg, theme.raised2, "{x}");
+            }
+            for x in [23, 25, 36, 40] {
+                assert_eq!(buffer[(x, 1)].bg, theme.btn, "{x}");
+            }
+            assert_eq!(buffer[(24, 1)].fg, theme.strong);
+            // `mono`'s `muted` is its `raised2`, so the words fall back to `text`.
+            let word = kit::ink(&theme, theme.muted, theme.raised2);
+            assert_eq!(buffer[(27, 1)].fg, word);
+            assert_ne!(buffer[(27, 1)].fg, buffer[(27, 1)].bg);
         }
         Ok(())
     }
@@ -269,11 +352,14 @@ mod tests {
         let bar = PromptBar::new("Rename", "a.md");
         let mut terminal = Terminal::new(TestBackend::new(20, 1))?;
         terminal.draw(|frame| {
-            bar.render(&theme, frame, frame.area(), "⏎ rename   esc cancel");
+            let hint = [("⏎", "rename"), ("esc", "cancel")];
+            bar.render(ROUND, &theme, frame, frame.area(), &hint);
         })?;
         let buffer = terminal.backend().buffer();
-        let row: String = (0..20).map(|x| buffer[(x, 0)].symbol()).collect();
-        assert_eq!(row, format!("{:<20}", " Rename  a.md"));
+        assert_eq!(
+            row(buffer, 0),
+            format!("{}{:<18}{}", kit::CAP_L, " Rename  a.md", kit::CAP_R)
+        );
         let mut buf = Buffer::empty(Rect::new(0, 0, 20, 1));
         bar.render_field(
             &theme,

@@ -22,6 +22,7 @@ pub struct Config {
     /// `theme::load` and costs only the theme, not the whole config.
     pub theme_overrides: BTreeMap<String, toml::Value>,
     pub editor: EditorConfig,
+    pub ui: UiConfig,
     pub keys: KeysConfig,
     /// `[lsp.<lang>]`: the language server for each language id.
     pub lsp: BTreeMap<String, LspServer>,
@@ -74,6 +75,21 @@ impl Default for EditorConfig {
             insert_spaces: true,
             auto_pairs: true,
         }
+    }
+}
+
+/// `[ui]`: how the chrome is drawn.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct UiConfig {
+    /// Pill ends are the Nerd Font half-circles; off squares them, for a font
+    /// that would show boxes instead.
+    pub pill_caps: bool,
+}
+
+impl Default for UiConfig {
+    fn default() -> Self {
+        Self { pill_caps: true }
     }
 }
 
@@ -172,6 +188,7 @@ fn describe(err: &toml::de::Error, text: &str) -> String {
 pub struct Settings {
     pub keymap: Keymap,
     pub editor: EditorConfig,
+    pub ui: UiConfig,
     pub theme: Theme,
     /// `[lsp.<lang>]` as written; `lsp::servers::with_defaults` fills the rest.
     pub lsp: BTreeMap<String, LspServer>,
@@ -197,6 +214,7 @@ impl Settings {
         let settings = Self {
             keymap,
             editor: config.editor,
+            ui: config.ui,
             theme,
             lsp: config.lsp,
             debug: config.debug,
@@ -216,6 +234,7 @@ impl Settings {
             (Ok(keymap), Ok(theme)) => Ok(Self {
                 keymap,
                 editor: config.editor,
+                ui: config.ui,
                 theme,
                 lsp: config.lsp,
                 debug: config.debug,
@@ -242,6 +261,10 @@ pub const TEMPLATE: &str = r#"# Tinkery's settings. Remove the `#` in front of a
 # tab_width = 4
 # insert_spaces = true
 # auto_pairs = true
+
+[ui]
+# Round pill ends need a Nerd Font; false squares them off.
+# pill_caps = true
 
 [keys]
 # action = "key" or ["key", "key"]
@@ -510,6 +533,44 @@ save =",
         for theme in crate::theme::NAMES {
             assert!(TEMPLATE.contains(theme), "{theme}");
         }
+    }
+
+    #[test]
+    fn pill_caps_is_read_from_ui_and_listed_in_the_template_with_its_default() {
+        assert!(parse("").config.ui.pill_caps);
+        let loaded = parse(
+            "[ui]
+pill_caps = false
+",
+        );
+        assert!(loaded.error.is_none(), "{:?}", loaded.error);
+        assert!(!loaded.config.ui.pill_caps);
+        // Both readings of a file carry it: startup's and a save's.
+        let (settings, message) = Settings::startup(loaded);
+        assert_eq!(message, None);
+        assert!(!settings.ui.pill_caps);
+        let saved = Settings::from_text(
+            "[ui]
+pill_caps = false
+",
+        )
+        .unwrap();
+        assert!(!saved.ui.pill_caps);
+        assert!(Settings::from_text("").unwrap().ui.pill_caps);
+        // The template shows the default under `[ui]`, commented out.
+        assert!(TEMPLATE.contains(
+            "
+[ui]
+"
+        ));
+        let line = format!(
+            "# pill_caps = {}
+",
+            UiConfig::default().pill_caps
+        );
+        assert!(TEMPLATE.contains(&line), "{line}");
+        let shown = TEMPLATE.replace("# pill_caps", "pill_caps");
+        assert_eq!(parse(&shown).config.ui, UiConfig::default());
     }
 
     #[test]

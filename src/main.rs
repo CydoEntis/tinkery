@@ -78,6 +78,7 @@ async fn main() -> Result<()> {
     let backups = Backups::new(backup::data_dir(std::env::var_os("TINKERY_DATA_DIR")));
     let result = App::new(settings.keymap, settings.editor, path, config_error)
         .with_theme(settings.theme)
+        .with_look(ui::kit::Look::of(&settings.ui))
         .with_lsp(Lsp::new(lsp::servers::with_defaults(settings.lsp)))
         .with_debug_adapters(settings.debug)
         .with_config_path(config::config_path(std::env::var_os("TINKERY_CONFIG")))

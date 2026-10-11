@@ -315,7 +315,8 @@ fn ctrl_n_then_alt_s_saves_relative_to_the_project_root() {
     tinkery.type_text("!");
     tinkery.send_keys("alt+s");
     tinkery.wait_for_text(" Save as  new.txt", WAIT);
-    tinkery.wait_for_text("⏎ save   esc cancel", WAIT);
+    let hint = harness::hints_text(&[("⏎", "save"), ("esc", "cancel")]);
+    tinkery.wait_for_text(&hint, WAIT);
     for _ in 0.."new.txt".len() {
         tinkery.send_keys("backspace");
     }

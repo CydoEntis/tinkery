@@ -6,6 +6,7 @@ pub mod dirpicker;
 pub mod find;
 pub mod hover;
 pub mod keybindings;
+pub mod kit;
 pub mod nofile;
 pub mod picker;
 pub mod prompt;
