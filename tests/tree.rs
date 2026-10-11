@@ -80,7 +80,7 @@ fn wait_for_selected(tinkery: &Tinkery, row: u16, text: &str) {
 /// on CI at any moment and put its message over the path in the status line.
 fn open_project() -> Tinkery {
     let config = format!(
-        "[lsp.rust]\ncommand = '{}'\n",
+        "theme = \"hydra\"\n[lsp.rust]\ncommand = '{}'\n",
         env!("CARGO_BIN_EXE_fake_lsp")
     );
     let mut tinkery = Tinkery::spawn_with_config(&config, &[PROJECT]);

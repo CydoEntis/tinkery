@@ -7,7 +7,7 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
-use harness::{ROWS, Tinkery};
+use harness::{HYDRA, ROWS, Tinkery};
 use tempfile::TempDir;
 use vt100::Color;
 
@@ -97,7 +97,7 @@ fn open_browser(tinkery: &mut Tinkery) {
 #[test]
 fn open_directory_in_the_cast_opens_the_folder_browser() {
     let dir = folder(&["alpha", "Beta", ".hidden"], &[("notes.txt", "")]);
-    let mut tinkery = open_in(dir.path(), "");
+    let mut tinkery = open_in(dir.path(), HYDRA);
     open_browser(&mut tinkery);
     let here = name(dir.path());
 
@@ -144,7 +144,7 @@ fn many_folders_scroll_past_the_card() {
     let names: Vec<String> = (0..14).map(|i| format!("dir{i:02}")).collect();
     let refs: Vec<&str> = names.iter().map(String::as_str).collect();
     let dir = folder(&refs, &[]);
-    let mut tinkery = open_in(dir.path(), "");
+    let mut tinkery = open_in(dir.path(), HYDRA);
     open_browser(&mut tinkery);
     // Ten rows, then a blank and the footer.
     assert_eq!(tinkery.text_col(FIRST_ROW + 9, "▸ dir09"), Some(TEXT_X));
@@ -176,7 +176,7 @@ fn mono_reverses_the_selected_row() {
 fn the_browser_goes_in_and_up_filters_and_closes() {
     let dir = folder(&["alpha/inner", "Beta", ".hidden"], &[]);
     let here = name(dir.path());
-    let mut tinkery = open_in(dir.path(), "");
+    let mut tinkery = open_in(dir.path(), HYDRA);
     open_browser(&mut tinkery);
 
     // Enter on a folder goes into it.
@@ -229,7 +229,7 @@ fn the_browser_goes_in_and_up_filters_and_closes() {
 #[test]
 fn a_folder_that_cannot_be_read_says_why_and_the_browser_stays() {
     let dir = folder(&["gone", "kept"], &[]);
-    let mut tinkery = open_in(dir.path(), "");
+    let mut tinkery = open_in(dir.path(), HYDRA);
     open_browser(&mut tinkery);
     fs::remove_dir(dir.path().join("gone")).expect("remove folder");
     tinkery.send_keys("down");
@@ -260,7 +260,7 @@ fn opening_a_folder_makes_it_the_project() {
         &["sub"],
         &[("new-file.txt", ""), (".tinkery.toml", new_toml)],
     );
-    let mut tinkery = open_in(old.path(), "");
+    let mut tinkery = open_in(old.path(), HYDRA);
     tinkery.wait_for_text("old-file.txt", WAIT);
     tinkery.send_keys("f5");
     tinkery.wait_for_screen("the old command running", WAIT, |screen| {

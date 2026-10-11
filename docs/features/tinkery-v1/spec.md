@@ -41,7 +41,7 @@ Phase 2, Workspace
 - **R16.** Tabs: each open buffer has a tab; Alt+, / Alt+. move between tabs, Alt+1..9 jump, Ctrl+W closes (dirty guard), Ctrl+N new untitled, Alt+S save as; click selects, middle-click closes — checked by PTY tests.
 - **R17.** Alt+V toggles a vertical split showing two tabs side by side; F6 cycles focus tree → left → right → run panel; click focuses a split — checked by PTY test.
 - **R18.** Ctrl+P opens a fuzzy file picker over the project (respecting `.gitignore`); typing filters, Enter opens — checked by PTY test; picker lists 50k files in under 1 s (bench test, ignored by default). Since Phase 7 the picker is the cast palette ([Aurora R11](../tinkery-aurora/spec.md)).
-- **R19.** `theme` selects one of Hydra's 11 themes by name; `[theme_overrides]` sets any color — checked by unit test parsing every theme and an override.
+- **R19.** `theme` selects a theme by name: `tinkery` (the default), `tinkery-light`, `aurora`, `moonlit`, or one of Hydra's 11 (`hydra`, `papercolor-dark`, `tango-dark`, `monokai`, `tokyo-night`, `catppuccin-mocha`, `catppuccin-latte`, `gruvbox`, `nord`, `dracula`, `mono`); `[theme_overrides]` sets any color — checked by unit test parsing every theme and an override.
 
 Phase 3, Search
 - **R20.** Ctrl+F opens a find bar; matches highlight as you type; Enter / Shift+Enter next / previous; Alt+C case, Alt+R regex, Esc closes — checked by PTY test.
@@ -107,7 +107,7 @@ flipping above or shifting left near the screen edges), with no dimming
 `~/.config/tinkery/config.toml`; `TINKERY_CONFIG` overrides):
 
 ```toml
-theme = "hydra"
+theme = "tinkery"
 [theme_overrides]          # any theme colour: "#rrggbb", 0-255, or a name
 [editor]
 tab_width = 4
