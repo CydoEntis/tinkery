@@ -232,12 +232,14 @@ fn missing_server_keeps_editing() {
     tinkery.wait_for_text("✦ b.rs", WAIT);
     tinkery.send_keys("enter");
     tinkery.wait_for_text_gone("cast · files · commands", WAIT);
-    // Checked before the next key, since any key clears a message: opening
-    // b.rs syncs the server in the same frame, so a second "not found" would
-    // be on screen now in the path's place.
+    // The save's toast took the first "not found" down. Opening b.rs syncs
+    // the server in the same frame, so a second one would be on screen now.
     assert_eq!(tinkery.text_col(ROWS - 1, "b.rs"), Some(20));
-    let status = status_line(&tinkery);
-    assert!(!status.contains("server not found"), "{status:?}");
+    let screen = tinkery.screen();
+    assert!(
+        !screen.join(" ").contains("server not found"),
+        "{screen:#?}"
+    );
     tinkery.type_text("z");
     tinkery.wait_for_text("b.rs •", WAIT);
 }
@@ -278,8 +280,11 @@ fn a_cmd_server_on_path_starts() {
         log.iter().any(|(_, m)| method(m) == "initialize"),
         "{log:#?}"
     );
-    let status = status_line(&tinkery);
-    assert!(!status.contains("server not found"), "{status:?}");
+    let screen = tinkery.screen();
+    assert!(
+        !screen.join(" ").contains("server not found"),
+        "{screen:#?}"
+    );
     // Quit cleanly so the fake behind the shim exits too.
     tinkery.send_keys("ctrl+q");
     tinkery.wait_exit(WAIT);
@@ -354,8 +359,8 @@ fn a_ready_server_shows_after_the_language() {
 fn a_missing_server_shows_no_server_in_muted() {
     let project = Project::new(None);
     let mut tinkery = project.open(&aurora_server("tinkery-no-such-server"), "a.rs");
-    tinkery.wait_for_text("rust: server not found (tinkery-no-such-server)", WAIT);
-    // Any key clears the message, and the path and full right side come back.
+    // The message is a toast, so the bar keeps its path and full right side.
+    tinkery.wait_for_toast("⚠ rust: server not found (tinkery-no-such-server)", WAIT);
     tinkery.send_keys("right");
     tinkery.wait_for_text("Ln 1, Col 2    Rust    ○ no server", WAIT);
     let label = status_col(&tinkery, "no server");
@@ -709,10 +714,12 @@ fn the_diagnostic_under_the_cursor_shows_its_message() {
     tinkery.wait_for_screen("the warning gone from the status line", WAIT, |lines| {
         !lines[usize::from(ROWS - 1)].contains("unused variable")
     });
-    // It holds the path slot, its glyph in the severity's colour.
+    // It holds the path slot, its glyph in the severity's colour: a
+    // diagnostic is no toast.
     let status_row = ROWS - 1;
     assert_eq!(tinkery.text_col(status_row, "✕ mismatched types"), Some(20));
     assert_eq!(tinkery.fg_at(20, status_row), ERR);
+    assert!(!tinkery.screen()[usize::from(harness::TOAST_ROW)].contains("mismatched types"));
 
     // Off the diagnostic, the message goes and the path comes back.
     tinkery.send_keys("right");
@@ -858,12 +865,13 @@ fn no_definition_says_so() {
     tinkery.send_keys("f12");
     project.wait_for(&tinkery, "textDocument/definition", "main.rs");
     tinkery.wait_for_text("No definition found", WAIT);
-    // The message takes the path slot; the cursor stays where it was.
-    let status_row = ROWS - 1;
+    // The message is a toast at the top right of the editor; the path keeps
+    // its slot and the cursor stays where it was.
     assert_eq!(
-        tinkery.text_col(status_row, "⚠ No definition found"),
-        Some(20)
+        tinkery.text_col(harness::TOAST_ROW, "⚠ No definition found"),
+        Some(harness::toast_col("No definition found"))
     );
+    assert_eq!(tinkery.text_col(ROWS - 1, "main.rs"), Some(20));
     assert!(status_line(&tinkery).contains("Ln 1, Col 1"));
     assert!(!tinkery.screen()[1].contains("util.rs"));
 }
@@ -1602,8 +1610,8 @@ fn ctrl_s_formats_through_the_server_then_saves() {
     tinkery.wait_for_text("fn a() {}", WAIT);
     tinkery.wait_for_text("saved a.rs", WAIT);
     assert_eq!(project.read("a.rs"), "fn a() {}\n");
-    let status = status_line(&tinkery);
-    assert!(!status.contains("unformatted"), "{status:?}");
+    let screen = tinkery.screen();
+    assert!(!screen.join(" ").contains("unformatted"), "{screen:#?}");
 
     let requests = format_requests(&project);
     assert_eq!(requests.len(), 1, "{requests:#?}");

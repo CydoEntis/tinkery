@@ -367,13 +367,13 @@ fn new_file_creates_in_the_project_folder_and_opens_it() {
     tinkery.wait_for_text(&create_hint(), WAIT);
     tinkery.type_text("a.txt");
     tinkery.send_keys("enter");
-    wait_for_status(&tinkery, "a.txt already exists");
+    tinkery.wait_for_toast("a.txt already exists", WAIT);
     tinkery.wait_for_text("Open directory", WAIT);
     tinkery.type_text("n");
     tinkery.wait_for_text(&create_hint(), WAIT);
     tinkery.type_text("sub/b.txt");
     tinkery.send_keys("enter");
-    wait_for_status(&tinkery, "invalid name");
+    tinkery.wait_for_toast("invalid name", WAIT);
     tinkery.wait_for_text("Open directory", WAIT);
     assert_eq!(fs::read_dir(&root).expect("list proj").count(), 1);
 
@@ -381,7 +381,7 @@ fn new_file_creates_in_the_project_folder_and_opens_it() {
     tinkery.wait_for_text(&create_hint(), WAIT);
     tinkery.type_text("b.txt");
     tinkery.send_keys("enter");
-    wait_for_status(&tinkery, "created b.txt");
+    tinkery.wait_for_toast("created b.txt", WAIT);
     tinkery.wait_for_files("b.txt in the project", WAIT, || {
         root.join("b.txt").is_file()
     });
@@ -434,7 +434,7 @@ fn new_directory_creates_the_folder_and_opens_it_as_the_project() {
     tinkery.wait_for_text(" New folder  ", WAIT);
     tinkery.type_text("a.txt");
     tinkery.send_keys("enter");
-    wait_for_status(&tinkery, "a.txt already exists");
+    tinkery.wait_for_toast("a.txt already exists", WAIT);
     tinkery.wait_for_text("Open directory", WAIT);
     tinkery.wait_for_text("a.txt", WAIT);
 
@@ -442,7 +442,7 @@ fn new_directory_creates_the_folder_and_opens_it_as_the_project() {
     tinkery.wait_for_text(" New folder  ", WAIT);
     tinkery.type_text("fresh-dir");
     tinkery.send_keys("enter");
-    wait_for_status(&tinkery, "created fresh-dir");
+    tinkery.wait_for_toast("created fresh-dir", WAIT);
     let fresh = root.join("fresh-dir");
     tinkery.wait_for_files("fresh-dir in the project", WAIT, || fresh.is_dir());
     assert!(!parent.path().join("fresh-dir").exists());

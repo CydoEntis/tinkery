@@ -4,7 +4,7 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
-use harness::{ROWS, Tinkery, buttons_text};
+use harness::{Tinkery, buttons_text};
 
 const START: Duration = Duration::from_secs(10);
 const WAIT: Duration = Duration::from_secs(5);
@@ -85,13 +85,9 @@ fn wait_for_status(tinkery: &Tinkery, status: &str) {
     });
 }
 
-/// Waits for the status line at the bottom to show `message`.
+/// Waits for a toast to show `message`.
 fn wait_for_message(tinkery: &Tinkery, message: &str) {
-    tinkery.wait_for_screen(
-        &format!("the status line to say {message:?}"),
-        WAIT,
-        |lines| lines[usize::from(ROWS - 1)].contains(message),
-    );
+    tinkery.wait_for_toast(message, WAIT);
 }
 
 /// Opens the panel and searches for `query`.

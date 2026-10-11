@@ -15,6 +15,7 @@ pub mod search;
 pub mod splash;
 pub mod status;
 pub mod tabs;
+pub mod toast;
 pub mod tree;
 
 use ratatui::Frame;
