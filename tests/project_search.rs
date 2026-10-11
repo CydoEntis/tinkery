@@ -215,7 +215,13 @@ fn alt_f_lists_hits_as_path_line_text_respecting_gitignore_and_skipping_binaries
 
 #[test]
 fn the_panel_has_an_accent_edge_two_strips_and_keycap_hints_over_a_dimmed_screen() {
-    let mut tinkery = Tinkery::spawn_in_with_config(Path::new(PROJECT), DEFAULT, &["src/lib.rs"]);
+    // The Rust file goes to the scripted `fake_lsp`: the real rust-analyzer
+    // can crash at any moment, and its note is a toast over the panel's top rows.
+    let config = format!(
+        "{DEFAULT}[lsp.rust]\ncommand = '{}'\n",
+        env!("CARGO_BIN_EXE_fake_lsp")
+    );
+    let mut tinkery = Tinkery::spawn_in_with_config(Path::new(PROJECT), &config, &["src/lib.rs"]);
     tinkery.wait_for_text("Fixture library", START);
     let y = (0..ROWS)
         .find(|&y| row(&tinkery, y).contains("Fixture library"))

@@ -57,6 +57,7 @@ use crate::ui::search::{ProjectSearch, Searched};
 use crate::ui::splash::{self, Splash};
 use crate::ui::status::{Debugging, Status, Tone, render_status};
 use crate::ui::tabs::{HEADER_HEIGHT, TabLabel, render_tabs, tab_at};
+use crate::ui::toast;
 use crate::ui::tree::{
     TREE_WIDTH, TreeMarks, nodes_area, project_label, render_divider, render_tree,
 };
@@ -106,6 +107,10 @@ pub enum AppEvent {
     /// Format on save number `format` has waited `FORMAT_TIMEOUT` for its server.
     FormatTimedOut {
         format: u64,
+    },
+    /// Note number `note` has been up for its hold (`toast::hold`).
+    NoteExpired {
+        note: u64,
     },
 }
 
@@ -861,10 +866,13 @@ pub struct App {
     /// The terminal's size as of the last draw; movement needs the editor pane's
     /// height for paging and both dimensions for scrolling.
     screen: Rect,
-    /// Shown in the status line, e.g. why the config fell back to defaults.
+    /// The note on show as a toast, e.g. why the config fell back to defaults.
     message: Option<String>,
-    /// How `message` went; picks its glyph and colour.
+    /// How `message` went; picks its glyph, its colour and how long it holds.
     message_tone: Tone,
+    /// Counts notes. The latest one's number is what its expiry must name, so a
+    /// timer left over from a replaced note takes nothing down.
+    notes: u64,
     /// While set, every key goes to the prompt instead of the editor.
     prompt: Option<Prompt>,
     /// The prompt's focused button, the one Enter presses.
@@ -995,7 +1003,7 @@ pub struct App {
 impl App {
     /// `path` is what the command line named, if anything: a folder opens as the
     /// project with the tree showing, a file opens in the editor. A file that can't
-    /// be opened leaves an untitled buffer and says why in the status line.
+    /// be opened leaves an untitled buffer and says why in a toast.
     pub fn new(
         keymap: Keymap,
         editor: EditorConfig,
@@ -1101,6 +1109,11 @@ impl App {
         let (tx, mut rx) = mpsc::unbounded_channel();
         self.edits = Some(backup::spawn_timer(tx.clone()));
         self.events = Some(tx.clone());
+        // A note from startup (a bad config, a file that wouldn't open) was
+        // raised before there was a channel to time it on.
+        if self.message.is_some() {
+            self.expire_note();
+        }
         self.lsp.connect(tx.clone());
         let input = tokio::spawn(read_input(tx));
 
@@ -1368,6 +1381,12 @@ impl App {
                     self.debug_news(news);
                 }
             }
+            AppEvent::NoteExpired { note } => {
+                // A newer note has its own timer; this one's is stale.
+                if note == self.notes {
+                    self.message = None;
+                }
+            }
             AppEvent::FormatTimedOut { format } => {
                 if let Some(pending) = self.formatting.take_if(|p| p.format == format) {
                     self.lsp.cancel_format();
@@ -1444,9 +1463,6 @@ impl App {
         if key.kind == KeyEventKind::Release {
             return;
         }
-        // A message is transient: it holds the path's place until the next key,
-        // and whatever that key does may say something new.
-        self.message = None;
         // Any key closes the hover popup; Esc does nothing else, the rest still
         // do what they do.
         if self.hover.take().is_some() && input == Input::Action(Action::Cancel) {
@@ -2439,7 +2455,7 @@ impl App {
     }
 
     /// Closes the prompt bar and, on Enter, does what it asked for. A failure says
-    /// why in the status line; the operations check before they act, so it has
+    /// why in a toast; the operations check before they act, so it has
     /// changed nothing.
     fn finish_name_prompt(&mut self, outcome: Outcome) {
         let Some(NamePrompt { op, bar }) = self.name_prompt.take() else {
@@ -2561,7 +2577,7 @@ impl App {
         }
     }
 
-    /// Replaces every match as one undo step and says how many in the status line.
+    /// Replaces every match as one undo step and says how many in a toast.
     fn replace_all(&mut self) {
         let Some(find) = &self.find else {
             return;
@@ -2925,7 +2941,7 @@ impl App {
 
     /// The replace prompt's yes: open buffers are edited in place, one undo step
     /// each and left unsaved; other files are rewritten and saved atomically. A
-    /// file that fails is named in the status line and the rest still go ahead.
+    /// file that fails is named in a toast and the rest still go ahead.
     /// Then the search runs again, so the list shows what's left.
     fn replace_in_project(&mut self) {
         let Some(pending) = self.pending_replace.take() else {
@@ -3657,7 +3673,7 @@ impl App {
             return;
         }
         self.open(&path);
-        // `open` says why in the status line when the file can't be read.
+        // `open` says why in a toast when the file can't be read.
         if self.tabs.find(&path) != Some(self.tabs.active().id) {
             return;
         }
@@ -4148,7 +4164,7 @@ impl App {
         let _ = self.backups.delete(doc.buffer.path.as_deref(), doc.id);
     }
 
-    /// Saves the active buffer and says how it went in the status line. Returns
+    /// Saves the active buffer and says how it went in a toast. Returns
     /// whether the buffer is now saved.
     fn save(&mut self) -> bool {
         self.save_doc(self.tabs.active().id, "")
@@ -4564,10 +4580,30 @@ impl App {
         }
     }
 
-    /// Shows `text` in the status bar's path slot until the next key.
+    /// Shows `text` as a toast, in place of any note already up, until its
+    /// hold runs out.
     fn say(&mut self, tone: Tone, text: impl Into<String>) {
         self.message = Some(text.into());
         self.message_tone = tone;
+        self.notes += 1;
+        self.expire_note();
+    }
+
+    /// Starts the clock on the note on show: `NoteExpired` with its number
+    /// arrives when its hold is up. Without a channel (before the loop runs, and
+    /// in tests, which send the event themselves) the note just stays.
+    fn expire_note(&self) {
+        let Some(events) = self.events.clone() else {
+            return;
+        };
+        let note = self.notes;
+        // Due from now, not from whenever the task first runs.
+        let due = tokio::time::Instant::now() + toast::hold(self.message_tone);
+        tokio::spawn(async move {
+            tokio::time::sleep_until(due).await;
+            // The loop has stopped if this fails; nothing is waiting.
+            let _ = events.send(AppEvent::NoteExpired { note });
+        });
     }
 
     /// Whether a prompt, picker, bar or panel is taking the keys.
@@ -4612,7 +4648,7 @@ impl App {
             cursor: self.buffer().cursor,
         };
         self.open(&location.path);
-        // `open` says why in the status line when the file can't be read.
+        // `open` says why in a toast when the file can't be read.
         if self.tabs.find(&location.path) != Some(self.tabs.active().id) {
             return;
         }
@@ -4805,19 +4841,16 @@ impl App {
                 .filter(|d| d.severity == severity)
                 .count()
         };
-        // What the last key did comes first; otherwise the diagnostic under the
-        // cursor says what's wrong there.
-        let message = match &self.message {
-            Some(text) => Some((self.message_tone, text.as_str())),
-            None => diagnostic_at(diagnostics, buffer.cursor).map(|d| {
-                // The bar has no glyph for info or a hint; they're advice.
-                let tone = match d.severity {
-                    Severity::Error => Tone::Err,
-                    _ => Tone::Warn,
-                };
-                (tone, d.message.as_str())
-            }),
-        };
+        // The diagnostic under the cursor says what's wrong there. A note from
+        // an action is the toast, drawn last.
+        let message = diagnostic_at(diagnostics, buffer.cursor).map(|d| {
+            // The bar has no glyph for info or a hint; they're advice.
+            let tone = match d.severity {
+                Severity::Error => Tone::Err,
+                _ => Tone::Warn,
+            };
+            (tone, d.message.as_str())
+        });
         let language = buffer
             .path
             .as_deref()
@@ -4920,6 +4953,24 @@ impl App {
         if let Some(prompt) = self.prompt {
             self.confirm(prompt)
                 .render(self.look, theme, frame, frame.area(), self.prompt_button);
+        }
+        // Last, so a note raised under a card or a prompt is still read. The
+        // editor area is every split's, so the toast sits at its far right.
+        if let (Some(text), Some(first), Some(last)) =
+            (&self.message, panes.splits.first(), panes.splits.last())
+        {
+            let area = Rect {
+                width: last.editor.right().saturating_sub(first.editor.x),
+                ..first.editor
+            };
+            toast::render_toast(
+                self.look,
+                theme,
+                self.message_tone,
+                text,
+                area,
+                frame.buffer_mut(),
+            );
         }
     }
 }
@@ -7246,29 +7297,42 @@ world",
         Ok(())
     }
 
-    #[test]
-    fn status_line_shows_the_message() -> Result<()> {
+    /// The screen's rows as text, `app` drawn at 100x30.
+    fn drawn(app: &App) -> Result<Vec<String>> {
         let mut terminal = Terminal::new(TestBackend::new(100, 30))?;
+        terminal.draw(|frame| app.render(frame))?;
+        let buffer = terminal.backend().buffer();
+        Ok((0..30)
+            .map(|y| (0..100).map(|x| buffer[(x, y)].symbol()).collect())
+            .collect())
+    }
+
+    #[test]
+    fn a_note_is_a_toast_at_the_top_right_of_the_editor_area() -> Result<()> {
         let app = App::new(
             Keymap::default(),
             EditorConfig::default(),
             None,
             Some("config error: boom".into()),
         );
-        terminal.draw(|frame| app.render(frame))?;
-        let buffer = terminal.backend().buffer();
-        let last: String = (0..100).map(|x| buffer[(x, 29)].symbol()).collect();
-        assert!(last.starts_with(" ✦ tinkery"), "{last}");
-        // The message holds the path slot at x = 20 until the next key.
-        let slot: String = last.chars().skip(20).collect();
-        assert!(slot.starts_with("✕ config error: boom"), "{last}");
-        assert!(!last.contains("untitled"), "{last}");
+        let rows = drawn(&app)?;
+        // One row below the top of the editor area, which starts under the
+        // three-row tab header; the pill ends two cells short of the edge.
+        let (l, r) = (crate::ui::kit::CAP_L, crate::ui::kit::CAP_R);
+        assert!(
+            rows[4].ends_with(&format!("  {l} ✕ config error: boom {r}  ")),
+            "{:?}",
+            rows[4]
+        );
+        // The status bar keeps the project in the path slot.
+        assert!(rows[29].starts_with(" ✦ tinkery"), "{}", rows[29]);
+        let shown = rows.join(" ");
+        assert_eq!(shown.matches("config error").count(), 1, "{rows:#?}");
         Ok(())
     }
 
     #[test]
-    fn the_next_key_gives_the_path_slot_back() -> Result<()> {
-        let mut terminal = Terminal::new(TestBackend::new(100, 30))?;
+    fn a_key_leaves_the_toast_up_and_its_expiry_takes_it_down() -> Result<()> {
         let mut app = App::new(
             Keymap::default(),
             EditorConfig::default(),
@@ -7277,13 +7341,146 @@ world",
         );
         // Esc leaves the splash, whose status bar names the project instead.
         press(&mut app, &["esc"]);
+        let rows = drawn(&app)?;
+        assert!(rows[4].contains("✕ config error: boom"), "{:?}", rows[4]);
+        let slot: String = rows[29].chars().skip(20).collect();
+        assert!(slot.starts_with("untitled"), "{}", rows[29]);
+
+        app.handle_event(AppEvent::NoteExpired { note: app.notes });
+        assert_eq!(app.message, None);
+        let rows = drawn(&app)?;
+        assert!(!rows.join(" ").contains("config error"), "{rows:#?}");
+        Ok(())
+    }
+
+    #[test]
+    fn a_new_note_replaces_the_old_one_and_outlives_its_expiry() -> Result<()> {
+        let mut app = app_with("hello", &FakeClipboard::default());
+        app.say(Tone::Ok, "one");
+        let first = app.notes;
+        app.say(Tone::Err, "two");
+        assert_ne!(app.notes, first);
+        let rows = drawn(&app)?;
+        assert!(rows[4].contains("✕ two"), "{:?}", rows[4]);
+        assert!(!rows.join(" ").contains("one"), "{rows:#?}");
+
+        // The first note's timer comes due while the second is up.
+        app.handle_event(AppEvent::NoteExpired { note: first });
+        assert_eq!(app.message.as_deref(), Some("two"));
+        assert_eq!(app.message_tone, Tone::Err);
+
+        app.handle_event(AppEvent::NoteExpired { note: app.notes });
+        assert_eq!(app.message, None);
+        // A stale expiry after that takes nothing down either.
+        app.say(Tone::Warn, "three");
+        app.handle_event(AppEvent::NoteExpired { note: first });
+        assert_eq!(app.message.as_deref(), Some("three"));
+        Ok(())
+    }
+
+    #[test]
+    fn the_toast_is_at_the_right_of_the_editor_area_beside_the_tree() -> Result<()> {
+        let mut app = app_with("hello", &FakeClipboard::default());
+        app.tree_visible = true;
+        app.say(Tone::Ok, "saved a.txt");
+        let rows = drawn(&app)?;
+        let (l, r) = (crate::ui::kit::CAP_L, crate::ui::kit::CAP_R);
+        assert!(
+            rows[4].ends_with(&format!("{l} ✓ saved a.txt {r}  ")),
+            "{:?}",
+            rows[4]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_screen_too_short_for_a_toast_draws_none() -> Result<()> {
+        let mut app = app_with("hello", &FakeClipboard::default());
+        app.say(Tone::Ok, "saved a.txt");
+        // Three rows of tab header, two of editor, the status bar.
+        let mut terminal = Terminal::new(TestBackend::new(100, 6))?;
         terminal.draw(|frame| app.render(frame))?;
         let buffer = terminal.backend().buffer();
-        let last: String = (0..100).map(|x| buffer[(x, 29)].symbol()).collect();
-        assert!(!last.contains("config error"), "{last}");
-        let slot: String = last.chars().skip(20).collect();
-        assert!(slot.starts_with("untitled"), "{last}");
+        let all: String = (0..6)
+            .flat_map(|y| (0..100).map(move |x| (x, y)))
+            .map(|at| buffer[at].symbol())
+            .collect();
+        assert!(!all.contains("saved a.txt"), "{all}");
         Ok(())
+    }
+
+    /// The next event on `rx` and how long the paused clock ran to reach it.
+    async fn next_event(rx: &mut mpsc::UnboundedReceiver<AppEvent>) -> (AppEvent, Duration) {
+        let start = tokio::time::Instant::now();
+        let event = rx.recv().await.expect("the app's channel is open");
+        (event, start.elapsed())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_note_expires_after_its_hold_and_an_error_holds_longer() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut app = App {
+            events: Some(tx),
+            ..App::default()
+        };
+        app.say(Tone::Ok, "saved a.txt");
+        let (event, after) = next_event(&mut rx).await;
+        assert!(matches!(event, AppEvent::NoteExpired { note } if note == app.notes));
+        assert_eq!(after, Duration::from_millis(2500));
+        app.handle_event(event);
+        assert_eq!(app.message, None);
+
+        app.say(Tone::Warn, "nothing is running");
+        let (event, after) = next_event(&mut rx).await;
+        assert!(matches!(event, AppEvent::NoteExpired { note } if note == app.notes));
+        assert_eq!(after, Duration::from_millis(2500));
+
+        app.say(Tone::Err, "cannot save a.txt");
+        let (event, after) = next_event(&mut rx).await;
+        assert!(matches!(event, AppEvent::NoteExpired { note } if note == app.notes));
+        assert_eq!(after, Duration::from_millis(4500));
+        app.handle_event(event);
+        assert_eq!(app.message, None);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_replaced_notes_timer_does_not_take_the_new_note_down() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut app = App {
+            events: Some(tx),
+            ..App::default()
+        };
+        app.say(Tone::Err, "cannot save a.txt");
+        tokio::time::advance(Duration::from_millis(3000)).await;
+        app.say(Tone::Ok, "saved a.txt");
+        // The error's timer is due first, 1.5 s on, and names the error.
+        let (event, after) = next_event(&mut rx).await;
+        assert_eq!(after, Duration::from_millis(1500));
+        app.handle_event(event);
+        assert_eq!(app.message.as_deref(), Some("saved a.txt"));
+        // The save's own comes a second later: 2.5 s after it was raised.
+        let (event, after) = next_event(&mut rx).await;
+        assert_eq!(after, Duration::from_millis(1000));
+        app.handle_event(event);
+        assert_eq!(app.message, None);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_startup_note_is_timed_once_the_loop_has_a_channel() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut app = App::new(
+            Keymap::default(),
+            EditorConfig::default(),
+            None,
+            Some("config error: boom".into()),
+        );
+        app.events = Some(tx);
+        app.expire_note();
+        let (event, after) = next_event(&mut rx).await;
+        // Startup only speaks of failures, so it holds as long as an error.
+        assert_eq!(after, Duration::from_millis(4500));
+        app.handle_event(event);
+        assert_eq!(app.message, None);
     }
 
     #[test]

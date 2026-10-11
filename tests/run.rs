@@ -497,15 +497,13 @@ fn mono_dims_behind_the_run_picker_and_reverses_the_selected_row() {
 }
 
 #[test]
-fn a_malformed_project_file_says_so_in_the_status_line() {
+fn a_malformed_project_file_says_so_in_a_toast() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join(".tinkery.toml"), "[[run]]\nname = = 1\n").unwrap();
     let mut tinkery = Tinkery::spawn_in(dir.path(), &[]);
     tinkery.wait_for_text("Open directory", START);
     tinkery.send_keys("f5");
-    tinkery.wait_for_screen("the error in the status line", WAIT, |screen| {
-        screen[usize::from(ROWS) - 1].contains(".tinkery.toml line 2")
-    });
+    tinkery.wait_for_toast(".tinkery.toml line 2", WAIT);
     tinkery.assert_running_for(Duration::from_millis(200));
 }
 
@@ -561,9 +559,7 @@ fn f5_in_a_project_with_nothing_to_run_says_how_to_add_one() {
     let mut tinkery = Tinkery::spawn_in(dir.path(), &[]);
     tinkery.wait_for_text("Open directory", START);
     tinkery.send_keys("f5");
-    tinkery.wait_for_screen("the hint in the status line", WAIT, |screen| {
-        screen[usize::from(ROWS) - 1].contains("add a [[run]] entry to .tinkery.toml")
-    });
+    tinkery.wait_for_toast("add a [[run]] entry to .tinkery.toml", WAIT);
     assert!(!tinkery.screen().join("\n").contains(PICKER_TITLE));
 }
 

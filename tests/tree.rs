@@ -77,7 +77,7 @@ fn wait_for_selected(tinkery: &Tinkery, row: u16, text: &str) {
 /// The fixture project with the tree focused: it opens on the splash with the
 /// tree hidden, and Ctrl+E shows it with the keys.
 /// Rust files go to the scripted `fake_lsp`: the real rust-analyzer can crash
-/// on CI at any moment and put its message over the path in the status line.
+/// on CI at any moment and put its message in a toast over the editor.
 fn open_project() -> Tinkery {
     let config = format!(
         "theme = \"hydra\"\n[lsp.rust]\ncommand = '{}'\n",

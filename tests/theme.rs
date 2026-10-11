@@ -33,7 +33,7 @@ fn assert_status_bg(tinkery: &Tinkery, color: Color) {
         .iter()
         .filter_map(|&col| row.get(usize::from(col)))
         .collect();
-    // A long message drops the keys, and then the whole bar is `color`.
+    // A long path drops the keys, and then the whole bar is `color`.
     assert!(keys.is_empty() || keys == "↑↓⏎q", "off the bar: {keys:?}");
     if let Some(&first) = off.first() {
         let cap = tinkery.bg_at(first, STATUS_ROW);
@@ -96,10 +96,13 @@ fn a_bad_override_falls_back_to_tinkery_and_says_so() {
     assert_status_bg(&tinkery, TINKERY_SURFACE);
     let screen = tinkery.screen();
     assert_eq!(
-        screen[usize::from(STATUS_ROW)].matches("theme:").count(),
+        screen[usize::from(harness::TOAST_ROW)]
+            .matches("theme:")
+            .count(),
         1,
         "one message: {screen:#?}"
     );
+    assert_eq!(screen.join(" ").matches("theme:").count(), 1, "{screen:#?}");
 }
 
 #[test]
