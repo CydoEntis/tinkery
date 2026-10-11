@@ -12,7 +12,8 @@ ticketed ahead, as Cody asked to build them in one run (2026-10-08). The person 
 Phases 6 and 7 are still open. Phases 12, 13 and 14 are ticketed ahead as well (Cody, 2026-10-08).
 Phases 15 and 16 are ticketed ahead too (Cody, 2026-10-09); Phase 15's rename lands before
 Phase 16 is built. Phase 17 is ticketed ahead (Cody, 2026-10-09). Phase 18 is ticketed
-ahead (Cody, 2026-10-11); its rename lands before Phases 16 and 17 are built.
+ahead (Cody, 2026-10-11); its rename lands before Phases 16 and 17 are built. Phase 19 is
+ticketed ahead (Cody, 2026-10-11) and is built before Phases 16 and 17.
 Next unblocked: #124 — fix(project): open a folder onto the tree and an empty pane, not the
 splash (PR #125).
 
@@ -204,7 +205,7 @@ Exit when:
   a program that asks `Name: ` and answers what you type; Alt+F5 stops at an F9 breakpoint
   and steps).
 
-[C and C++](features/tinkery-c-cpp/intent.md) · built after Phases 15 and 18
+[C and C++](features/tinkery-c-cpp/intent.md) · built after Phases 15, 18 and 19
 
 1. #185 — feat(highlight): C files are highlighted
 2. #186 — feat(highlight): C++ files are highlighted · after 1
@@ -226,7 +227,7 @@ Exit when:
   reaches `log`; `console.` then Esc then `l` shows `log`; with `auto_complete = false`
   only `.` and Alt+/ open it).
 
-[Completion opens as you type](features/tinkery-autocomplete/intent.md) · built after Phase 18
+[Completion opens as you type](features/tinkery-autocomplete/intent.md) · built after Phases 18 and 19
 
 1. #201 — feat(lsp): the completion popup scrolls past ten rows
 2. #202 — feat(lsp): completion opens as you type a word · after 1
@@ -247,12 +248,41 @@ Exit when:
 2. #205 — feat(splash): the splash wordmark reads tinkery · after 1
 3. #206 — docs(rename): the docs call it Tinkery · can run alongside 1
 
+### 19 — Tinkery wears seshi's style and its own forge theme
+
+Exit when:
+- every ticket below is closed and its change is on `main`;
+- `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` passes on `main`;
+- the spec's person check passes (every screen at 160×45 in Windows Terminal and inside
+  seshi, in `tinkery`, `tinkery-light` and `mono`, and with `pill_caps = false`).
+
+[Tinkery Forge](features/tinkery-forge/intent.md) · [spec](features/tinkery-forge/spec.md)
+
+1. #211 — feat(theme): the tinkery and tinkery-light themes
+2. #212 — feat(theme): tinkery is the default theme · after 1
+3. #213 — feat(ui): pills and keycaps, first on the find, replace and prompt bars · can run alongside 1
+4. #214 — feat(confirm): confirm cards are panels with pill buttons · after 3
+5. #215 — feat(palette): the cast palette, run picker and folder browser are panels with pill rows · after 4
+6. #216 — feat(search): project search is a panel with pill rows · after 5
+7. #217 — feat(catalog): the catalog and keybindings cards are panels with keycaps · after 5
+8. #218 — feat(lsp): hover and completion popups are cards · after 5
+9. #219 — feat(tree): the tree is a card with a pill row · after 5
+10. #220 — feat(tabs): tabs are pills and the thread is gone · after 3
+11. #221 — feat(status): a flat status bar with keycap hints · after 3
+12. #222 — feat(editor): the cursor line and the paused line are flat · can run alongside 1
+13. #223 — feat(run): the run and debug panels use keycaps and pill rows · after 5
+14. #224 — feat(splash): splash actions are buttons and the no-file list uses keycaps · after 5
+15. #225 — feat(ui): rows, buttons, tabs and chips light up under the mouse · after 6, 7, 8, 9, 10, 13, 14
+16. #226 — feat(ui): notes arrive as toasts · after 3, 11
+17. #227 — feat(ui): the selection glides and toasts slide and fade · after 15, 16
+18. #228 — chore(ui): remove the Aurora glow helpers · after 6–14
+
 ## In scope
 
 - Tinkery v1 — shipped — [intent](features/tinkery-v1/intent.md) ·
   [spec](features/tinkery-v1/spec.md)
-- Tinkery Aurora — shipped — [intent](features/tinkery-aurora/intent.md) ·
-  [spec](features/tinkery-aurora/spec.md)
+- Tinkery Aurora — shipped; its look is superseded 2026-10-11 by Tinkery Forge —
+  [intent](features/tinkery-aurora/intent.md) · [spec](features/tinkery-aurora/spec.md)
 - Splash and opening projects — active — [intent](features/tinkery-splash/intent.md) ·
   [spec](features/tinkery-splash/spec.md). Overrides the layout handoff's "No launch
   splash" (SPEC_V1_LAYOUT 9a); its key list shows whenever no file is open (decided
@@ -269,6 +299,8 @@ Exit when:
 - C and C++ — planned — [intent](features/tinkery-c-cpp/intent.md)
 - Completion opens as you type — planned — [intent](features/tinkery-autocomplete/intent.md)
 - Tome becomes Tinkery — planned — [intent](features/tinkery-rename/intent.md)
+- Tinkery Forge — planned — [intent](features/tinkery-forge/intent.md) ·
+  [spec](features/tinkery-forge/spec.md)
 
 ## Out
 
@@ -277,6 +309,10 @@ Exit when:
   decision.
 
 ## Later
+
+- Seshi's three themes (Walnut, Night, Day) in Tinkery; right-click menus; switching
+  between `tinkery` and `tinkery-light` by time of day — deferred 2026-10-11 with Tinkery
+  Forge. Come back when the re-skin is the daily look.
 
 - Embedded interactive terminal — deferred 2026-10-06: Hydra is the terminal; the
   run panel streams output. Comes back when the run panel's read-only output gets in
