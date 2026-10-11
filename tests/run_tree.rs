@@ -4,13 +4,13 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use harness::Tome;
+use harness::Tinkery;
 
 const START: Duration = Duration::from_secs(10);
 const WAIT: Duration = Duration::from_secs(15);
 /// R27: the grandchild has to be gone this soon after a stop or a quit.
 const GONE_WITHIN: Duration = Duration::from_secs(2);
-/// `.tome.toml` has one entry, `dev`, which runs the `spawn-tree` script: it
+/// `.tinkery.toml` has one entry, `dev`, which runs the `spawn-tree` script: it
 /// starts a long-lived grandchild, prints `grandchild <pid>`, then waits on it.
 const PROJECT: &str = "tests/fixtures/run-tree";
 
@@ -26,7 +26,7 @@ fn fixture_path() -> Vec<(&'static str, OsString)> {
     vec![("PATH", joined)]
 }
 
-/// Kills the grandchild if a test fails before Tome does, so a failure doesn't
+/// Kills the grandchild if a test fails before Tinkery does, so a failure doesn't
 /// leave it running for five minutes.
 struct Leftover(u32);
 
@@ -68,24 +68,24 @@ fn alive(pid: u32) -> bool {
 }
 
 /// Polls, since a process ending has no output to wait for.
-fn assert_gone(pid: u32, tome: &Tome) {
+fn assert_gone(pid: u32, tinkery: &Tinkery) {
     let deadline = Instant::now() + GONE_WITHIN;
     while alive(pid) {
         assert!(
             Instant::now() < deadline,
             "grandchild {pid} still running {GONE_WITHIN:?} later\n{}",
-            tome.screen().join("\n")
+            tinkery.screen().join("\n")
         );
         std::thread::sleep(Duration::from_millis(50));
     }
 }
 
 /// Starts `dev` and returns the grandchild's pid once the script has printed it.
-fn run_dev(tome: &mut Tome) -> u32 {
-    tome.send_keys("f5");
-    tome.wait_for_text("● dev  running", WAIT);
-    tome.wait_for_text("grandchild ", WAIT);
-    let screen = tome.screen();
+fn run_dev(tinkery: &mut Tinkery) -> u32 {
+    tinkery.send_keys("f5");
+    tinkery.wait_for_text("● dev  running", WAIT);
+    tinkery.wait_for_text("grandchild ", WAIT);
+    let screen = tinkery.screen();
     let pid = screen
         .iter()
         .find_map(|line| {
@@ -97,29 +97,29 @@ fn run_dev(tome: &mut Tome) -> u32 {
     pid
 }
 
-fn open_project() -> Tome {
-    let tome = Tome::spawn_in_with_env(Path::new(PROJECT), &fixture_path(), &[]);
-    tome.wait_for_text("Open directory", START);
-    tome
+fn open_project() -> Tinkery {
+    let tinkery = Tinkery::spawn_in_with_env(Path::new(PROJECT), &fixture_path(), &[]);
+    tinkery.wait_for_text("Open directory", START);
+    tinkery
 }
 
 #[test]
 fn stop_kills_grandchild() {
-    let mut tome = open_project();
-    let pid = run_dev(&mut tome);
+    let mut tinkery = open_project();
+    let pid = run_dev(&mut tinkery);
     let _leftover = Leftover(pid);
-    tome.send_keys("shift+f5");
-    tome.wait_for_text("■ dev  stopped", WAIT);
-    assert_gone(pid, &tome);
-    tome.assert_running_for(Duration::from_millis(100));
+    tinkery.send_keys("shift+f5");
+    tinkery.wait_for_text("■ dev  stopped", WAIT);
+    assert_gone(pid, &tinkery);
+    tinkery.assert_running_for(Duration::from_millis(100));
 }
 
 #[test]
 fn quit_kills_grandchild() {
-    let mut tome = open_project();
-    let pid = run_dev(&mut tome);
+    let mut tinkery = open_project();
+    let pid = run_dev(&mut tinkery);
     let _leftover = Leftover(pid);
-    tome.send_keys("ctrl+q");
-    tome.wait_exit(WAIT);
-    assert_gone(pid, &tome);
+    tinkery.send_keys("ctrl+q");
+    tinkery.wait_exit(WAIT);
+    assert_gone(pid, &tinkery);
 }

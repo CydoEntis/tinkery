@@ -11,7 +11,7 @@ use std::ops::Range;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use harness::Tome;
+use harness::Tinkery;
 use highlight::{Highlighter, Role, input_edit};
 use ropey::Rope;
 use vt100::Color;
@@ -37,7 +37,7 @@ const TAG: Color = Color::Rgb(0xff, 0x7a, 0xb6);
 const PROPERTY: Color = Color::Rgb(0xe8, 0xc5, 0x65);
 const FG: Color = Color::Rgb(0xc9, 0xd1, 0xd9);
 
-/// The file at `path` highlighted as Tome would: sorted byte ranges with the
+/// The file at `path` highlighted as Tinkery would: sorted byte ranges with the
 /// role each is drawn in.
 fn highlight_roles(path: &Path) -> Vec<(Range<usize>, Role)> {
     let text = fs::read_to_string(path).expect("read fixture");
@@ -343,102 +343,102 @@ fn line(n: u16) -> u16 {
 
 #[test]
 fn go_shows_keyword_colour_on_screen() {
-    let tome = Tome::spawn(&[SAMPLE_GO]);
-    tome.wait_for_text("func distance", START);
+    let tinkery = Tinkery::spawn(&[SAMPLE_GO]);
+    tinkery.wait_for_text("func distance", START);
     let row = line(11);
-    let col = tome
+    let col = tinkery
         .text_col(row, "func distance")
         .expect("line 11 is on screen");
-    tome.wait_for_fg_at(col, row, KEYWORD, WAIT);
-    assert_eq!(tome.fg_at(col + 3, row), KEYWORD);
+    tinkery.wait_for_fg_at(col, row, KEYWORD, WAIT);
+    assert_eq!(tinkery.fg_at(col + 3, row), KEYWORD);
     // `distance` isn't a keyword.
-    assert_ne!(tome.fg_at(col + 5, row), KEYWORD);
+    assert_ne!(tinkery.fg_at(col + 5, row), KEYWORD);
 }
 
 #[test]
 fn sql_shows_keyword_colour_on_screen() {
-    let tome = Tome::spawn(&[SAMPLE_SQL]);
-    tome.wait_for_text("SELECT label", START);
+    let tinkery = Tinkery::spawn(&[SAMPLE_SQL]);
+    tinkery.wait_for_text("SELECT label", START);
     let row = line(8);
-    let col = tome
+    let col = tinkery
         .text_col(row, "SELECT label")
         .expect("line 8 is on screen");
-    tome.wait_for_fg_at(col, row, KEYWORD, WAIT);
-    assert_eq!(tome.fg_at(col + 5, row), KEYWORD);
+    tinkery.wait_for_fg_at(col, row, KEYWORD, WAIT);
+    assert_eq!(tinkery.fg_at(col + 5, row), KEYWORD);
     // `label` is a column, not a keyword.
-    assert_ne!(tome.fg_at(col + 7, row), KEYWORD);
+    assert_ne!(tinkery.fg_at(col + 7, row), KEYWORD);
     // The line that doesn't parse still shows its text.
-    tome.wait_for_text("this is not ) valid sql at all (;", WAIT);
+    tinkery.wait_for_text("this is not ) valid sql at all (;", WAIT);
 }
 
 #[test]
 fn html_injections_show_on_screen() {
-    let tome = Tome::spawn(&[SAMPLE_HTML]);
-    tome.wait_for_text("const greeting", START);
-    let property = tome
+    let tinkery = Tinkery::spawn(&[SAMPLE_HTML]);
+    tinkery.wait_for_text("const greeting", START);
+    let property = tinkery
         .text_col(line(5), "color: red")
         .expect("line 5 on screen");
-    tome.wait_for_fg_at(property, line(5), PROPERTY, WAIT);
-    assert_eq!(tome.fg_at(property + 4, line(5)), PROPERTY);
-    let keyword = tome
+    tinkery.wait_for_fg_at(property, line(5), PROPERTY, WAIT);
+    assert_eq!(tinkery.fg_at(property + 4, line(5)), PROPERTY);
+    let keyword = tinkery
         .text_col(line(11), "const greeting")
         .expect("line 11 on screen");
-    tome.wait_for_fg_at(keyword, line(11), KEYWORD, WAIT);
-    assert_eq!(tome.fg_at(keyword + 4, line(11)), KEYWORD);
+    tinkery.wait_for_fg_at(keyword, line(11), KEYWORD, WAIT);
+    assert_eq!(tinkery.fg_at(keyword + 4, line(11)), KEYWORD);
     // `greeting` is a plain name, not a keyword.
-    assert_ne!(tome.fg_at(keyword + 6, line(11)), KEYWORD);
+    assert_ne!(tinkery.fg_at(keyword + 6, line(11)), KEYWORD);
 }
 
 #[test]
 fn tsx_shows_tag_colour_on_screen() {
-    let tome = Tome::spawn(&[SAMPLE_TSX]);
-    tome.wait_for_text("<Button onClick", START);
+    let tinkery = Tinkery::spawn(&[SAMPLE_TSX]);
+    tinkery.wait_for_text("<Button onClick", START);
     let row = line(8);
-    let tag = tome
+    let tag = tinkery
         .text_col(row, "Button onClick")
         .expect("line 8 on screen");
-    tome.wait_for_fg_at(tag, row, TAG, WAIT);
-    assert_eq!(tome.fg_at(tag + 5, row), TAG);
+    tinkery.wait_for_fg_at(tag, row, TAG, WAIT);
+    assert_eq!(tinkery.fg_at(tag + 5, row), TAG);
     // `onClick` is an attribute, not a tag.
-    assert_ne!(tome.fg_at(tag + 7, row), TAG);
+    assert_ne!(tinkery.fg_at(tag + 7, row), TAG);
 }
 
 #[test]
 fn rust_shows_theme_colours_on_screen() {
-    let tome = Tome::spawn(&[SAMPLE]);
-    tome.wait_for_text("fn distance", START);
+    let tinkery = Tinkery::spawn(&[SAMPLE]);
+    tinkery.wait_for_text("fn distance", START);
     let row = line(10);
-    let col = tome
+    let col = tinkery
         .text_col(row, "fn distance")
         .expect("line 10 is on screen");
-    tome.wait_for_fg_at(col, row, KEYWORD, WAIT);
-    assert_eq!(tome.fg_at(col + 1, row), KEYWORD);
+    tinkery.wait_for_fg_at(col, row, KEYWORD, WAIT);
+    assert_eq!(tinkery.fg_at(col + 1, row), KEYWORD);
     // `distance` itself isn't a keyword.
-    assert_ne!(tome.fg_at(col + 3, row), KEYWORD);
-    let comment = tome
+    assert_ne!(tinkery.fg_at(col + 3, row), KEYWORD);
+    let comment = tinkery
         .text_col(line(1), "// A sample")
         .expect("comment on screen");
-    assert_eq!(tome.fg_at(comment, line(1)), COMMENT);
-    assert_eq!(tome.fg_at(comment + 5, line(1)), COMMENT);
-    let string = tome
+    assert_eq!(tinkery.fg_at(comment, line(1)), COMMENT);
+    assert_eq!(tinkery.fg_at(comment + 5, line(1)), COMMENT);
+    let string = tinkery
         .text_col(line(18), "\"origin\"")
         .expect("string on screen");
-    assert_eq!(tome.fg_at(string, line(18)), STRING);
+    assert_eq!(tinkery.fg_at(string, line(18)), STRING);
 }
 
 #[test]
 fn files_without_a_grammar_are_uncoloured() {
-    let tome = Tome::spawn(&["tests/fixtures/plain.txt"]);
-    tome.wait_for_text("fn plain text", START);
-    tome.wait_for_text("// slashes", WAIT);
+    let tinkery = Tinkery::spawn(&["tests/fixtures/plain.txt"]);
+    tinkery.wait_for_text("fn plain text", START);
+    tinkery.wait_for_text("// slashes", WAIT);
     for (row, text) in [
         (line(1), "fn plain text is never coloured"),
         (line(2), "\"even with quotes\" and // slashes"),
     ] {
-        let start = tome.text_col(row, text).expect("line on its row");
+        let start = tinkery.text_col(row, text).expect("line on its row");
         let end = start + u16::try_from(text.len()).expect("short line");
         for col in start..end {
-            assert_eq!(tome.fg_at(col, row), FG, "row {row}, column {col}");
+            assert_eq!(tinkery.fg_at(col, row), FG, "row {row}, column {col}");
         }
     }
 }
@@ -448,25 +448,25 @@ fn rust_retypes_on_edit() {
     let dir = tempfile::tempdir().expect("temp dir");
     let path = dir.path().join("edit.rs");
     fs::write(&path, "fn main() {\n    let a = b + c;\n}\n").expect("write file");
-    let mut tome = Tome::spawn_in(dir.path(), &["edit.rs"]);
-    tome.wait_for_text("let a = b + c;", START);
+    let mut tinkery = Tinkery::spawn_in(dir.path(), &["edit.rs"]);
+    tinkery.wait_for_text("let a = b + c;", START);
 
     let row = line(2);
-    let b = tome.text_col(row, "b + c").expect("line 2 on screen");
+    let b = tinkery.text_col(row, "b + c").expect("line 2 on screen");
     let c = b + 4;
     let semicolon = b + 5;
-    let keyword = tome.text_col(row, "let").expect("`let` on screen");
-    tome.wait_for_fg_at(keyword, row, KEYWORD, WAIT);
-    assert_eq!(tome.fg_at(c, row), FG);
+    let keyword = tinkery.text_col(row, "let").expect("`let` on screen");
+    tinkery.wait_for_fg_at(keyword, row, KEYWORD, WAIT);
+    assert_eq!(tinkery.fg_at(c, row), FG);
 
-    tome.click(b, row);
-    tome.type_text("\"");
-    tome.wait_for_text("let a = \"b + c;", WAIT);
+    tinkery.click(b, row);
+    tinkery.type_text("\"");
+    tinkery.wait_for_text("let a = \"b + c;", WAIT);
     // Everything from the quote to the line's end now reads as a string.
     for col in b..=semicolon + 1 {
-        tome.wait_for_fg_at(col, row, STRING, WAIT);
+        tinkery.wait_for_fg_at(col, row, STRING, WAIT);
     }
-    assert_eq!(tome.fg_at(keyword, row), KEYWORD);
+    assert_eq!(tinkery.fg_at(keyword, row), KEYWORD);
 }
 
 #[test]

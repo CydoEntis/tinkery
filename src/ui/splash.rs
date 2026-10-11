@@ -1,6 +1,6 @@
-//! The splash Tome opens on when it's started with nothing to edit
-//! (tome-splash spec S2, as in `design/splash.png`): no card, just one block
-//! centred in the editor area: the `tome` wordmark in half-block letters on a
+//! The splash Tinkery opens on when it's started with nothing to edit
+//! (tinkery-splash spec S2, as in `design/splash.png`): no card, just one block
+//! centred in the editor area: the `tinkery` wordmark in half-block letters on a
 //! soft glow, a ramp rule, the project path, and three actions to pick from.
 
 use ratatui::Frame;
@@ -99,7 +99,7 @@ impl Item {
 enum Line {
     /// One of the wordmark's four rows.
     Word(usize),
-    /// `✦ tome` on one row, for when the wordmark doesn't fit.
+    /// `✦ tinkery` on one row, for when the wordmark doesn't fit.
     Brand,
     Rule,
     Blank,
@@ -173,7 +173,7 @@ const TIGHT: &[Line] = &[
 ];
 
 /// The splash's sizes, biggest first: with less room the wordmark becomes
-/// `✦ tome`, then the hints go, then the path (spec S2). The last is the least
+/// `✦ tinkery`, then the hints go, then the path (spec S2). The last is the least
 /// the splash can be; with fewer rows than that it's cut off at the bottom.
 const STEPS: &[Step] = &[
     Step {
@@ -425,16 +425,16 @@ fn rule(theme: &Theme, buf: &mut Buffer, area: Rect, y: u16) {
     }
 }
 
-/// `✦ tome`: the tree brand row's wordmark, its letters ramping accent →
+/// `✦ tinkery`: the tree brand row's wordmark, its letters ramping accent →
 /// accent2 in bold, for when the big one doesn't fit.
 fn brand(theme: &Theme, buf: &mut Buffer, area: Rect, y: u16) {
-    if area.width < 6 {
+    if area.width < 9 {
         return;
     }
-    let x = centred(area, 6);
+    let x = centred(area, 9);
     buf.set_string(x, y, "✦", Style::new().fg(theme.accent2));
-    for (i, c) in (0u16..).zip(["t", "o", "m", "e"]) {
-        let fg = grad(&[theme.accent, theme.accent2], f64::from(i) / 3.0);
+    for (i, c) in (0u16..).zip(["t", "i", "n", "k", "e", "r", "y"]) {
+        let fg = grad(&[theme.accent, theme.accent2], f64::from(i) / 6.0);
         let style = Style::new().fg(fg).add_modifier(Modifier::BOLD);
         buf.set_string(x + 2 + i, y, c, style);
     }
@@ -697,16 +697,16 @@ mod tests {
         let shown = rows(&draw(&splash, &theme, 100, 13)?);
         assert_eq!(&shown[..4], &WORDMARK.map(str::trim), "{shown:?}");
 
-        // Too short for the wordmark: `✦ tome`, the path, rows with hints.
+        // Too short for the wordmark: `✦ tinkery`, the path, rows with hints.
         let shown = rows(&draw(&splash, &theme, 100, 12)?);
-        assert_eq!(shown[0], "✦ tome");
+        assert_eq!(shown[0], "✦ tinkery");
         assert_eq!(shown[1], "~/src");
         assert!(shown[2].contains("in ~/src"), "{shown:?}");
         assert_eq!(shown.len(), 5, "{shown:?}");
 
         // Too narrow for the hints too.
         let shown = rows(&draw(&splash, &theme, 50, 13)?);
-        assert_eq!(shown[0], "✦ tome");
+        assert_eq!(shown[0], "✦ tinkery");
         assert_eq!(shown[1], "~/src");
         assert_eq!(shown[2], format!("✦ {:<44}n", "New file"));
         assert_eq!(shown.len(), 5, "{shown:?}");
@@ -714,7 +714,7 @@ mod tests {
         // Too short for the path.
         let shown = rows(&draw(&splash, &theme, 100, 8)?);
         assert_eq!(shown.len(), 4, "{shown:?}");
-        assert_eq!(shown[0], "✦ tome");
+        assert_eq!(shown[0], "✦ tinkery");
         assert!(shown[1].starts_with("✦ New file"), "{shown:?}");
         assert!(!shown.iter().any(|r| r.contains("~/src")), "{shown:?}");
 

@@ -81,7 +81,7 @@ pub enum Action {
     ProjectSearch,
     /// Project search only: asks, then replaces the matches in every listed file.
     ProjectReplace,
-    /// Runs a `[[run]]` command from `.tome.toml`, asking which when several.
+    /// Runs a `[[run]]` command from `.tinkery.toml`, asking which when several.
     Run,
     /// Shows or hides the run panel.
     ToggleRunPanel,
@@ -678,12 +678,12 @@ const DEFAULT_BINDINGS: &[(Action, &str)] = &[
     (Action::NextDiagnostic, "f8"),
     (Action::PrevDiagnostic, "shift+f8"),
     (Action::ToggleBreakpoint, "f9"),
-    // F5 and its Shift and Ctrl forms are the run panel's (tome-debugger spec).
+    // F5 and its Shift and Ctrl forms are the run panel's (tinkery-debugger spec).
     (Action::DebugStart, "alt+f5"),
     // F6 is CycleFocus.
     (Action::DebugStop, "alt+f6"),
-    // F11 is Windows Terminal's full screen key and never reaches Tome, so
-    // stepping lives on F10 and its Alt and Shift forms (tome-debugger spec).
+    // F11 is Windows Terminal's full screen key and never reaches Tinkery, so
+    // stepping lives on F10 and its Alt and Shift forms (tinkery-debugger spec).
     (Action::StepOver, "f10"),
     (Action::StepInto, "alt+f10"),
     (Action::StepOut, "shift+f10"),
@@ -695,9 +695,9 @@ const DEFAULT_BINDINGS: &[(Action, &str)] = &[
     // row does the same and this is only a shortcut for it.
     (Action::OpenFolderHere, "ctrl+enter"),
     // Nothing is typed into the catalog, so a plain letter is free there
-    // (tome-catalog spec C2).
+    // (tinkery-catalog spec C2).
     (Action::CatalogCopy, "c"),
-    // The splash's own keys (tome-splash spec S3): letters are free there, as
+    // The splash's own keys (tinkery-splash spec S3): letters are free there, as
     // nothing is typed into the splash.
     (Action::SplashUp, "up"),
     (Action::SplashDown, "down"),
@@ -707,7 +707,7 @@ const DEFAULT_BINDINGS: &[(Action, &str)] = &[
     (Action::SplashOpenDirectory, "o"),
     (Action::SplashDismiss, "esc"),
     (Action::SplashQuit, "q"),
-    // The debug panel's own keys (tome-debugger spec D7): nothing is typed
+    // The debug panel's own keys (tinkery-debugger spec D7): nothing is typed
     // into it, so the arrows, Enter and Tab are free there.
     (Action::DebugUp, "up"),
     (Action::DebugDown, "down"),
