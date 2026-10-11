@@ -1,4 +1,4 @@
-# Plan: Tome
+# Plan: Tinkery
 
 Source of truth for scope, order, decisions and rules. Tickets hold the detail.
 Read this before starting work. If work conflicts with it, stop and say so.
@@ -7,7 +7,7 @@ Verify: `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo
 
 ## Now
 
-Active phase: **8 — Tome opens on a splash and can switch projects.** Phases 9 and 10 are
+Active phase: **8 — Tinkery opens on a splash and can switch projects.** Phases 9 and 10 are
 ticketed ahead, as Cody asked to build them in one run (2026-10-08). The person checks for
 Phases 6 and 7 are still open. Phases 12, 13 and 14 are ticketed ahead as well (Cody, 2026-10-08).
 Phases 15 and 16 are ticketed ahead too (Cody, 2026-10-09); Phase 15's rename lands before
@@ -18,11 +18,11 @@ splash (PR #125).
 
 ## Phases
 
-### 1 — `tome file.rs` opens, edits and saves one file safely, by keyboard and mouse · complete 2026-10-06 at `e0effc0`
+### 1 — `tk file.rs` opens, edits and saves one file safely, by keyboard and mouse · complete 2026-10-06 at `e0effc0`
 
 #1, #2, #3, #4, #5, #6, #7, #8, #9, #10
 
-### 2 — `tome .` works across a whole project · complete 2026-10-06 at `4ca0ec6`
+### 2 — `tk .` works across a whole project · complete 2026-10-06 at `4ca0ec6`
 
 #11, #12, #13, #14, #15, #16, #17
 
@@ -34,7 +34,7 @@ splash (PR #125).
 
 #22, #23, #24, #25, #26
 
-### 5 — Start a dev server inside Tome · complete 2026-10-06 at `6b9c873`
+### 5 — Start a dev server inside Tinkery · complete 2026-10-06 at `6b9c873`
 
 #27, #28, #29
 
@@ -42,14 +42,14 @@ splash (PR #125).
 
 #30, #31, #32, #33, #34, #35, #36, #75, #76
 
-### 7 — Tome wears the Aurora look · complete except the person check, at `db1a00f`
+### 7 — Tinkery wears the Aurora look · complete except the person check, at `db1a00f`
 
 Exit when:
 - every ticket below is closed and its change is on `main`;
 - `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` passes on `main`;
 - the spec's person check passes (main frame and cast match the design at 160×45).
 
-[Tome Aurora](features/tome-aurora/intent.md) · [spec](features/tome-aurora/spec.md)
+[Tinkery Aurora](features/tinkery-aurora/intent.md) · [spec](features/tinkery-aurora/spec.md)
 
 1. #80 — feat(theme): Aurora roles and the aurora and moonlit themes
 2. #81 — feat(search): project replace all on Alt+A · can run alongside 1
@@ -68,7 +68,7 @@ Exit when:
 15. #94 — feat(lsp): rounded hover and completion popups · after 8
 16. #95 — feat(run): Aurora run panel and run picker · after 10
 
-### 8 — Tome opens on a splash and can switch projects · active
+### 8 — Tinkery opens on a splash and can switch projects · active
 
 Exit when:
 - every ticket below is closed and its change is on `main`;
@@ -76,11 +76,11 @@ Exit when:
 - the spec's person check passes (splash, New file / New directory / Open directory, and a
   project switch with an unsaved tab, at 160×45 in `aurora` and `mono`).
 
-[Splash and opening projects](features/tome-splash/intent.md) · [spec](features/tome-splash/spec.md)
+[Splash and opening projects](features/tinkery-splash/intent.md) · [spec](features/tinkery-splash/spec.md)
 
 1. #113 — feat(lsp): stop one project's language servers
 2. #114 — feat(project): open another folder as the project from Ctrl+P · after 1
-3. #115 — feat(splash): splash screen when Tome starts with nothing to edit · can run alongside 1
+3. #115 — feat(splash): splash screen when Tinkery starts with nothing to edit · can run alongside 1
 4. #116 — feat(splash): New directory and Open directory on the splash · after 2, 3
 5. #117 — feat(project): unsaved files card before switching projects · after 2
 6. #124 — fix(project): open a folder onto the tree and an empty pane, not the splash · after 4
@@ -88,7 +88,7 @@ Exit when:
 8. #127 — feat(splash): splash status bar, q to quit, tree hidden · after 7
 9. #128 — feat(editor): no file open screen with the key list · after 8
 
-### 9 — Install language servers from a catalog inside Tome
+### 9 — Install language servers from a catalog inside Tinkery
 
 Exit when:
 - every ticket below is closed and its change is on `main`;
@@ -96,7 +96,7 @@ Exit when:
 - the spec's person check passes (install a missing server from the catalog on Windows and
   get completion in an open file without restarting).
 
-[Language server catalog](features/tome-catalog/intent.md) · [spec](features/tome-catalog/spec.md)
+[Language server catalog](features/tinkery-catalog/intent.md) · [spec](features/tinkery-catalog/spec.md)
 
 1. #129 — feat(lsp): retry a language's server after it was missing
 2. #130 — feat(lsp): install commands for each language server · can run alongside 1
@@ -111,7 +111,7 @@ Exit when:
 - the spec's person check passes (break, step and read variables in a Rust, a Python and a
   Go program on Windows and Ubuntu).
 
-[Debugger](features/tome-debugger/intent.md) · [spec](features/tome-debugger/spec.md)
+[Debugger](features/tinkery-debugger/intent.md) · [spec](features/tinkery-debugger/spec.md)
 
 1. #133 — feat(dap): Debug Adapter Protocol client and fake adapter
 2. #134 — feat(debug): breakpoints in the gutter · can run alongside 1
@@ -123,7 +123,7 @@ Exit when:
 
 ### 11 — The v1 layout behaviours from the Aurora handoff
 
-Work: [SPEC_V1_LAYOUT.md](features/tome-aurora/design/SPEC_V1_LAYOUT.md) §1–§11 and §14
+Work: [SPEC_V1_LAYOUT.md](features/tinkery-aurora/design/SPEC_V1_LAYOUT.md) §1–§11 and §14
 items not in Phase 7: minimum-size message, tree width and hiding while split, tab overflow
 `‹N` and duplicate names, completion anchor shift, run panel scrollback, `‹ ›` scroll
 markers, rename preselects the stem, an unmodified run-stop key.
@@ -139,14 +139,14 @@ Exit when:
 - the person check passes (in a .js and a .rs file: type `foo(`, a `{` block with Enter,
   Backspace an empty `[]`, wrap a selection in `(`, and turn it off with `auto_pairs = false`).
 
-[Brackets close themselves](features/tome-autopair/intent.md)
+[Brackets close themselves](features/tinkery-autopair/intent.md)
 
 1. #155 — feat(editor): opening brackets insert their closer
 2. #156 — feat(editor): Backspace between an empty bracket pair deletes both · after 1
 3. #157 — feat(editor): Enter between a bracket pair opens an indented line · after 2
 4. #158 — feat(editor): typing an opening bracket wraps the selection · after 3
 
-### 13 — See and change settings, keys and server errors inside Tome
+### 13 — See and change settings, keys and server errors inside Tinkery
 
 Exit when:
 - every ticket below is closed and its change is on `main`;
@@ -155,7 +155,7 @@ Exit when:
   `save` in `>keybindings`; with TypeScript 7 installed, the catalog shows the JavaScript
   server failed and why, and Enter retries it).
 
-[Settings, keys and server errors](features/tome-settings/intent.md)
+[Settings, keys and server errors](features/tinkery-settings/intent.md)
 
 1. #164 — fix(lsp): keep what a failing language server prints
 2. #165 — feat(catalog): failed servers say why and retry on Enter · after 1
@@ -174,7 +174,7 @@ Exit when:
 - the person check passes (Ctrl+/ on a line and on a selection in a .rs, .py and .html file,
   on Windows Terminal and Ubuntu).
 
-[Ctrl+/ comments](features/tome-comments/intent.md)
+[Ctrl+/ comments](features/tinkery-comments/intent.md)
 
 1. #173 — feat(editor): Ctrl+/ comments and uncomments lines
 2. #174 — feat(editor): Ctrl+/ wraps lines in HTML and CSS comments · after 1
@@ -204,7 +204,7 @@ Exit when:
   a program that asks `Name: ` and answers what you type; Alt+F5 stops at an F9 breakpoint
   and steps).
 
-[C and C++](features/tome-c-cpp/intent.md) · built after Phases 15 and 18
+[C and C++](features/tinkery-c-cpp/intent.md) · built after Phases 15 and 18
 
 1. #185 — feat(highlight): C files are highlighted
 2. #186 — feat(highlight): C++ files are highlighted · after 1
@@ -226,7 +226,7 @@ Exit when:
   reaches `log`; `console.` then Esc then `l` shows `log`; with `auto_complete = false`
   only `.` and Alt+/ open it).
 
-[Completion opens as you type](features/tome-autocomplete/intent.md) · built after Phase 18
+[Completion opens as you type](features/tinkery-autocomplete/intent.md) · built after Phase 18
 
 1. #201 — feat(lsp): the completion popup scrolls past ten rows
 2. #202 — feat(lsp): completion opens as you type a word · after 1
@@ -249,31 +249,31 @@ Exit when:
 
 ## In scope
 
-- Tome v1 — shipped — [intent](features/tome-v1/intent.md) ·
-  [spec](features/tome-v1/spec.md)
-- Tome Aurora — shipped — [intent](features/tome-aurora/intent.md) ·
-  [spec](features/tome-aurora/spec.md)
-- Splash and opening projects — active — [intent](features/tome-splash/intent.md) ·
-  [spec](features/tome-splash/spec.md). Overrides the layout handoff's "No launch
+- Tinkery v1 — shipped — [intent](features/tinkery-v1/intent.md) ·
+  [spec](features/tinkery-v1/spec.md)
+- Tinkery Aurora — shipped — [intent](features/tinkery-aurora/intent.md) ·
+  [spec](features/tinkery-aurora/spec.md)
+- Splash and opening projects — active — [intent](features/tinkery-splash/intent.md) ·
+  [spec](features/tinkery-splash/spec.md). Overrides the layout handoff's "No launch
   splash" (SPEC_V1_LAYOUT 9a); its key list shows whenever no file is open (decided
   2026-10-08).
-- Language server catalog — planned — [intent](features/tome-catalog/intent.md) ·
-  [spec](features/tome-catalog/spec.md)
-- Debugger — planned — [intent](features/tome-debugger/intent.md) ·
-  [spec](features/tome-debugger/spec.md)
-- Brackets close themselves — active — [intent](features/tome-autopair/intent.md)
-- Settings, keys and server errors — active — [intent](features/tome-settings/intent.md)
-- Ctrl+/ comments — active — [intent](features/tome-comments/intent.md)
+- Language server catalog — planned — [intent](features/tinkery-catalog/intent.md) ·
+  [spec](features/tinkery-catalog/spec.md)
+- Debugger — planned — [intent](features/tinkery-debugger/intent.md) ·
+  [spec](features/tinkery-debugger/spec.md)
+- Brackets close themselves — active — [intent](features/tinkery-autopair/intent.md)
+- Settings, keys and server errors — active — [intent](features/tinkery-settings/intent.md)
+- Ctrl+/ comments — active — [intent](features/tinkery-comments/intent.md)
 - Glyph becomes Tome — superseded 2026-10-11 by Tome becomes Tinkery —
   [intent](features/tome-rename/intent.md)
-- C and C++ — planned — [intent](features/tome-c-cpp/intent.md)
-- Completion opens as you type — planned — [intent](features/tome-autocomplete/intent.md)
+- C and C++ — planned — [intent](features/tinkery-c-cpp/intent.md)
+- Completion opens as you type — planned — [intent](features/tinkery-autocomplete/intent.md)
 - Tome becomes Tinkery — planned — [intent](features/tinkery-rename/intent.md)
 
 ## Out
 
-- Plugin / scripting system — declined 2026-10-06: Tome is extended by changing
-  Tome ([ADR-0001](adr/0001-single-binary-core.md)). Bringing it back needs a new
+- Plugin / scripting system — declined 2026-10-06: Tinkery is extended by changing
+  Tinkery ([ADR-0001](adr/0001-single-binary-core.md)). Bringing it back needs a new
   decision.
 
 ## Later
