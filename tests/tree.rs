@@ -146,8 +146,7 @@ fn assert_unlit(tinkery: &Tinkery, row: u16) {
 /// The fixture project on the default theme, `tinkery`, with the tree focused:
 /// it opens on the splash with the tree hidden, and Ctrl+E shows it with the
 /// keys. Rust files go to the scripted `fake_lsp`: the real rust-analyzer can
-/// crash on CI at any moment and put its message over the path in the status
-/// line.
+/// crash on CI at any moment and put its message in a toast over the editor.
 fn open_project() -> Tinkery {
     let config = format!(
         "[lsp.rust]\ncommand = '{}'\n",

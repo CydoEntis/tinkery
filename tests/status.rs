@@ -88,9 +88,18 @@ fn past_the_brand_block_the_bar_is_flat_surface() {
     });
     assert_eq!(off_the_bar(&tinkery, SURFACE), Vec::<u16>::new());
 
-    // With a message in the path's place.
-    let tinkery = Tinkery::spawn_with_config("theme = \"solarized\"\n", &[]);
-    tinkery.wait_for_text("theme: unknown theme \"solarized\", using tinkery", START);
+    // A note is a toast over the editor, so it leaves the bar alone: the path
+    // keeps its slot under it.
+    let tinkery = Tinkery::spawn_in_with_config(
+        Path::new(PROJECT),
+        "theme = \"solarized\"\n",
+        &["docs/guide.md"],
+    );
+    tinkery.wait_for_toast("✕ theme: unknown theme \"solarized\", using tinkery", START);
+    tinkery.wait_for_screen("guide.md in the status bar", WAIT, |screen| {
+        screen[usize::from(STATUS_ROW)].contains("guide.md")
+    });
+    assert_eq!(tinkery.text_col(STATUS_ROW, "guide.md"), Some(20));
     assert_eq!(off_the_bar(&tinkery, SURFACE), Vec::<u16>::new());
 }
 

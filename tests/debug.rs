@@ -182,7 +182,7 @@ fn a_failed_build_stops_there() {
     let project = Project::new(json!({}), "[debug]\nbuild = \"exit 3\"\n");
     let mut tinkery = project.open("main.py");
     tinkery.send_keys("alt+f5");
-    wait_for_status(&tinkery, "build failed");
+    tinkery.wait_for_toast("build failed", WAIT);
     // The run panel keeps the build's own result.
     tinkery.wait_for_text("exited 3", WAIT);
     assert!(project.commands().is_empty(), "{:?}", project.commands());
@@ -250,7 +250,7 @@ fn alt_f6_disconnects_and_ends_the_session() {
     project.wait_for(&tinkery, "configurationDone", 1);
 
     tinkery.send_keys("alt+f6");
-    wait_for_status(&tinkery, "debugging stopped");
+    tinkery.wait_for_toast("debugging stopped", WAIT);
     project.wait_for(&tinkery, "disconnect", 1);
     let requests = project.requests();
     let disconnect = requests
@@ -263,7 +263,7 @@ fn alt_f6_disconnects_and_ends_the_session() {
 
     // Nothing is left to stop.
     tinkery.send_keys("alt+f6");
-    wait_for_status(&tinkery, "not debugging");
+    tinkery.wait_for_toast("not debugging", WAIT);
 }
 
 #[test]
@@ -275,7 +275,7 @@ fn the_program_exiting_ends_the_session_with_its_code() {
     let project = Project::new(script, "");
     let mut tinkery = project.open("main.py");
     tinkery.send_keys("alt+f5");
-    wait_for_status(&tinkery, "exited 4");
+    tinkery.wait_for_toast("exited 4", WAIT);
     assert!(!status_line(&tinkery.screen()).contains("debugging"));
     // The session is over: the adapter was let go.
     project.wait_for(&tinkery, "disconnect", 1);
@@ -290,7 +290,7 @@ fn a_lone_terminated_ends_the_session_without_calling_it_a_failure() {
     let project = Project::new(script, "");
     let mut tinkery = project.open("main.py");
     tinkery.send_keys("alt+f5");
-    wait_for_status(&tinkery, "program ended");
+    tinkery.wait_for_toast("program ended", WAIT);
     tinkery.wait_for_text("debug main.py  ended", WAIT);
     let screen = tinkery.screen();
     assert!(!status_line(&screen).contains("debugging"));
@@ -328,7 +328,7 @@ fn a_language_without_an_adapter_has_no_debugger() {
     fs::write(project.path("app.ts"), "let a = 1;\n").expect("write app.ts");
     let mut tinkery = project.open("app.ts");
     tinkery.send_keys("alt+f5");
-    wait_for_status(&tinkery, "no debugger for typescript");
+    tinkery.wait_for_toast("no debugger for typescript", WAIT);
 }
 
 #[test]
@@ -338,7 +338,7 @@ fn a_missing_adapter_is_one_message_and_editing_carries_on() {
     let mut tinkery = project.open_with(&missing.display().to_string(), "main.py");
     tinkery.send_keys("alt+f5");
     // The message names the adapter by its path, too long to show whole here.
-    wait_for_status(&tinkery, "✕ can't start");
+    tinkery.wait_for_toast("✕ can't start", WAIT);
     tinkery.wait_for_screen("the session gone", WAIT, |screen| {
         !status_line(screen).contains("debugging")
     });
@@ -351,7 +351,7 @@ fn a_crashed_adapter_is_one_message_and_editing_carries_on() {
     let project = Project::new(json!({"exit_on": "launch"}), "");
     let mut tinkery = project.open("main.py");
     tinkery.send_keys("alt+f5");
-    wait_for_status(&tinkery, "debug adapter exited (3)");
+    tinkery.wait_for_toast("debug adapter exited (3)", WAIT);
     assert!(!status_line(&tinkery.screen()).contains("debugging"));
     tinkery.type_text("z");
     tinkery.wait_for_text("1  za = 1", WAIT);
@@ -642,7 +642,7 @@ fn the_program_ending_after_continue_says_exited_and_clears_the_marker() {
     wait_for_marker(&tinkery, 2);
 
     tinkery.send_keys("alt+f5");
-    wait_for_status(&tinkery, "exited 0");
+    tinkery.wait_for_toast("exited 0", WAIT);
     wait_for_no_marker(&tinkery);
     let screen = tinkery.screen();
     assert!(!status_line(&screen).contains("debugging"), "{screen:#?}");
@@ -669,7 +669,7 @@ fn a_refused_step_keeps_the_program_paused_where_it_was() {
     wait_for_marker(&tinkery, 3);
 
     tinkery.send_keys("f10");
-    wait_for_status(&tinkery, "debugger: next failed: busy");
+    tinkery.wait_for_toast("debugger: next failed: busy", WAIT);
     wait_for_marker(&tinkery, 3);
 
     // The stopped thread came back with the pause, so stepping still works.

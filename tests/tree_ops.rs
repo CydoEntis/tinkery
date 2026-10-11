@@ -208,8 +208,9 @@ fn a_creates_a_file_beside_the_selected_file_and_opens_it() {
     tinkery.wait_for_screen("the bar closed", WAIT, |screen| {
         !screen[BAR].contains("New file")
     });
-    // The message holds the path slot until the next key.
-    wait_for_status(&tinkery, "✓ created notes.md");
+    // The message is a toast; the status line already names the new file.
+    tinkery.wait_for_toast("✓ created notes.md", WAIT);
+    wait_for_status(&tinkery, "notes.md");
     wait_for_status(&tinkery, "Ln 1, Col 1");
     let screen = tinkery.screen();
     let editor: String = screen[3].chars().skip(TREE + 1).collect();
@@ -305,7 +306,7 @@ fn r_renames_and_the_open_buffer_follows() {
         ],
     );
     wait_for_selected(&tinkery, 6, "     notes.md");
-    wait_for_status(&tinkery, "renamed to notes.md");
+    tinkery.wait_for_toast("renamed to notes.md", WAIT);
     assert!(!dir.path().join("notes.txt").exists());
 
     // The buffer now belongs to notes.md: saving writes there.
@@ -332,7 +333,7 @@ fn an_existing_or_invalid_name_changes_nothing() {
     wait_for_bar(&tinkery, "New file", "");
     tinkery.type_text("notes.txt");
     tinkery.send_keys("enter");
-    wait_for_status(&tinkery, "notes.txt already exists");
+    tinkery.wait_for_toast("notes.txt already exists", WAIT);
     wait_for_tree(&tinkery, TOP);
     wait_for_selected(&tinkery, 7, "     README.md");
     assert_eq!(
@@ -344,7 +345,7 @@ fn an_existing_or_invalid_name_changes_nothing() {
     wait_for_bar(&tinkery, "New file", "");
     tinkery.type_text("bad/name");
     tinkery.send_keys("enter");
-    wait_for_status(&tinkery, "invalid name");
+    tinkery.wait_for_toast("invalid name", WAIT);
     wait_for_tree(&tinkery, TOP);
 
     // Renaming onto another entry is refused too.
@@ -355,7 +356,7 @@ fn an_existing_or_invalid_name_changes_nothing() {
     }
     tinkery.type_text("notes.txt");
     tinkery.send_keys("enter");
-    wait_for_status(&tinkery, "notes.txt already exists");
+    tinkery.wait_for_toast("notes.txt already exists", WAIT);
     wait_for_tree(&tinkery, TOP);
     assert_eq!(
         fs::read(dir.path().join("notes.txt")).expect("read notes"),

@@ -360,10 +360,10 @@ fn a_folder_that_cannot_be_read_says_why_and_the_browser_stays() {
     fs::remove_dir(dir.path().join("gone")).expect("remove folder");
     tinkery.send_keys("down");
     tinkery.send_keys("enter");
-    tinkery.wait_for_screen("the reason in the status line", WAIT, |screen| {
-        screen[usize::from(ROWS - 1)].contains("cannot open")
-    });
-    assert!(row(&tinkery, ROWS - 1).contains("gone"));
+    // The toast is drawn over the browser, which stays open under it. It
+    // names the folder by its whole path, which beside the tree is cut short
+    // of the name wherever the temp folder's path is long.
+    tinkery.wait_for_toast("✕ cannot open", WAIT);
     assert!(row(&tinkery, HEADER_ROW).contains(SCOPE));
     assert!(row(&tinkery, FIRST_ROW).contains("▸ gone"));
 }
