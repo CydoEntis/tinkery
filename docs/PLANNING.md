@@ -11,7 +11,8 @@ Active phase: **8 — Tome opens on a splash and can switch projects.** Phases 9
 ticketed ahead, as Cody asked to build them in one run (2026-10-08). The person checks for
 Phases 6 and 7 are still open. Phases 12, 13 and 14 are ticketed ahead as well (Cody, 2026-10-08).
 Phases 15 and 16 are ticketed ahead too (Cody, 2026-10-09); Phase 15's rename lands before
-Phase 16 is built. Phase 17 is ticketed ahead (Cody, 2026-10-09).
+Phase 16 is built. Phase 17 is ticketed ahead (Cody, 2026-10-09). Phase 18 is ticketed
+ahead (Cody, 2026-10-11); its rename lands before Phases 16 and 17 are built.
 Next unblocked: #124 — fix(project): open a folder onto the tree and an empty pane, not the
 splash (PR #125).
 
@@ -203,7 +204,7 @@ Exit when:
   a program that asks `Name: ` and answers what you type; Alt+F5 stops at an F9 breakpoint
   and steps).
 
-[C and C++](features/tome-c-cpp/intent.md) · built after Phase 15
+[C and C++](features/tome-c-cpp/intent.md) · built after Phases 15 and 18
 
 1. #185 — feat(highlight): C files are highlighted
 2. #186 — feat(highlight): C++ files are highlighted · after 1
@@ -225,11 +226,26 @@ Exit when:
   reaches `log`; `console.` then Esc then `l` shows `log`; with `auto_complete = false`
   only `.` and Alt+/ open it).
 
-[Completion opens as you type](features/tome-autocomplete/intent.md)
+[Completion opens as you type](features/tome-autocomplete/intent.md) · built after Phase 18
 
 1. #201 — feat(lsp): the completion popup scrolls past ten rows
 2. #202 — feat(lsp): completion opens as you type a word · after 1
 3. #203 — feat(config): auto_complete turns as-you-type completion off · after 2
+
+### 18 — Tome is renamed Tinkery
+
+Exit when:
+- every ticket below is closed and its change is on `main`;
+- `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` passes on `main`;
+- the GitHub repo is `CydoEntis/tinkery` (renamed with Cody's go-ahead once the tickets land);
+- the person check passes (on Windows: install with `cargo install --path . --bin tk`,
+  and `tk .` opens on the `tinkery` splash at 160×45 in `aurora` and `mono`).
+
+[Tome becomes Tinkery](features/tinkery-rename/intent.md)
+
+1. #204 — chore(rename): Tome is Tinkery in code and tests, started with tk
+2. #205 — feat(splash): the splash wordmark reads tinkery · after 1
+3. #206 — docs(rename): the docs call it Tinkery · can run alongside 1
 
 ## In scope
 
@@ -248,9 +264,11 @@ Exit when:
 - Brackets close themselves — active — [intent](features/tome-autopair/intent.md)
 - Settings, keys and server errors — active — [intent](features/tome-settings/intent.md)
 - Ctrl+/ comments — active — [intent](features/tome-comments/intent.md)
-- Glyph becomes Tome — active — [intent](features/tome-rename/intent.md)
+- Glyph becomes Tome — superseded 2026-10-11 by Tome becomes Tinkery —
+  [intent](features/tome-rename/intent.md)
 - C and C++ — planned — [intent](features/tome-c-cpp/intent.md)
 - Completion opens as you type — planned — [intent](features/tome-autocomplete/intent.md)
+- Tome becomes Tinkery — planned — [intent](features/tinkery-rename/intent.md)
 
 ## Out
 

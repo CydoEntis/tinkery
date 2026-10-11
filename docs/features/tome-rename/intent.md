@@ -1,7 +1,7 @@
 # Intent: Glyph becomes Tome
 
 Type: change
-Author: Cody · Status: accepted
+Author: Cody · Status: superseded by [Tome becomes Tinkery](../tinkery-rename/intent.md)
 Date: 2026-10-09 · Plan: [Phase 15](../../PLANNING.md)
 
 ## Problem
