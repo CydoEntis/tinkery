@@ -8,7 +8,7 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
-use harness::{CAP_L, CAP_R, COLS, ROWS, Tinkery};
+use harness::{CAP_L, CAP_R, COLS, HYDRA, ROWS, Tinkery};
 use vt100::Color;
 
 const START: Duration = Duration::from_secs(10);
@@ -56,7 +56,7 @@ fn copy_dir(from: &Path, to: &Path) {
 /// A temp copy of `tests/fixtures/project` with tinkery open on it, cwd inside it
 /// so paths stay short.
 fn open_copy() -> (tempfile::TempDir, Tinkery) {
-    open_copy_with("")
+    open_copy_with(HYDRA)
 }
 
 /// The same with `toml` as the config.
@@ -398,7 +398,7 @@ fn wait_for_square_bar(tinkery: &Tinkery) {
 
 #[test]
 fn pill_caps_off_squares_the_prompt_bar_and_its_keycaps() {
-    let (_dir, tinkery) = renaming_with("[ui]\npill_caps = false\n");
+    let (_dir, tinkery) = renaming_with("theme = \"hydra\"\n[ui]\npill_caps = false\n");
     wait_for_square_bar(&tinkery);
     let row = BAR as u16;
     // A square end is a blank of the pill's own colour: the strip's are

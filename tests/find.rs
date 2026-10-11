@@ -319,7 +319,8 @@ fn mono_underlines_matches_and_reverses_the_current_one() {
 
 #[test]
 fn pill_caps_off_squares_the_bar_and_its_chips() {
-    let mut tinkery = Tinkery::spawn_with_config("[ui]\npill_caps = false\n", &[FIND]);
+    let mut tinkery =
+        Tinkery::spawn_with_config("theme = \"hydra\"\n[ui]\npill_caps = false\n", &[FIND]);
     tinkery.wait_for_text("Ln 1, Col 1", START);
     tinkery.wait_for_text("3  foo", WAIT);
     find(&mut tinkery, "foo");
