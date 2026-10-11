@@ -24,6 +24,7 @@ const WARN: Color = Color::Rgb(0xff, 0xb5, 0x47);
 const MUTED: Color = Color::Rgb(0x71, 0x80, 0x8f);
 const STRONG: Color = Color::Rgb(0xf2, 0xf6, 0xf8);
 const SURFACE: Color = Color::Rgb(0x0c, 0x13, 0x1b);
+const BTN: Color = Color::Rgb(0x1d, 0x2a, 0x37);
 const BG: Color = Color::Rgb(0x07, 0x0b, 0x10);
 /// hydra's `syn.function`, `syn.keyword` and `syn.type`.
 const FUNCTION: Color = Color::Rgb(0x5a, 0xa9, 0xff);
@@ -53,10 +54,15 @@ const PICKER_MUTED: Color = Color::Rgb(0x7d, 0x70, 0x67);
 const PICKER_TEXT: Color = Color::Rgb(0xb5, 0xa8, 0x9d);
 const PICKER_STRONG: Color = Color::Rgb(0xf8, 0xf0, 0xe6);
 
-/// The hints at the right of the title row while running, and once done, with
-/// the blank that ends the row.
-const RUNNING_HINTS: &str = "shift+F5 stop   ctrl+F5 restart   F4 hide ";
-const DONE_HINTS: &str = "F5 run again   F4 hide ";
+/// The hints at the right of the title row while running, and once done: each
+/// key, drawn as a keycap, and what it does.
+const RUNNING_HINTS: &[(&str, &str)] =
+    &[("shift+F5", "stop"), ("ctrl+F5", "restart"), ("F4", "hide")];
+const DONE_HINTS: &[(&str, &str)] = &[("F5", "run again"), ("F4", "hide")];
+/// The default theme's (tinkery's) `surface` and `btn`, which
+/// `the_title_rows_hints_are_keycaps` reads on an empty config.
+const TINKERY_SURFACE: Color = Color::Rgb(0x17, 0x14, 0x13);
+const TINKERY_BTN: Color = Color::Rgb(0x33, 0x2a, 0x25);
 
 /// At 30 rows the panel is 9 tall: the editor keeps rows 0 to 19, the panel's
 /// title is row 20 and its output starts on row 21, one space in.
@@ -122,16 +128,105 @@ fn f5_runs_the_only_entry_and_streams_its_output_in_colour() {
     assert_hints(&tinkery, DONE_HINTS);
 }
 
-/// The title row ends with `hints` and a blank, in `muted`.
-fn assert_hints(tinkery: &Tinkery, hints: &str) {
-    let at = harness::COLS - u16::try_from(hints.chars().count()).expect("short hints");
+/// The title row ends with `hints` and a blank: each key a keycap, `strong`
+/// bold on `btn` between ends of `btn` on the row's `surface`, and its word in
+/// `muted`.
+fn assert_hints(tinkery: &Tinkery, hints: &[(&str, &str)]) {
+    let colours = HintColours {
+        surface: SURFACE,
+        btn: BTN,
+        strong: STRONG,
+        muted: MUTED,
+    };
+    assert_hints_in(tinkery, hints, &colours);
+}
+
+/// The roles a title row's hints are drawn in.
+struct HintColours {
+    surface: Color,
+    btn: Color,
+    strong: Color,
+    muted: Color,
+}
+
+fn assert_hints_in(tinkery: &Tinkery, hints: &[(&str, &str)], colours: &HintColours) {
+    let text = hints_text(hints);
+    let cells = u16::try_from(text.chars().count()).expect("short hints");
+    let at = harness::COLS - 1 - cells;
     let title = row(tinkery, TITLE_ROW);
-    assert_eq!(
-        tinkery.text_col(TITLE_ROW, hints.trim_end()),
-        Some(at),
+    assert_eq!(tinkery.text_col(TITLE_ROW, &text), Some(at), "{title:?}");
+    assert!(title.ends_with(&format!("  {text}")), "{title:?}");
+    // The first key: a cap, the key, a cap, a blank, then its word.
+    let key = u16::try_from(hints[0].0.chars().count()).expect("short key");
+    for x in [at, at + key + 1] {
+        assert_eq!(tinkery.fg_at(x, TITLE_ROW), colours.btn, "{x}");
+        assert_eq!(tinkery.bg_at(x, TITLE_ROW), colours.surface, "{x}");
+    }
+    for x in at + 1..=at + key {
+        assert_eq!(tinkery.fg_at(x, TITLE_ROW), colours.strong, "{x}");
+        assert_eq!(tinkery.bg_at(x, TITLE_ROW), colours.btn, "{x}");
+        assert!(tinkery.bold_at(x, TITLE_ROW), "{x}");
+    }
+    let word = at + key + 3;
+    assert_eq!(tinkery.fg_at(word, TITLE_ROW), colours.muted);
+    assert_eq!(tinkery.bg_at(word, TITLE_ROW), colours.surface);
+    assert!(!tinkery.bold_at(word, TITLE_ROW));
+}
+
+#[test]
+fn the_title_rows_hints_are_keycaps() {
+    // An empty config is the default theme, tinkery.
+    let mut tinkery = Tinkery::spawn_in_with_config_and_env(
+        Path::new(PROJECT),
+        "",
+        &fixture_path(),
+        &["main.rs"],
+    );
+    tinkery.wait_for_text("the editor stays visible", START);
+    tinkery.send_keys("f5");
+    tinkery.wait_for_text("red line", WAIT);
+    let colours = HintColours {
+        surface: TINKERY_SURFACE,
+        btn: TINKERY_BTN,
+        strong: PICKER_STRONG,
+        muted: PICKER_MUTED,
+    };
+    assert_hints_in(&tinkery, RUNNING_HINTS, &colours);
+    tinkery.wait_for_screen("the exit code in the title", WAIT, |screen| {
+        screen[usize::from(TITLE_ROW)].starts_with(" ✓ dev  exited 0")
+    });
+    assert_hints_in(&tinkery, DONE_HINTS, &colours);
+}
+
+#[test]
+fn in_mono_the_title_rows_keycaps_are_bold_text() {
+    let mut tinkery = Tinkery::spawn_in_with_config_and_env(
+        Path::new(PROJECT),
+        "theme = \"mono\"\n",
+        &fixture_path(),
+        &["main.rs"],
+    );
+    tinkery.wait_for_text("the editor stays visible", START);
+    tinkery.send_keys("f5");
+    tinkery.wait_for_text("red line", WAIT);
+    // The same cells as with colours, a blank where each cap's end would be.
+    let title = row(&tinkery, TITLE_ROW);
+    assert!(
+        title.ends_with("   shift+F5  stop    ctrl+F5  restart    F4  hide"),
         "{title:?}"
     );
-    assert_eq!(tinkery.fg_at(at, TITLE_ROW), MUTED);
+    // A cell short of the right edge, as with colours.
+    assert_eq!(title.chars().count(), usize::from(harness::COLS) - 1);
+    assert!(
+        !title.contains(CAP_L) && !title.contains(CAP_R),
+        "{title:?}"
+    );
+    // The name and the keys are the row's bold text; nothing is reversed.
+    assert_eq!(
+        tinkery.bold_text(TITLE_ROW).replace(' ', ""),
+        "devshift+F5ctrl+F5F4"
+    );
+    assert_eq!(tinkery.reversed_text(TITLE_ROW), "");
 }
 
 /// The first output row is the restart rule, `── restarted HH:MM:SS ──…` in

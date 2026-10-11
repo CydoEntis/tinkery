@@ -34,11 +34,11 @@ const BTN: Color = Color::Rgb(0x1d, 0x2a, 0x37);
 const STRONG: Color = Color::Rgb(0xf2, 0xf6, 0xf8);
 
 const TOP: &[&str] = &[
-    "  ▸ docs",
-    "  ▸ src",
-    "    .gitignore",
-    "    notes.txt",
-    "    README.md",
+    "   ▸ docs",
+    "   ▸ src",
+    "     .gitignore",
+    "     notes.txt",
+    "     README.md",
 ];
 
 fn copy_dir(from: &Path, to: &Path) {
@@ -73,18 +73,25 @@ fn open_copy_with(toml: &str) -> (tempfile::TempDir, Tinkery) {
     (dir, tinkery)
 }
 
+/// What the tree pane shows on `line`: its 28 columns with the card's edge, a
+/// lit row's pill ends and the selection's `›` blanked, trailing spaces cut. A
+/// character's index is its column.
+fn tree_text(line: &str) -> String {
+    let chrome = format!("▕▏▁▔›{CAP_L}{CAP_R}");
+    line.chars()
+        .take(TREE)
+        .map(|c| if chrome.contains(c) { ' ' } else { c })
+        .collect::<String>()
+        .trim_end()
+        .to_string()
+}
+
 /// The tree pane's node rows from the first one down to the first empty one.
 fn tree_rows(screen: &[String]) -> Vec<String> {
     screen
         .iter()
         .skip(FIRST)
-        .map(|line| {
-            line.chars()
-                .take(TREE)
-                .collect::<String>()
-                .trim_end()
-                .to_string()
-        })
+        .map(|line| tree_text(line))
         .take_while(|text| !text.is_empty())
         .collect()
 }
@@ -95,16 +102,22 @@ fn wait_for_tree(tinkery: &Tinkery, expected: &[&str]) {
     });
 }
 
-/// Waits for `row` to read `text` and glow across the pane, as the focused
-/// selection and the open file do: hydra's `mix(surface, accent, .26)` at column
-/// 0 fading to `surface` at 27.
+/// Waits for `row` to read `text` on a pill across the tree's card, as the
+/// focused selection and the open file do: round ends at columns 1 and 26, and
+/// the cells between them filled with the colour the ends are drawn in.
 fn wait_for_selected(tinkery: &Tinkery, row: u16, text: &str) {
     tinkery.wait_for_screen(&format!("tree row {row} {text:?}"), WAIT, |screen| {
-        let line: String = screen[usize::from(row)].chars().take(TREE).collect();
-        line.trim_end() == text
+        let line: Vec<char> = screen[usize::from(row)].chars().take(TREE).collect();
+        tree_text(&screen[usize::from(row)]) == text
+            && line.get(1).map(char::to_string).as_deref() == Some(CAP_L)
+            && line.get(26).map(char::to_string).as_deref() == Some(CAP_R)
     });
-    tinkery.wait_for_bg(0, row, Color::Rgb(0x3c, 0x4e, 0x24), WAIT);
-    tinkery.wait_for_bg(27, row, Color::Rgb(0x0d, 0x14, 0x1b), WAIT);
+    let fill = tinkery.fg_at(1, row);
+    assert_ne!(fill, tinkery.bg_at(1, row));
+    assert_eq!(tinkery.fg_at(26, row), fill);
+    for col in 2..26 {
+        assert_eq!(tinkery.bg_at(col, row), fill, "({col}, {row})");
+    }
 }
 
 /// What Enter and Esc do in the bar for `label`.
@@ -170,7 +183,7 @@ fn a_creates_a_file_beside_the_selected_file_and_opens_it() {
     for _ in 0..4 {
         tinkery.send_keys("down");
     }
-    wait_for_selected(&tinkery, 7, "    README.md");
+    wait_for_selected(&tinkery, 7, "     README.md");
 
     tinkery.send_keys("a");
     wait_for_bar(&tinkery, "New file", "");
@@ -182,15 +195,15 @@ fn a_creates_a_file_beside_the_selected_file_and_opens_it() {
     wait_for_tree(
         &tinkery,
         &[
-            "  ▸ docs",
-            "  ▸ src",
-            "    .gitignore",
-            "    notes.md",
-            "    notes.txt",
-            "    README.md",
+            "   ▸ docs",
+            "   ▸ src",
+            "     .gitignore",
+            "     notes.md",
+            "     notes.txt",
+            "     README.md",
         ],
     );
-    wait_for_selected(&tinkery, 6, "    notes.md");
+    wait_for_selected(&tinkery, 6, "     notes.md");
     // The bar is gone and the editor shows the new, empty file.
     tinkery.wait_for_screen("the bar closed", WAIT, |screen| {
         !screen[BAR].contains("New file")
@@ -218,7 +231,7 @@ fn a_creates_a_file_beside_the_selected_file_and_opens_it() {
 #[test]
 fn a_and_shift_a_create_inside_the_selected_folder() {
     let (dir, mut tinkery) = open_copy();
-    wait_for_selected(&tinkery, 3, "  ▸ docs");
+    wait_for_selected(&tinkery, 3, "   ▸ docs");
 
     tinkery.send_keys("a");
     wait_for_bar(&tinkery, "New file", "");
@@ -228,16 +241,16 @@ fn a_and_shift_a_create_inside_the_selected_folder() {
     wait_for_tree(
         &tinkery,
         &[
-            "  ▾ docs",
-            "   │  guide.md",
-            "   │  new.md",
-            "  ▸ src",
-            "    .gitignore",
-            "    notes.txt",
-            "    README.md",
+            "   ▾ docs",
+            "    │  guide.md",
+            "    │  new.md",
+            "   ▸ src",
+            "     .gitignore",
+            "     notes.txt",
+            "     README.md",
         ],
     );
-    wait_for_selected(&tinkery, 5, "   │  new.md");
+    wait_for_selected(&tinkery, 5, "    │  new.md");
     assert!(dir.path().join("docs").join("new.md").is_file());
 
     // Back in the tree, Shift+A makes a folder next to the selected file.
@@ -249,17 +262,17 @@ fn a_and_shift_a_create_inside_the_selected_folder() {
     wait_for_tree(
         &tinkery,
         &[
-            "  ▾ docs",
-            "   │▸ drafts",
-            "   │  guide.md",
-            "   │  new.md",
-            "  ▸ src",
-            "    .gitignore",
-            "    notes.txt",
-            "    README.md",
+            "   ▾ docs",
+            "    │▸ drafts",
+            "    │  guide.md",
+            "    │  new.md",
+            "   ▸ src",
+            "     .gitignore",
+            "     notes.txt",
+            "     README.md",
         ],
     );
-    wait_for_selected(&tinkery, 4, "   │▸ drafts");
+    wait_for_selected(&tinkery, 4, "    │▸ drafts");
     assert!(dir.path().join("docs").join("drafts").is_dir());
 }
 
@@ -285,14 +298,14 @@ fn r_renames_and_the_open_buffer_follows() {
     wait_for_tree(
         &tinkery,
         &[
-            "  ▸ docs",
-            "  ▸ src",
-            "    .gitignore",
-            "    notes.md",
-            "    README.md",
+            "   ▸ docs",
+            "   ▸ src",
+            "     .gitignore",
+            "     notes.md",
+            "     README.md",
         ],
     );
-    wait_for_selected(&tinkery, 6, "    notes.md");
+    wait_for_selected(&tinkery, 6, "     notes.md");
     tinkery.wait_for_toast("renamed to notes.md", WAIT);
     assert!(!dir.path().join("notes.txt").exists());
 
@@ -314,7 +327,7 @@ fn an_existing_or_invalid_name_changes_nothing() {
     for _ in 0..4 {
         tinkery.send_keys("down");
     }
-    wait_for_selected(&tinkery, 7, "    README.md");
+    wait_for_selected(&tinkery, 7, "     README.md");
 
     tinkery.send_keys("a");
     wait_for_bar(&tinkery, "New file", "");
@@ -322,7 +335,7 @@ fn an_existing_or_invalid_name_changes_nothing() {
     tinkery.send_keys("enter");
     tinkery.wait_for_toast("notes.txt already exists", WAIT);
     wait_for_tree(&tinkery, TOP);
-    wait_for_selected(&tinkery, 7, "    README.md");
+    wait_for_selected(&tinkery, 7, "     README.md");
     assert_eq!(
         fs::read(dir.path().join("notes.txt")).expect("read notes"),
         notes
@@ -370,8 +383,7 @@ fn renaming_with(toml: &str) -> (tempfile::TempDir, Tinkery) {
         tinkery.send_keys("down");
     }
     tinkery.wait_for_screen("notes.txt selected", WAIT, |screen| {
-        let line: String = screen[6].chars().take(TREE).collect();
-        line.trim_end() == "    notes.txt"
+        tree_text(&screen[6]) == "     notes.txt" && screen[6].contains('›')
     });
     tinkery.send_keys("r");
     tinkery.wait_for_text("Rename  notes.txt", WAIT);
@@ -495,5 +507,5 @@ fn d_asks_before_trashing_with_a_red_button_and_cancel_keeps_the_file() {
         tinkery.wait_for_text_gone(QUESTION, WAIT);
         assert!(notes.exists(), "{cancel}");
     }
-    assert!(tree_rows(&tinkery.screen()).contains(&"    notes.txt".to_string()));
+    assert!(tree_rows(&tinkery.screen()).contains(&"     notes.txt".to_string()));
 }

@@ -8,7 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use harness::{ROWS, Tinkery};
+use harness::{CAP_L, CAP_R, ROWS, Tinkery};
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -916,10 +916,20 @@ fn the_jump_list_keeps_the_last_50_places() {
     assert!(status_line(&tinkery).contains(&format!("Ln {line}, Col {}", col + 1)));
 }
 
-/// The theme with `card` pinned, so the popup's background is known.
-const CARD: vt100::Color = vt100::Color::Rgb(0x20, 0x30, 0x40);
-/// The popup's border and rule colour, pinned as `line2` where a test needs it.
-const LINE2: vt100::Color = vt100::Color::Rgb(0x50, 0x60, 0x70);
+// The popups are read in the default theme, tinkery, which a config naming no
+// theme runs on. A popup's card is `raised`; its edge and the hover's rule are
+// `line2`, and the edge sits on the editor's `bg`.
+const CARD: vt100::Color = vt100::Color::Rgb(0x1f, 0x1b, 0x19);
+const LINE2: vt100::Color = vt100::Color::Rgb(0x40, 0x36, 0x2f);
+const BG: vt100::Color = vt100::Color::Rgb(0x11, 0x0f, 0x0e);
+const HOV: vt100::Color = vt100::Color::Rgb(0x3a, 0x30, 0x2a);
+const ACCENT: vt100::Color = vt100::Color::Rgb(0xff, 0x8a, 0x3d);
+const FG: vt100::Color = vt100::Color::Rgb(0xdc, 0xd2, 0xc7);
+const TEXT: vt100::Color = vt100::Color::Rgb(0xb5, 0xa8, 0x9d);
+const STRONG: vt100::Color = vt100::Color::Rgb(0xf8, 0xf0, 0xe6);
+const MUTED: vt100::Color = vt100::Color::Rgb(0x7d, 0x70, 0x67);
+/// `[ui]` asking for a card's edge as rounded lines rather than flush blocks.
+const ROUNDED: &str = "[ui]\ncorners = \"rounded\"\n";
 
 /// The fake's answer to every `textDocument/hover`: markdown with a code fence
 /// and a paragraph too long for one line of the popup.
@@ -928,18 +938,31 @@ const HOVER_MARKDOWN: &str = r#"{"responses": {"textDocument/hover": {"contents"
     "value": "```rust\npub fn greet()\n```\n\nGreets whoever is listening, then keeps on talking for quite a while so this line wraps."
 }}}}"#;
 
-/// A definition project (cursor still at the top) with `card` and `line2`
-/// pinned, its cursor moved onto `greet` on line 4.
+/// The cells of `row` from column `from` up to `to`, blanks included: `screen`
+/// drops the blanks a row ends in, and a flush card's corners are blank.
+fn cells(screen: &[String], row: u16, from: u16, to: u16) -> String {
+    let line = &screen[usize::from(row)];
+    line.chars()
+        .chain(std::iter::repeat(' '))
+        .skip(usize::from(from))
+        .take(usize::from(to - from))
+        .collect()
+}
+
+/// A definition project (cursor still at the top) in tinkery, its cursor
+/// moved onto `greet` on line 4.
 fn hover_project(script: &str) -> (Project, Tinkery) {
+    hover_project_with(script, "")
+}
+
+/// `hover_project` with `extra` added to its config.
+fn hover_project_with(script: &str, extra: &str) -> (Project, Tinkery) {
     let project = Project::new(Some(script));
     let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/definition");
     for name in ["main.rs", "util.rs"] {
         fs::copy(fixtures.join(name), project.dir.path().join(name)).expect("copy fixture");
     }
-    let config = format!(
-        "{}[theme_overrides]\ncard = \"#203040\"\nline2 = \"#506070\"\n",
-        rust_server(fake())
-    );
+    let config = format!("{}{extra}", rust_server(fake()));
     let mut tinkery = project.open(&config, "main.rs");
     project.wait_for(&tinkery, "textDocument/didOpen", "main.rs");
     for (key, at) in [
@@ -955,8 +978,8 @@ fn hover_project(script: &str) -> (Project, Tinkery) {
     (project, tinkery)
 }
 
-// Below the cursor on `greet` (16, 6): the border on row 7, then the text one
-// cell in from the border, on rows 8 to 11.
+// Below the cursor on `greet` (16, 6): the card's edge on row 7, then the text
+// one cell in from the edge, on rows 8 to 11.
 const HOVER_TEXT_COL: u16 = 18;
 const HOVER_FIRST_ROW: u16 = 8;
 
@@ -995,6 +1018,10 @@ fn alt_k_shows_the_hover_below_the_cursor() {
     }
     assert_eq!(tinkery.bg_at(HOVER_TEXT_COL, HOVER_FIRST_ROW), CARD);
     assert_eq!(tinkery.bg_at(HOVER_TEXT_COL + 40, HOVER_FIRST_ROW), CARD);
+    // The code in `fg`, the docs in `text`.
+    assert_eq!(tinkery.fg_at(HOVER_TEXT_COL, HOVER_FIRST_ROW), FG);
+    assert_eq!(tinkery.fg_at(HOVER_TEXT_COL, HOVER_FIRST_ROW + 2), TEXT);
+    assert_eq!(tinkery.fg_at(HOVER_TEXT_COL, HOVER_FIRST_ROW + 3), TEXT);
     // The cursor stays in the text, on `greet`.
     tinkery.wait_for_cursor(GREET_COL, GREET_ROW, WAIT);
     let status = status_line(&tinkery);
@@ -1004,51 +1031,98 @@ fn alt_k_shows_the_hover_below_the_cursor() {
     );
 }
 
-#[test]
-fn the_hover_has_a_rounded_border_a_rule_under_the_code_and_dims_nothing() {
-    let (_project, mut tinkery) = hover_project(HOVER_MARKDOWN);
-    // Every cell left of the card, from the tab header down past its bottom.
-    let cells: Vec<(u16, u16)> = (3..14)
-        .flat_map(|row| (0..16).map(move |col| (col, row)))
+/// Opens the hover of a `hover_project` under `extra` config and checks its
+/// card, from (16, 7) to (79, 12): 60 columns of text plus an edge and a cell
+/// of padding each side; the code, the rule, two rows of docs. `top` and
+/// `bottom` are the edge rows as drawn, `sides` the two side glyphs, and
+/// `rule` the row between the code and the docs.
+fn assert_hover_card(extra: &str, top: &str, bottom: &str, sides: (&str, &str), rule: &str) {
+    let (_project, mut tinkery) = hover_project_with(HOVER_MARKDOWN, extra);
+    // Every cell around the card, from the tab header down past its bottom:
+    // the rows above and below it, and the columns either side of it.
+    let (left, right, top_row, bottom_row) = (16, 79, HOVER_FIRST_ROW - 1, HOVER_FIRST_ROW + 4);
+    let outside: Vec<(u16, u16)> = (3..14)
+        .flat_map(|row| (0..100).map(move |col| (col, row)))
+        .filter(|&(col, row)| {
+            !((left..=right).contains(&col) && (top_row..=bottom_row).contains(&row))
+        })
         .collect();
     let colours = |tinkery: &Tinkery| -> Vec<_> {
-        cells
+        outside
             .iter()
             .map(|&(col, row)| (tinkery.fg_at(col, row), tinkery.bg_at(col, row)))
             .collect()
     };
     let before = colours(&tinkery);
+    let around = |tinkery: &Tinkery| -> Vec<String> {
+        let screen = tinkery.screen();
+        (3..14)
+            .map(|row| {
+                let beside = (top_row..=bottom_row).contains(&row);
+                cells(&screen, row, 0, if beside { left } else { 100 })
+            })
+            .collect()
+    };
+    let text_before = around(&tinkery);
 
     tinkery.send_keys("alt+k");
     tinkery.wait_for_text("pub fn greet()", WAIT);
     let screen = tinkery.screen();
-    // The card from (16, 7) to (79, 12): 60 columns of text plus border and
-    // padding, the code, the rule, two rows of docs.
-    let (left, right, top, bottom) = (16, 79, HOVER_FIRST_ROW - 1, HOVER_FIRST_ROW + 4);
-    for (row, ends) in [(top, ("╭", "╮")), (bottom, ("╰", "╯"))] {
-        assert_eq!(tinkery.text_col(row, ends.0), Some(left), "{screen:#?}");
-        assert_eq!(tinkery.text_col(row, ends.1), Some(right), "{screen:#?}");
-        assert_eq!(tinkery.fg_at(left, row), LINE2);
-        assert_eq!(tinkery.fg_at(left + 30, row), LINE2);
-        assert_eq!(tinkery.bg_at(left + 30, row), CARD);
+    let row_of = |row: u16| cells(&screen, row, left, right + 1);
+    assert_eq!(row_of(top_row), top, "{screen:#?}");
+    assert_eq!(row_of(bottom_row), bottom, "{screen:#?}");
+    assert_eq!(row_of(HOVER_FIRST_ROW + 1), rule, "{screen:#?}");
+    // The edge is `line2` on the editor's ground; nothing of the text it
+    // covers is left in it.
+    for row in [top_row, bottom_row] {
+        for col in [left, left + 30, right] {
+            assert_eq!(tinkery.fg_at(col, row), LINE2, "{col},{row}");
+            assert_eq!(tinkery.bg_at(col, row), BG, "{col},{row}");
+        }
     }
-    for row in [HOVER_FIRST_ROW, HOVER_FIRST_ROW + 2] {
-        assert_eq!(tinkery.text_col(row, "│"), Some(left), "{screen:#?}");
-        assert_eq!(tinkery.fg_at(right, row), LINE2);
+    for row in HOVER_FIRST_ROW..bottom_row {
+        if row != HOVER_FIRST_ROW + 1 {
+            let line = row_of(row);
+            assert!(
+                line.starts_with(sides.0) && line.ends_with(sides.1),
+                "{line:?}"
+            );
+        }
+        for col in [left, right] {
+            assert_eq!(tinkery.fg_at(col, row), LINE2, "{col},{row}");
+            assert_eq!(tinkery.bg_at(col, row), BG, "{col},{row}");
+        }
     }
-    // The rule takes the blank line between the code and the docs, joined to
-    // the side borders.
-    let rule = format!("├{}┤", "─".repeat(usize::from(right - left - 1)));
-    assert_eq!(
-        tinkery.text_col(HOVER_FIRST_ROW + 1, &rule),
-        Some(left),
-        "{screen:#?}"
-    );
-    assert_eq!(tinkery.fg_at(left, HOVER_FIRST_ROW + 1), LINE2);
+    // The rule takes the blank line between the code and the docs, on the card.
     assert_eq!(tinkery.fg_at(left + 30, HOVER_FIRST_ROW + 1), LINE2);
     assert_eq!(tinkery.bg_at(left + 30, HOVER_FIRST_ROW + 1), CARD);
-    // Not a dialog: the text beside it keeps its colours.
+    // Not a dialog: everything around the card keeps its text and colours.
     assert_eq!(colours(&tinkery), before);
+    assert_eq!(around(&tinkery), text_before);
+}
+
+#[test]
+fn the_hover_is_a_flush_card_with_a_rule_under_the_code_and_dims_nothing() {
+    // Eighth blocks on the side of each cell that faces the card, with blank
+    // corners; the rule runs between the two side edges.
+    assert_hover_card(
+        "",
+        &format!(" {} ", "▁".repeat(62)),
+        &format!(" {} ", "▔".repeat(62)),
+        ("▕", "▏"),
+        &format!("▕{}▏", "─".repeat(62)),
+    );
+}
+
+#[test]
+fn a_rounded_hover_card_joins_its_rule_to_the_side_edges() {
+    assert_hover_card(
+        ROUNDED,
+        &format!("╭{}╮", "─".repeat(62)),
+        &format!("╰{}╯", "─".repeat(62)),
+        ("│", "│"),
+        &format!("├{}┤", "─".repeat(62)),
+    );
 }
 
 #[test]
@@ -1118,11 +1192,7 @@ fn the_hover_flips_above_and_shifts_left_at_the_screen_edges() {
     text.push_str(&format!("fn last() -> u32 {{ 7 }} {}", "/".repeat(85 - 23)));
     assert_eq!(text.lines().last().map(str::len), Some(85));
     fs::write(project.dir.path().join("long.rs"), &text).expect("write long.rs");
-    let config = format!(
-        "{}[theme_overrides]\ncard = \"#203040\"\n",
-        rust_server(fake())
-    );
-    let mut tinkery = project.open(&config, "long.rs");
+    let mut tinkery = project.open(&rust_server(fake()), "long.rs");
     project.wait_for(&tinkery, "textDocument/didOpen", "long.rs");
 
     tinkery.send_keys("ctrl+end");
@@ -1135,13 +1205,19 @@ fn the_hover_flips_above_and_shifts_left_at_the_screen_edges() {
     let doc = "Returns the last value, counting back from the very end.";
     tinkery.wait_for_text(doc, WAIT);
     // 56 columns of text in a 60-wide card, pushed left to end at the right
-    // edge, and flipped above: border, three text rows, border ending just over
+    // edge, and flipped above: edge, three text rows, edge ending just over
     // the cursor's row.
     let row = cursor.1 - 2;
     let col = tinkery.text_col(row, doc);
     assert_eq!(col, Some(100 - 60 + 2), "{:#?}", tinkery.screen());
     assert_eq!(tinkery.text_col(row - 2, "fn last() -> u32"), Some(42));
     assert_eq!(tinkery.bg_at(42, row), CARD);
+    // The card's own corners: (40, 24) to (99, 28).
+    let screen = tinkery.screen();
+    for (edge_row, glyph) in [(row - 3, "▁"), (row + 1, "▔")] {
+        let line = cells(&screen, edge_row, 40, 100);
+        assert_eq!(line, format!(" {} ", glyph.repeat(58)), "{screen:#?}");
+    }
     // The cursor's line and the status line are untouched.
     let screen = tinkery.screen();
     assert!(
@@ -1152,33 +1228,20 @@ fn the_hover_flips_above_and_shifts_left_at_the_screen_edges() {
     tinkery.wait_for_cursor(cursor.0, cursor.1, WAIT);
 }
 
-/// The theme with the popup's roles pinned, so its rows' colours are known.
-const COMPLETION_THEME: &str = "[theme_overrides]\ncard = \"#203040\"\n\
-    accent = \"#c080ff\"\naccent2 = \"#40e0d0\"\nfg = \"#c0c4c8\"\n\
-    strong = \"#f0f2f4\"\nmuted = \"#707478\"\n";
-const ACCENT: vt100::Color = vt100::Color::Rgb(0xc0, 0x80, 0xff);
-const FG: vt100::Color = vt100::Color::Rgb(0xc0, 0xc4, 0xc8);
-const STRONG: vt100::Color = vt100::Color::Rgb(0xf0, 0xf2, 0xf4);
-const MUTED: vt100::Color = vt100::Color::Rgb(0x70, 0x74, 0x78);
-
-/// `a` moved `t` of the way to `b`, per channel, rounded, as the editor mixes.
-fn mix(a: vt100::Color, b: vt100::Color, t: f64) -> vt100::Color {
-    let (vt100::Color::Rgb(r1, g1, b1), vt100::Color::Rgb(r2, g2, b2)) = (a, b) else {
-        panic!("can't mix {a:?} and {b:?}");
-    };
-    let m = |p: u8, q: u8| (f64::from(p) + (f64::from(q) - f64::from(p)) * t).round() as u8;
-    vt100::Color::Rgb(m(r1, r2), m(g1, g2), m(b1, b2))
-}
-
-/// The left end of the selected row's glow: `raised` lit 30 % towards the accent.
-fn glow() -> vt100::Color {
-    mix(CARD, ACCENT, 0.3)
-}
-
 /// Whether `row` of a card whose rows start `shift` cells right of the usual is
-/// the selected one: the glow row, its label in `strong` from column `col`.
+/// the selected one: a pill of `hov` from the card's inside, `›` a cell into
+/// it in `accent`, and its label in `strong` bold from column `col`.
 fn is_selected(tinkery: &Tinkery, row: u16, shift: u16, col: u16) -> bool {
-    tinkery.bg_at(KIND_COL - 1 + shift, row) == glow() && tinkery.fg_at(col, row) == STRONG
+    let pill = KIND_COL - 3 + shift;
+    tinkery.text_col(row, CAP_L) == Some(pill)
+        && tinkery.fg_at(pill, row) == HOV
+        && tinkery.bg_at(pill, row) == CARD
+        && tinkery.text_col(row, "›") == Some(pill + 1)
+        && tinkery.fg_at(pill + 1, row) == ACCENT
+        && tinkery.bg_at(pill + 1, row) == HOV
+        && tinkery.bg_at(col, row) == HOV
+        && tinkery.fg_at(col, row) == STRONG
+        && tinkery.bold_at(col, row)
 }
 
 /// Initialize advertising `.` as a completion trigger, then 12 items for every
@@ -1225,13 +1288,10 @@ fn completion_script(extra: &str) -> String {
 /// A project with `comp.rs` open on the fake server, the cursor at the end of
 /// its indented empty line 2.
 fn completion_project(script: &str) -> (Project, Tinkery) {
-    completion_project_with(
-        script,
-        &format!("{}{COMPLETION_THEME}", rust_server(fake())),
-    )
+    completion_project_with(script, &rust_server(fake()))
 }
 
-/// `completion_project` under `config` rather than the pinned theme.
+/// `completion_project` under `config` rather than tinkery's defaults.
 fn completion_project_with(script: &str, config: &str) -> (Project, Tinkery) {
     let project = Project::new(Some(script));
     fs::write(project.dir.path().join("comp.rs"), "fn main() {\n    \n}\n").expect("write comp.rs");
@@ -1266,12 +1326,13 @@ fn open_completion(project: &Project, tinkery: &mut Tinkery, line: u16) {
 }
 
 // The gutter "   1  " is 6 cells, so after `    s.` on line 2 the cursor is at
-// (12, 4). The card's border is on row 5; its rows start on row 6, the kind one
-// cell in from the border at column 14 and, after the 6-wide `method` and a
-// space, the label at column 21.
+// (12, 4). The card's edge is on row 5 and in column 12; its rows start on row
+// 6. A row's pill starts at column 13 with `›` at 14, so the kind is three
+// cells into the card's inside at column 16 and, after the 6-wide `method` and
+// a space, the label at column 23.
 const ITEM_ROW: u16 = 6;
-const KIND_COL: u16 = 14;
-const LABEL_COL: u16 = 21;
+const KIND_COL: u16 = 16;
+const LABEL_COL: u16 = 23;
 
 #[test]
 fn a_trigger_character_or_alt_slash_shows_up_to_ten_items_with_kinds() {
@@ -1322,32 +1383,47 @@ fn a_trigger_character_or_alt_slash_shows_up_to_ten_items_with_kinds() {
         "{screen:#?}"
     );
     assert!(!screen.iter().any(|r| r.contains("trim")), "{screen:#?}");
-    // The first row is selected, the glow row; the rest are on the card, kind
-    // `muted`, label `fg`.
+    // The first row is selected, a pill with its kind in `text`; the rest are
+    // on the card, kind `muted`, label `fg`.
     assert!(is_selected(&tinkery, ITEM_ROW, 0, LABEL_COL), "{screen:#?}");
-    assert_eq!(tinkery.fg_at(KIND_COL, ITEM_ROW), MUTED);
+    assert_eq!(tinkery.fg_at(KIND_COL, ITEM_ROW), TEXT);
+    assert_eq!(tinkery.text_col(ITEM_ROW + 1, "›"), None, "{screen:#?}");
+    assert_eq!(tinkery.bg_at(KIND_COL - 3, ITEM_ROW + 1), CARD);
     assert_eq!(tinkery.bg_at(LABEL_COL, ITEM_ROW + 1), CARD);
     assert_eq!(tinkery.fg_at(KIND_COL, ITEM_ROW + 1), MUTED);
     assert_eq!(tinkery.fg_at(LABEL_COL, ITEM_ROW + 1), FG);
-    // `len`'s detail, right-aligned two cells in from the card's right border:
-    // 6 + 1 + 9 + 2 + 18 cells of text make the card 40 wide, from column 12.
+    // `len`'s detail, right-aligned two cells in from the card's right edge,
+    // where the row's pill ends: 6 + 1 + 9 + 2 + 18 cells of text, the three
+    // before it and an edge each side make the card 42 wide, from column 12.
+    let (left, right) = (12, 12 + 42 - 1);
     let len_row = ITEM_ROW + 7;
     let detail = "fn(&self) -> usize";
     assert_eq!(
         tinkery.text_col(len_row, detail),
-        Some(12 + 40 - 2 - 18),
+        Some(right - 1 - 18),
         "{screen:#?}"
     );
-    assert_eq!(tinkery.text_col(len_row, "│"), Some(12));
-    assert_eq!(
-        screen[usize::from(len_row)].chars().nth(12 + 40 - 1),
-        Some('│')
-    );
-    // The same rounded frame as the hover's.
-    assert_eq!(tinkery.text_col(ITEM_ROW - 1, "╭"), Some(12));
-    assert_eq!(tinkery.text_col(ITEM_ROW - 1, "╮"), Some(12 + 40 - 1));
-    assert_eq!(tinkery.text_col(ITEM_ROW + 10, "╰"), Some(12));
-    assert_eq!(tinkery.fg_at(12 + 40 - 2 - 18, len_row), MUTED);
+    assert_eq!(tinkery.fg_at(right - 1 - 18, len_row), MUTED);
+    // The selected row's pill ends in the cell before the edge.
+    assert_eq!(tinkery.text_col(ITEM_ROW, CAP_R), Some(right - 1));
+    // The same flush card as the hover's, its edge `line2` on the editor's
+    // ground: nothing of the `}` it covers on row 5 shows.
+    let row_of = |row: u16| cells(&screen, row, left, right + 1);
+    assert_eq!(row_of(ITEM_ROW - 1), format!(" {} ", "▁".repeat(40)));
+    assert_eq!(row_of(ITEM_ROW + 10), format!(" {} ", "▔".repeat(40)));
+    for row in ITEM_ROW..ITEM_ROW + 10 {
+        let line = row_of(row);
+        assert!(line.starts_with('▕') && line.ends_with('▏'), "{line:?}");
+        for col in [left, right] {
+            assert_eq!(tinkery.fg_at(col, row), LINE2, "{col},{row}");
+            assert_eq!(tinkery.bg_at(col, row), BG, "{col},{row}");
+        }
+    }
+    assert_eq!(tinkery.fg_at(left + 5, ITEM_ROW - 1), LINE2);
+    assert_eq!(tinkery.bg_at(left + 5, ITEM_ROW - 1), BG);
+    // Not dimmed: the code beside it keeps its colours.
+    assert!(screen[3].starts_with("   1  fn main() {"), "{screen:#?}");
+    assert!(screen[4].starts_with("   2      s."), "{screen:#?}");
     assert!(status_line(&tinkery).contains("Ln 2, Col 7"));
 
     // Esc closes it; Alt+/ asks again from the same place.
@@ -1370,18 +1446,34 @@ fn mono_reverses_the_selected_completion_row() {
     open_completion(&project, &mut tinkery, 2);
     tinkery.wait_for_cursor(12, 4, WAIT);
     let screen = tinkery.screen();
-    // The selected row is reverse video across the card, kind and label in it.
+    // The selected row is reverse video across the card's inside, with its
+    // mark, kind and label in it.
     let selected = tinkery.reversed_text(ITEM_ROW);
     assert!(
-        selected.contains("field  as_str"),
+        selected.starts_with(" › field  as_str"),
         "{selected:?} {screen:#?}"
     );
-    assert_eq!(selected.chars().count(), 40 - 2, "{selected:?}");
+    assert_eq!(selected.chars().count(), 42 - 2, "{selected:?}");
     // Its label keeps the row's own colours rather than `strong`, so it reads
-    // as reversed like the rest of the row.
-    assert_eq!(
-        tinkery.fg_at(LABEL_COL, ITEM_ROW),
-        tinkery.fg_at(KIND_COL - 1, ITEM_ROW)
+    // as reversed like the rest of the row, and is told apart by weight.
+    for col in [KIND_COL - 2, KIND_COL, LABEL_COL] {
+        assert_eq!(
+            (tinkery.fg_at(col, ITEM_ROW), tinkery.bg_at(col, ITEM_ROW)),
+            (
+                tinkery.fg_at(KIND_COL - 3, ITEM_ROW),
+                tinkery.bg_at(KIND_COL - 3, ITEM_ROW)
+            ),
+            "{col}"
+        );
+    }
+    assert!(tinkery.bold_at(LABEL_COL, ITEM_ROW));
+    assert!(!tinkery.bold_at(KIND_COL, ITEM_ROW));
+    // No Nerd Font glyph rounds the row's ends.
+    assert!(
+        !screen
+            .iter()
+            .any(|row| row.contains(CAP_L) || row.contains(CAP_R)),
+        "{screen:#?}"
     );
     assert_ne!(
         tinkery.fg_at(LABEL_COL, ITEM_ROW),
@@ -1419,7 +1511,8 @@ fn typing_filters_and_the_arrows_move_the_selection() {
         Some(KIND_COL + 1)
     );
     // The typed `p` is `accent` bold in every label; the rest of the selected
-    // label, from column `LABEL_COL + 2`, is `strong`.
+    // label, from column `LABEL_COL + 2`, is `strong` bold, and of the other
+    // `fg`.
     assert!(
         is_selected(&tinkery, ITEM_ROW, 1, LABEL_COL + 2),
         "{screen:#?}"
@@ -1427,15 +1520,16 @@ fn typing_filters_and_the_arrows_move_the_selection() {
     for row in [ITEM_ROW, ITEM_ROW + 1] {
         assert_eq!(tinkery.fg_at(LABEL_COL + 1, row), ACCENT);
         assert!(tinkery.bold_at(LABEL_COL + 1, row));
-        assert!(!tinkery.bold_at(LABEL_COL + 2, row));
     }
     assert_eq!(tinkery.fg_at(LABEL_COL + 2, ITEM_ROW + 1), FG);
+    assert!(!tinkery.bold_at(LABEL_COL + 2, ITEM_ROW + 1));
 
     tinkery.send_keys("down");
     tinkery.wait_for_fg_at(LABEL_COL + 2, ITEM_ROW + 1, STRONG, WAIT);
     assert!(is_selected(&tinkery, ITEM_ROW + 1, 1, LABEL_COL + 2));
     assert_eq!(tinkery.bg_at(LABEL_COL + 1, ITEM_ROW), CARD);
     assert_eq!(tinkery.fg_at(LABEL_COL + 2, ITEM_ROW), FG);
+    assert_eq!(tinkery.text_col(ITEM_ROW, "›"), None);
     // The selection stops at the last item, and the cursor never moves.
     tinkery.send_keys("down");
     tinkery.send_keys("up");
