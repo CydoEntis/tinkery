@@ -97,7 +97,8 @@ Behaviour
   cursor stays in the status bar.
 - **F23. Motion.** The selection pill glides between rows in 90 ms; a toast slides in over
   120 ms and fades over 350 ms; movement is in whole cells, eased out. `[ui] motion = false`
-  turns all of it off. It is off in `mono` and in tests.
+  turns all of it off. It is off in `mono` and in tests: the environment variable
+  `TINKERY_MOTION=0`, which the PTY harness sets, turns it off whatever the setting says.
 - **F24. Cleanup.** No renderer calls `glow_row`, `dialog_card` or `draw_thread`; they and
   their tests are removed. The Aurora spec is marked superseded by this one.
 

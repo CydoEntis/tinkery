@@ -331,6 +331,8 @@ mod tests {
     const LOOK: Look = Look {
         pill_caps: true,
         corners: crate::config::Corners::Flush,
+        motion: true,
+        glide: None,
     };
 
     #[test]
@@ -537,6 +539,8 @@ mod tests {
         let square = Look {
             pill_caps: false,
             corners: crate::config::Corners::Flush,
+            motion: true,
+            glide: None,
         };
         let squared = right_runs(square, &theme, &status, shown(true, true, true));
         assert_eq!(

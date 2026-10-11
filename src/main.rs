@@ -80,6 +80,7 @@ async fn main() -> Result<()> {
     let result = App::new(settings.keymap, settings.editor, path, config_error)
         .with_theme(settings.theme)
         .with_look(ui::kit::Look::of(&settings.ui))
+        .with_motion(motion_allowed(std::env::var_os("TINKERY_MOTION")))
         .with_lsp(Lsp::new(lsp::servers::with_defaults(settings.lsp)))
         .with_debug_adapters(settings.debug)
         .with_config_path(config::config_path(std::env::var_os("TINKERY_CONFIG")))
@@ -92,6 +93,14 @@ async fn main() -> Result<()> {
     let restored = restore_terminal();
     result?;
     restored
+}
+
+/// Whether `TINKERY_MOTION` leaves motion to `[ui] motion`: only `0` turns it
+/// off, whatever the config says then or after a save. The PTY harness sets
+/// it, as a test can't wait out a glide; unset, empty or anything else leaves
+/// the setting in charge.
+fn motion_allowed(var: Option<std::ffi::OsString>) -> bool {
+    var.is_none_or(|value| value != "0")
 }
 
 /// The `--health` report. A config that fails to load is reported by the editor
@@ -164,6 +173,15 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn only_tinkery_motion_0_takes_motion_from_the_setting() {
+        assert!(motion_allowed(None));
+        assert!(!motion_allowed(Some("0".into())));
+        for other in ["", "1", "true", "false", "00"] {
+            assert!(motion_allowed(Some(other.into())), "{other:?}");
+        }
+    }
 
     #[test]
     fn panic_hook_restores_terminal_before_panic_message() {

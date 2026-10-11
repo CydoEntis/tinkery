@@ -42,6 +42,13 @@ pub struct Look {
     pub pill_caps: bool,
     /// The edge of a card: flush eighth blocks or rounded lines.
     pub corners: Corners,
+    /// Whether the selection glides and toasts slide and fade (see
+    /// `ui::motion`). `App` reads it; nothing drawn here does.
+    pub motion: bool,
+    /// The screen row the selection pill is on while it glides to the selected
+    /// row of the list being drawn: `sel_row` draws it there instead. `None`
+    /// whenever the pill is where it belongs, which is all `[ui]` ever asks.
+    pub glide: Option<u16>,
 }
 
 impl Default for Look {
@@ -56,6 +63,17 @@ impl Look {
         Look {
             pill_caps: ui.pill_caps,
             corners: ui.corners,
+            motion: ui.motion,
+            glide: None,
+        }
+    }
+
+    /// This look for a list whose selection pill is passing over screen row
+    /// `row` on its way to the selected one.
+    pub fn gliding(self, row: u16) -> Look {
+        Look {
+            glide: Some(row),
+            ..self
         }
     }
 
@@ -698,6 +716,11 @@ impl RowInk {
 /// active file. Accent is never a row's fill. `mono` has no fills: there the
 /// selected row is reverse video from edge to edge, with the mark and nothing
 /// coloured on it, and a lit row shows nothing.
+///
+/// While the pill glides (`look.glide`), it and its mark are on the row it is
+/// passing: that row's text stays where it is, in the colours of a lit row,
+/// which read on the fill. The selected row waits as a resting one until the
+/// pill arrives. `mono` never glides.
 pub fn sel_row(
     look: Look,
     theme: &Theme,
@@ -739,13 +762,16 @@ pub fn sel_row(
             plain: true,
         };
     }
-    if !selected && !lit {
+    // The pill is on this row for now, or away from the selected one.
+    let passing = !selected && look.glide == Some(row.y);
+    let selected = selected && look.glide.is_none_or(|at| at == row.y);
+    if !selected && !lit && !passing {
         return resting;
     }
     let fill = theme.hov;
     row_pill(look, theme, buf, (row.x, row.y), row.width, fill, ground);
     let on = Style::new().bg(fill);
-    if selected {
+    if selected || passing {
         let mark = [Span::styled(
             SEL_MARK,
             on.fg(theme.accent).add_modifier(bold),
@@ -764,6 +790,27 @@ pub fn sel_row(
         fill,
         plain: false,
     }
+}
+
+/// The screen row of a list in `card` on which `sel_row` drew the pill's mark:
+/// the selected row, or the one the pill is passing while it glides. A list's
+/// rows run from one edge of the card's inside to the other, so the mark is
+/// two cells in from the card's left edge. `None` when no row there has it.
+pub fn marked_row(buf: &Buffer, card: Rect) -> Option<u16> {
+    let x = card.x.checked_add(2)?;
+    let rows = Rect {
+        y: card.y.saturating_add(1),
+        height: card.height.saturating_sub(2),
+        ..card
+    }
+    .intersection(buf.area);
+    if x >= rows.right() {
+        return None;
+    }
+    (rows.top()..rows.bottom()).find(|&y| {
+        let cell = &buf[(x, y)];
+        cell.symbol() == SEL_MARK && cell.modifier.contains(Modifier::BOLD)
+    })
 }
 
 /// The screen row of a list in `card` that the pointer at `at` is on: any row
@@ -844,10 +891,14 @@ mod tests {
     const ROUND: Look = Look {
         pill_caps: true,
         corners: Corners::Flush,
+        motion: true,
+        glide: None,
     };
     const SQUARE: Look = Look {
         pill_caps: false,
         corners: Corners::Flush,
+        motion: true,
+        glide: None,
     };
     const FILL: Color = Color::Rgb(1, 2, 3);
     const GROUND: Color = Color::Rgb(9, 9, 9);
@@ -905,9 +956,14 @@ mod tests {
         let asked = Look::of(&UiConfig {
             pill_caps: false,
             corners: Corners::Rounded,
+            motion: false,
         });
         assert!(!asked.pill_caps);
         assert_eq!(asked.corners, Corners::Rounded);
+        // Motion follows the setting too, and no look from `[ui]` is gliding.
+        assert!(Look::default().motion);
+        assert!(!asked.motion);
+        assert_eq!((Look::default().glide, asked.glide), (None, None));
         assert!(ROUND.round(&Theme::default()));
         assert!(!SQUARE.round(&Theme::default()));
         assert!(!ROUND.round(&mono()));
@@ -1132,6 +1188,8 @@ mod tests {
     const ROUNDED: Look = Look {
         pill_caps: true,
         corners: Corners::Rounded,
+        motion: true,
+        glide: None,
     };
     const KINDS: [ButtonKind; 4] = [
         ButtonKind::Primary,
@@ -1788,6 +1846,123 @@ mod tests {
                 list_row(look, &theme, true, false)
             );
         }
+    }
+
+    /// Three rows of a list in a card at the origin, twelve wide: a row is
+    /// the ten cells from 1 and its label is `one`, `two` or `three`, drawn
+    /// in the row's own ink. Row `selected` is the selected one.
+    fn list(look: Look, theme: &Theme, selected: u16) -> Buffer {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 12, 5));
+        buf.set_style(buf.area, Style::new().bg(GROUND));
+        for (y, label) in (1..).zip(["one", "two", "three"]) {
+            let row = Rect::new(1, y, 10, 1);
+            let ink = sel_row(look, theme, &mut buf, row, y == selected, false, GROUND);
+            buf.set_string(4, y, label, ink.label);
+        }
+        buf
+    }
+
+    #[test]
+    fn a_gliding_pill_is_on_the_row_it_passes_and_the_selected_row_waits() {
+        for (look, theme, round) in looks().into_iter().take(2) {
+            let still = list(look, &theme, 3);
+            // Arrived, or not gliding at all, the list is as it always was.
+            assert_eq!(list(look.gliding(3), &theme, 3), still);
+            assert_eq!(marked_row(&still, Rect::new(0, 0, 12, 5)), Some(3));
+
+            let passing = list(look.gliding(1), &theme, 3);
+            // The pill, ends and mark, is on the row it is passing.
+            for (x, cap) in [(1, CAP_L), (10, CAP_R)] {
+                let end = &passing[(x, 1)];
+                if round {
+                    assert_eq!(end.symbol(), cap, "{x}");
+                    assert_eq!((end.fg, end.bg), (theme.hov, GROUND), "{x}");
+                } else {
+                    assert_eq!((end.symbol(), end.bg), (" ", theme.hov), "{x}");
+                }
+            }
+            let mark = &passing[(2, 1)];
+            assert_eq!(mark.symbol(), SEL_MARK);
+            assert_eq!((mark.fg, mark.bg), (theme.accent, theme.hov));
+            assert!(mark.modifier.contains(Modifier::BOLD));
+            // That row's text is where it was, in a lit row's ink on the fill.
+            for (x, letter) in (4..).zip(["o", "n", "e"]) {
+                let cell = &passing[(x, 1)];
+                assert_eq!(cell.symbol(), letter);
+                assert_eq!((cell.fg, cell.bg), (theme.fg, theme.hov), "{x}");
+                assert!(!cell.modifier.contains(Modifier::BOLD), "{x}");
+            }
+            // The selected row waits as a resting row: no pill, no mark.
+            for x in 1..11 {
+                assert_eq!(passing[(x, 3)].bg, GROUND, "{x}");
+            }
+            assert_eq!(passing[(2, 3)].symbol(), " ");
+            assert_eq!(passing[(4, 3)].fg, theme.fg);
+            assert!(!passing[(4, 3)].modifier.contains(Modifier::BOLD));
+            // No text moved: every letter is in the cell it has at rest.
+            for y in 0..5 {
+                for x in 3..10 {
+                    assert_eq!(passing[(x, y)].symbol(), still[(x, y)].symbol());
+                }
+            }
+            // One row has the mark, and it is the one the pill is on.
+            assert_eq!(marked_row(&passing, Rect::new(0, 0, 12, 5)), Some(1));
+            // A pill passing a row the list doesn't draw is on no row.
+            let off = list(look.gliding(4), &theme, 3);
+            assert_eq!(marked_row(&off, Rect::new(0, 0, 12, 5)), None);
+        }
+    }
+
+    #[test]
+    fn the_ink_of_the_row_a_pill_passes_is_a_lit_rows() {
+        let theme = Theme::default();
+        let mut buf = screen(12, 1);
+        let row = Rect::new(1, 0, 10, 1);
+        let passing = sel_row(
+            ROUND.gliding(0),
+            &theme,
+            &mut buf,
+            row,
+            false,
+            false,
+            GROUND,
+        );
+        let (_, lit) = list_row(ROUND, &theme, false, true);
+        assert_eq!(passing, lit);
+        // A selected row the pill has left is a resting row.
+        let mut buf = screen(12, 1);
+        let left = sel_row(ROUND.gliding(7), &theme, &mut buf, row, true, false, GROUND);
+        assert_eq!(buf, screen(12, 1));
+        assert_eq!(left, list_row(ROUND, &theme, false, false).1);
+        // Hovered while it waits, it is lit as any hovered row.
+        let mut buf = screen(12, 1);
+        sel_row(ROUND.gliding(7), &theme, &mut buf, row, true, true, GROUND);
+        assert_eq!(buf, list_row(ROUND, &theme, false, true).0);
+    }
+
+    #[test]
+    fn mono_never_glides() {
+        let mono = mono();
+        assert_eq!(list(ROUND.gliding(1), &mono, 3), list(ROUND, &mono, 3));
+    }
+
+    #[test]
+    fn the_marked_row_is_looked_for_inside_the_card_two_cells_in() {
+        let theme = Theme::default();
+        let buf = list(ROUND, &theme, 2);
+        assert_eq!(marked_row(&buf, Rect::new(0, 0, 12, 5)), Some(2));
+        // A card elsewhere, or one whose edges the row is on, has none.
+        assert_eq!(marked_row(&buf, Rect::new(1, 0, 11, 5)), None);
+        assert_eq!(marked_row(&buf, Rect::new(0, 2, 12, 3)), None);
+        assert_eq!(marked_row(&buf, Rect::new(0, 0, 12, 3)), None);
+        // Off the buffer, or too narrow to hold a mark, there is nothing.
+        assert_eq!(marked_row(&buf, Rect::new(0, 9, 12, 5)), None);
+        assert_eq!(marked_row(&buf, Rect::new(10, 0, 2, 5)), None);
+        assert_eq!(marked_row(&buf, Rect::new(u16::MAX, 0, 1, 5)), None);
+        // The mark's glyph as a row's own text, unbolded, is not the mark.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 12, 5));
+        buf.set_string(2, 2, SEL_MARK, Style::new());
+        assert_eq!(marked_row(&buf, Rect::new(0, 0, 12, 5)), None);
     }
 
     #[test]

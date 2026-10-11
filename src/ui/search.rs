@@ -298,6 +298,11 @@ impl ProjectSearch {
         }
     }
 
+    /// The selected row, as a number that changes when the selection moves.
+    pub fn selected_index(&self) -> usize {
+        self.selected
+    }
+
     /// Where the card goes in `area` (SPEC_V1_LAYOUT §7.3): centred, 20 cells
     /// narrower than the screen and 8 rows shorter, within 60..=140 by 14..=40.
     pub fn card(area: Rect) -> Rect {

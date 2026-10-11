@@ -238,6 +238,11 @@ impl DirPicker {
         self.matches.len().clamp(1, FOLDER_ROWS)
     }
 
+    /// The selected row, as a number that changes when the selection moves.
+    pub fn selected_index(&self) -> usize {
+        self.selected
+    }
+
     /// Where the card goes in `area`: the cast's width, centred, from row 4, as
     /// tall as its rows need.
     pub fn card(&self, area: Rect) -> Rect {

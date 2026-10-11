@@ -373,6 +373,11 @@ impl Catalog {
             .saturating_add(reason)
     }
 
+    /// The selected row, as a number that changes when the selection moves.
+    pub fn selected_index(&self) -> usize {
+        self.selected
+    }
+
     /// Where the card goes in `area`: the cast's width, centred, from row 4, as
     /// tall as its rows need.
     pub fn card(&self, area: Rect) -> Rect {
@@ -1050,6 +1055,8 @@ mod tests {
         let look = Look {
             pill_caps: false,
             corners: Corners::Rounded,
+            motion: true,
+            glide: None,
         };
         let mut terminal = Terminal::new(TestBackend::new(100, 30))?;
         terminal.draw(|frame| c.render(look, &theme, frame, frame.area(), None))?;

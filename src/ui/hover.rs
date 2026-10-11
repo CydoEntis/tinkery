@@ -232,10 +232,14 @@ mod tests {
     const FLUSH: Look = Look {
         pill_caps: true,
         corners: Corners::Flush,
+        motion: true,
+        glide: None,
     };
     const ROUNDED: Look = Look {
         pill_caps: true,
         corners: Corners::Rounded,
+        motion: true,
+        glide: None,
     };
 
     fn themes() -> [Theme; 3] {

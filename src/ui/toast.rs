@@ -1,18 +1,21 @@
 //! A note from an action (saved, not found, failed) as a toast (tinkery-forge
 //! spec F22): a pill on `raised2` at the top right of the editor area, its
 //! tone's glyph and then the text in `strong` bold. `App` takes it down when
-//! `hold` is up; nothing here knows the time.
+//! `hold` is up; nothing here knows the time. With motion on (spec F23) `App`
+//! says where the toast is in its movement, as a `Pose`: it slides in from
+//! the area's right edge and fades towards the ground under it.
 
 use std::time::Duration;
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::theme::Theme;
+use crate::theme::{Theme, mix};
 use crate::ui::kit::{self, Look};
+use crate::ui::motion::Pose;
 use crate::ui::status::Tone;
 
 /// Blank cells between the toast and the editor area's right edge, the same
@@ -37,11 +40,17 @@ pub fn hold(tone: Tone) -> Duration {
 
 /// Draws `text` as a toast one row below the top of `area`, right-aligned. A
 /// text too long for the area is cut with `…`; an area too small gets nothing.
+///
+/// `pose` is where it is in its movement: `Pose::STILL` is in place. Sliding
+/// in, it starts at the area's right edge and is cut off there, in whole
+/// cells. Fading, its fill and its text blend towards the ground it sits on;
+/// `mono`, whose colours can't be blended, doesn't fade.
 pub fn render_toast(
     look: Look,
     theme: &Theme,
     tone: Tone,
     text: &str,
+    pose: Pose,
     area: Rect,
     buf: &mut Buffer,
 ) {
@@ -51,7 +60,13 @@ pub fn render_toast(
     }
     let text = cut(text, usize::from(area.width - CHROME - 2 * MARGIN));
     let y = area.y + 1;
-    let x = area.right() - MARGIN - (CHROME + width(&text));
+    let home = area.right() - MARGIN - (CHROME + width(&text));
+    // Between two columns of the area, so the cast can't wrap.
+    let off = (f64::from(area.right() - home) * pose.slide.clamp(0.0, 1.0)).round() as u16;
+    let x = home + off;
+    if x >= area.right() {
+        return;
+    }
     // Whatever the toast lands on (editor text, the splash, a dialog) is the
     // ground its round ends are cut out of.
     let ground = buf[(x, y)].bg;
@@ -71,7 +86,23 @@ pub fn render_toast(
             Span::styled(format!(" {} ", tone.glyph()), bold.fg(tone.color(theme))),
             Span::styled(format!("{text} "), bold.fg(theme.strong)),
         ];
-        kit::pill(look, theme, inside, theme.raised2, ground)
+        let spans = kit::pill(look, theme, inside, theme.raised2, ground);
+        if pose.fade > 0.0 && theme.ramps() {
+            let faded = |color: Option<Color>| color.map(|color| mix(color, ground, pose.fade));
+            spans
+                .into_iter()
+                .map(|span| {
+                    let style = Style {
+                        fg: faded(span.style.fg),
+                        bg: faded(span.style.bg),
+                        ..span.style
+                    };
+                    span.style(style)
+                })
+                .collect()
+        } else {
+            spans
+        }
     };
     kit::put(buf, x, y, &spans, area.right());
 }
@@ -108,15 +139,18 @@ fn width(s: &str) -> u16 {
 mod tests {
     use super::*;
     use crate::config::Corners;
-    use ratatui::style::Color;
 
     const ROUND: Look = Look {
         pill_caps: true,
         corners: Corners::Flush,
+        motion: true,
+        glide: None,
     };
     const SQUARE: Look = Look {
         pill_caps: false,
         corners: Corners::Flush,
+        motion: true,
+        glide: None,
     };
 
     fn theme(name: &str) -> Theme {
@@ -128,8 +162,23 @@ mod tests {
         let area = Rect::new(0, 0, 40, 6);
         let mut buf = Buffer::empty(area);
         buf.set_style(area, Style::new().bg(theme.bg).fg(theme.fg));
-        render_toast(look, theme, tone, text, area, &mut buf);
+        render_toast(look, theme, tone, text, Pose::STILL, area, &mut buf);
         buf
+    }
+
+    /// The same screen with the toast at `pose`.
+    fn posed(theme: &Theme, tone: Tone, text: &str, pose: Pose) -> Buffer {
+        let area = Rect::new(0, 0, 40, 6);
+        let mut buf = Buffer::empty(area);
+        buf.set_style(area, Style::new().bg(theme.bg).fg(theme.fg));
+        render_toast(ROUND, theme, tone, text, pose, area, &mut buf);
+        buf
+    }
+
+    fn cells(buf: &Buffer, y: u16, from: u16) -> String {
+        (from..buf.area.width)
+            .map(|x| buf[(x, y)].symbol().to_string())
+            .collect()
     }
 
     fn row(buf: &Buffer, y: u16) -> String {
@@ -215,7 +264,7 @@ mod tests {
         let area = Rect::new(0, 0, 40, 6);
         let mut buf = Buffer::empty(area);
         buf.set_style(area, Style::new().bg(theme.raised));
-        render_toast(ROUND, &theme, Tone::Ok, "note", area, &mut buf);
+        render_toast(ROUND, &theme, Tone::Ok, "note", Pose::STILL, area, &mut buf);
         assert_eq!(buf[(28, 1)].bg, theme.raised);
         assert_eq!(buf[(37, 1)].bg, theme.raised);
     }
@@ -244,7 +293,15 @@ mod tests {
         let theme = theme("tinkery");
         for area in [Rect::new(0, 0, 40, 2), Rect::new(0, 0, 17, 6)] {
             let mut buf = Buffer::empty(Rect::new(0, 0, 40, 6));
-            render_toast(ROUND, &theme, Tone::Ok, "saved a.txt", area, &mut buf);
+            render_toast(
+                ROUND,
+                &theme,
+                Tone::Ok,
+                "saved a.txt",
+                Pose::STILL,
+                area,
+                &mut buf,
+            );
             for y in 0..6 {
                 assert_eq!(row(&buf, y).trim(), "", "{area:?} row {y}");
             }
@@ -252,8 +309,105 @@ mod tests {
         // One column more and it fits, cut.
         let mut buf = Buffer::empty(Rect::new(0, 0, 40, 6));
         let area = Rect::new(0, 0, 18, 6);
-        render_toast(ROUND, &theme, Tone::Ok, "saved a.txt", area, &mut buf);
+        render_toast(
+            ROUND,
+            &theme,
+            Tone::Ok,
+            "saved a.txt",
+            Pose::STILL,
+            area,
+            &mut buf,
+        );
         assert!(row(&buf, 1).contains("✓ saved a… "), "{:?}", row(&buf, 1));
+    }
+
+    #[test]
+    fn a_toast_slides_in_from_the_right_edge_in_whole_cells() {
+        let theme = theme("tinkery");
+        let hold = hold(Tone::Ok);
+        let at = |ms: u64| Pose::at(Duration::from_millis(ms), hold);
+        let still = posed(&theme, Tone::Ok, "note", Pose::STILL);
+        // In place the pill is the ten cells from 28; the way in is twelve.
+        // 0 %: still off the edge, and nothing is drawn.
+        let start = posed(&theme, Tone::Ok, "note", at(0));
+        assert_eq!(row(&start, 1).trim(), "");
+        // 50 %: eased out, an eighth of the way is left, 1.5 cells, so it is
+        // two whole cells short: over its margin, its end at the edge.
+        let half = posed(&theme, Tone::Ok, "note", at(60));
+        let pill = format!(" {} ✓ note {}", kit::CAP_L, kit::CAP_R);
+        assert_eq!(cells(&half, 1, 29), pill);
+        assert_eq!(half[(29, 1)].bg, theme.bg);
+        // A quarter of the time in, 42 % of the way is left, five cells: the
+        // last three of its ten are cut off at the edge, not wrapped.
+        let early = posed(&theme, Tone::Ok, "note", at(30));
+        assert_eq!(cells(&early, 1, 32), format!(" {} ✓ not", kit::CAP_L));
+        // Its colours are its own all the way in.
+        assert_eq!(half[(34, 1)].bg, theme.raised2);
+        assert_eq!(half[(34, 1)].fg, theme.strong);
+        // 100 %: in place, as with motion off.
+        assert_eq!(posed(&theme, Tone::Ok, "note", at(120)), still);
+        // Only its own row is ever touched.
+        for y in [0, 2, 3, 4, 5] {
+            assert_eq!(row(&half, y).trim(), "", "row {y}");
+        }
+    }
+
+    #[test]
+    fn a_toast_fades_towards_the_ground_under_it() {
+        for name in ["tinkery", "tinkery-light"] {
+            let theme = theme(name);
+            let hold = hold(Tone::Ok);
+            let at = |ms: u64| Pose::at(Duration::from_millis(ms), hold);
+            let still = posed(&theme, Tone::Ok, "note", Pose::STILL);
+            // 0 %: the fade starts 350 ms before the hold is up, as drawn.
+            assert_eq!(posed(&theme, Tone::Ok, "note", at(2150)), still, "{name}");
+            // 50 %: every colour is half way to the ground; the text stays.
+            let half = posed(&theme, Tone::Ok, "note", at(2325));
+            assert_eq!(row(&half, 1), row(&still, 1), "{name}");
+            let cap = &half[(28, 1)];
+            assert_eq!(cap.fg, mix(theme.raised2, theme.bg, 0.5), "{name}");
+            assert_eq!(cap.bg, theme.bg, "{name}");
+            let mark = &half[(30, 1)];
+            assert_eq!(mark.fg, mix(theme.ok, theme.bg, 0.5), "{name}");
+            assert_eq!(mark.bg, mix(theme.raised2, theme.bg, 0.5), "{name}");
+            let letter = &half[(32, 1)];
+            assert_eq!(letter.fg, mix(theme.strong, theme.bg, 0.5), "{name}");
+            assert!(letter.modifier.contains(Modifier::BOLD), "{name}");
+            // 100 %: all of it is the ground's colour.
+            let gone = posed(&theme, Tone::Ok, "note", at(2500));
+            for x in 28..38 {
+                let cell = &gone[(x, 1)];
+                assert_eq!((cell.fg, cell.bg), (theme.bg, theme.bg), "{name} {x}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_toast_fades_towards_whatever_it_sits_on() {
+        let theme = theme("tinkery");
+        let area = Rect::new(0, 0, 40, 6);
+        let mut buf = Buffer::empty(area);
+        buf.set_style(area, Style::new().bg(theme.raised));
+        let pose = Pose {
+            slide: 0.0,
+            fade: 0.5,
+        };
+        render_toast(ROUND, &theme, Tone::Ok, "note", pose, area, &mut buf);
+        assert_eq!(buf[(32, 1)].bg, mix(theme.raised2, theme.raised, 0.5));
+        assert_eq!(buf[(28, 1)].bg, theme.raised);
+    }
+
+    #[test]
+    fn in_mono_the_toast_does_not_fade() {
+        let theme = theme("mono");
+        let pose = Pose {
+            slide: 0.0,
+            fade: 0.5,
+        };
+        assert_eq!(
+            posed(&theme, Tone::Err, "note", pose),
+            posed(&theme, Tone::Err, "note", Pose::STILL)
+        );
     }
 
     #[test]

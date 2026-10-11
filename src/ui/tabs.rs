@@ -213,10 +213,14 @@ mod tests {
     const ROUND: Look = Look {
         pill_caps: true,
         corners: crate::config::Corners::Flush,
+        motion: true,
+        glide: None,
     };
     const SQUARE: Look = Look {
         pill_caps: false,
         corners: crate::config::Corners::Flush,
+        motion: true,
+        glide: None,
     };
 
     fn label(name: &str, dirty: bool) -> TabLabel {

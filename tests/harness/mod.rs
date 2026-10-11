@@ -2,6 +2,11 @@
 //! keys and mouse input as terminal bytes, and reads the screen back through vt100.
 //!
 //! Integration tests include it with `mod harness;`.
+//!
+//! Motion is off: every `tk` it starts gets `TINKERY_MOTION=0`, so the frame
+//! after a key is the one a test waits for and no test waits out a glide or a
+//! fade. A test of motion itself passes `TINKERY_MOTION=1` among its
+//! environment variables, which hands motion back to `[ui] motion`.
 
 // Each test crate compiles its own copy of this module and uses only part of it.
 #![allow(dead_code)]
@@ -9,6 +14,7 @@
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
@@ -117,6 +123,9 @@ struct Shared {
     /// Every byte tinkery wrote, for what vt100 doesn't keep (underline colour and
     /// style). Appended under the `parser` lock, so waiting on `changed` covers it.
     raw: Mutex<Vec<u8>>,
+    /// Set by `record_frames`: the screen after each frame is kept in `frames`.
+    recording: AtomicBool,
+    frames: Mutex<Vec<Vec<String>>>,
 }
 
 /// A running `tk` inside a pseudo-terminal. Dropping it kills the process.
@@ -218,6 +227,9 @@ impl Tinkery {
         cmd.env("TINKERY_CONFIG", config.path());
         cmd.env("TINKERY_DATA_DIR", &data);
         cmd.env("TERM", "xterm-256color");
+        // Nothing glides, slides or fades unless the test's own `env` says
+        // otherwise: a screen is final as soon as it is drawn.
+        cmd.env("TINKERY_MOTION", "0");
         for (key, value) in env {
             cmd.env(key, value);
         }
@@ -236,6 +248,8 @@ impl Tinkery {
             parser: Mutex::new(vt100::Parser::new(ROWS, COLS, 0)),
             changed: Condvar::new(),
             raw: Mutex::new(Vec::new()),
+            recording: AtomicBool::new(false),
+            frames: Mutex::new(Vec::new()),
         });
 
         let writer: SharedWriter = Arc::new(Mutex::new(
@@ -337,6 +351,25 @@ impl Tinkery {
     /// The screen as `ROWS` lines, trailing spaces trimmed.
     pub fn screen(&self) -> Vec<String> {
         screen_lines(&self.parser())
+    }
+
+    /// Starts keeping the screen after every frame shown from now on, for
+    /// `frames`: what a test of motion reads, where the frames between two
+    /// screens matter. On Windows a frame is whatever was drawn before output
+    /// paused (see `FrameGate::for_pty`), so frames drawn close together are
+    /// seen as one.
+    pub fn record_frames(&self) {
+        self.shared.recording.store(true, Ordering::SeqCst);
+    }
+
+    /// The screen after each frame shown since `record_frames`, oldest first,
+    /// each as `screen` returns it.
+    pub fn frames(&self) -> Vec<Vec<String>> {
+        self.shared
+            .frames
+            .lock()
+            .expect("frames lock poisoned")
+            .clone()
     }
 
     /// The screen column (0-based) where `text` starts on `row`, counting wide
@@ -935,7 +968,14 @@ fn feed_output(
 ) {
     // The query can straddle two reads; keep enough of the previous chunk to see it.
     let mut carry: Vec<u8> = Vec::new();
+    // Moves the frames the gate has just shown to where a test reads them.
+    let record = |gate: &mut FrameGate| {
+        if let Ok(mut frames) = shared.frames.lock() {
+            frames.append(&mut gate.frames);
+        }
+    };
     loop {
+        gate.record = shared.recording.load(Ordering::SeqCst);
         let received = if gate.holding() {
             chunks.recv_timeout(QUIET)
         } else {
@@ -948,6 +988,7 @@ fn feed_output(
                     return;
                 };
                 gate.flush(&mut parser);
+                record(&mut gate);
                 drop(parser);
                 shared.changed.notify_all();
                 continue;
@@ -955,6 +996,7 @@ fn feed_output(
             Err(RecvTimeoutError::Disconnected) => {
                 if let Ok(mut parser) = shared.parser.lock() {
                     gate.flush(&mut parser);
+                    record(&mut gate);
                 }
                 shared.changed.notify_all();
                 return;
@@ -981,6 +1023,7 @@ fn feed_output(
                 return;
             };
             gate.feed(&mut parser, &chunk);
+            record(&mut gate);
             if let Ok(mut raw) = shared.raw.lock() {
                 raw.extend_from_slice(&chunk);
             }
@@ -1030,6 +1073,11 @@ struct FrameGate {
     in_sync: bool,
     /// Off, every byte waits for a pause and the markers only get stripped.
     trust_markers: bool,
+    /// While set, the screen after each frame shown is added to `frames`: at
+    /// each frame's end marker where the markers are trusted, otherwise once
+    /// for all that a pause let through.
+    record: bool,
+    frames: Vec<Vec<String>>,
 }
 
 impl FrameGate {
@@ -1088,18 +1136,24 @@ impl FrameGate {
         while !rest.is_empty() {
             let next = [SYNC_BEGIN, SYNC_END]
                 .iter()
-                .filter_map(|marker| find(rest, marker).map(|pos| (pos, marker.len())))
-                .min();
+                .filter_map(|marker| find(rest, marker).map(|pos| (pos, *marker)))
+                .min_by_key(|(pos, _)| *pos);
             match next {
-                Some((pos, marker_len)) => {
+                Some((pos, marker)) => {
                     parser.process(&plain_underlines(&rest[..pos]));
-                    rest = &rest[pos + marker_len..];
+                    rest = &rest[pos + marker.len()..];
+                    if self.record && self.trust_markers && marker == SYNC_END {
+                        self.frames.push(screen_lines(parser));
+                    }
                 }
                 None => {
                     parser.process(&plain_underlines(rest));
                     rest = &[];
                 }
             }
+        }
+        if self.record && !self.trust_markers && len > 0 {
+            self.frames.push(screen_lines(parser));
         }
         self.pending.drain(..len);
     }
@@ -1570,6 +1624,35 @@ mod tests {
     }
 
     #[test]
+    fn a_recording_gate_keeps_the_screen_after_each_frame() {
+        let one = b"[?2026ha[?2026l";
+        let two = b"[?2026hb[?2026l[?2026hc[?2026l";
+        let tops = |gate: &FrameGate| -> Vec<String> {
+            gate.frames.iter().map(|frame| frame[0].clone()).collect()
+        };
+        let mut parser = vt100::Parser::new(ROWS, COLS, 0);
+        let mut gate = FrameGate::new(true);
+        // Not recording, nothing is kept.
+        gate.feed(&mut parser, one);
+        assert!(gate.frames.is_empty());
+        // Two frames in one read are two screens, not the last one twice.
+        gate.record = true;
+        gate.feed(&mut parser, two);
+        assert_eq!(tops(&gate), ["ab", "abc"]);
+        // Where the markers can't be trusted, a frame is what a pause shows.
+        let mut parser = vt100::Parser::new(ROWS, COLS, 0);
+        let mut gate = FrameGate::new(false);
+        gate.record = true;
+        gate.feed(&mut parser, two);
+        assert!(gate.frames.is_empty());
+        gate.flush(&mut parser);
+        assert_eq!(tops(&gate), ["bc"]);
+        // A pause with nothing held shows nothing new.
+        gate.flush(&mut parser);
+        assert_eq!(tops(&gate), ["bc"]);
+    }
+
+    #[test]
     fn untrusted_markers_wait_for_a_pause() {
         let mut parser = vt100::Parser::new(2, 10, 0);
         let mut gate = FrameGate::new(false);
@@ -1589,6 +1672,8 @@ mod tests {
             parser: Mutex::new(vt100::Parser::new(ROWS, COLS, 0)),
             changed: Condvar::new(),
             raw: Mutex::new(Vec::new()),
+            recording: AtomicBool::new(false),
+            frames: Mutex::new(Vec::new()),
         });
         let (tx, rx) = mpsc::channel();
         let feeder = Arc::clone(&shared);
