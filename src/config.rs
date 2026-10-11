@@ -233,8 +233,9 @@ impl Settings {
 /// each `[editor]` line shows the default it would keep.
 pub const TEMPLATE: &str = r#"# Tinkery's settings. Remove the `#` in front of a line to change it.
 
-# One of aurora, moonlit, hydra, papercolor-dark, tango-dark, monokai,
-# tokyo-night, catppuccin-mocha, catppuccin-latte, gruvbox, nord, dracula, mono.
+# One of tinkery, tinkery-light, aurora, moonlit, hydra, papercolor-dark,
+# tango-dark, monokai, tokyo-night, catppuccin-mocha, catppuccin-latte, gruvbox,
+# nord, dracula, mono.
 # theme = "hydra"
 
 [editor]

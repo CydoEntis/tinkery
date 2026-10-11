@@ -1,8 +1,8 @@
-//! Tinkery's 13 themes and `[theme_overrides]`. A theme paints Tinkery's chrome (tab
+//! Tinkery's 15 themes and `[theme_overrides]`. A theme paints Tinkery's chrome (tab
 //! bar, tree, status line, popups) and the editor ground, and carries the syntax
-//! colours highlighting will use. `aurora` and `moonlit` are hand-tuned; the pack
-//! palettes are Hydra's, reused under the MIT licence both projects share, with
-//! their Aurora roles derived as the design's `fromHydra` does.
+//! colours highlighting will use. `tinkery`, `tinkery-light`, `aurora` and `moonlit`
+//! are hand-tuned; the pack palettes are Hydra's, reused under the MIT licence both
+//! projects share, with their Aurora roles derived as the design's `fromHydra` does.
 
 use std::collections::BTreeMap;
 
@@ -10,10 +10,12 @@ use ratatui::style::{Color, Modifier, Style};
 
 use crate::highlight::Role;
 
-/// The signature themes, then Hydra's in Hydra's order; `Theme::named` knows
-/// each one.
+/// Tinkery's own two, the signature themes, then Hydra's in Hydra's order;
+/// `Theme::named` knows each one.
 #[cfg(test)]
 pub const NAMES: &[&str] = &[
+    "tinkery",
+    "tinkery-light",
     "aurora",
     "moonlit",
     "hydra",
@@ -370,6 +372,32 @@ impl Theme {
     /// The theme called `name`, if there is one.
     pub fn named(name: &str) -> Option<Theme> {
         let theme = match name {
+            "tinkery" => Theme::forge(
+                [
+                    "#110f0e", "#0a0908", "#171413", "#1f1b19", "#292320", "#40362f", "#251f1c",
+                    "#7d7067", "#b5a89d", "#dcd2c7", "#f8f0e6", "#ff8a3d", "#ffd27a", "#1f0d02",
+                    "#ff5d4d", "#f2c14e", "#8fc7a2", "#8fb4d6", "#a8483c", "#a08544", "#5f7d99",
+                    "#3b2514", "#1a1614", "#4d423b", "#000000",
+                ],
+                ["#3a302a", "#332a25"],
+                syntax([
+                    "#ff8a3d", "#e6c98a", "#6e625a", "#f8ead6", "#8fb4d6", "#ffb86b", "#ffb86b",
+                    "#9c8e83", "#776a60", "#dcd2c7", "#c7b6a5", "#ff8a3d", "#9c8e83",
+                ]),
+            ),
+            "tinkery-light" => Theme::forge(
+                [
+                    "#f5f0e9", "#e8e0d5", "#ede6dc", "#e4dcd0", "#d9cfc2", "#c0b3a3", "#ddd4c7",
+                    "#8b7e71", "#5b5047", "#3a322c", "#1c1714", "#b84a08", "#b07d0c", "#fff6ec",
+                    "#c0322b", "#9a6a00", "#3f7d5a", "#3c6a94", "#d99a93", "#d3bb85", "#9db7cf",
+                    "#f2d3b5", "#ece4d8", "#a99c8d", "#1c1714",
+                ],
+                ["#d3c7b8", "#dcd2c5"],
+                syntax([
+                    "#b84a08", "#8a6a12", "#9b8e81", "#1c1714", "#3c6a94", "#a85a12", "#a85a12",
+                    "#7b6f63", "#958879", "#3a322c", "#5f5249", "#b84a08", "#7b6f63",
+                ]),
+            ),
             "aurora" => Theme::signature(
                 [
                     "#0b0a10", "#07060b", "#0f0e16", "#16141f", "#1e1b2a", "#2e2a40", "#1f1c2b",
@@ -690,6 +718,18 @@ impl Theme {
         }
     }
 
+    /// A Tinkery Forge theme: `signature`'s 25 roles, then `hov` and `btn`. The
+    /// Aurora themes light a row with `sel` and fill a button with `raised2`;
+    /// Forge rows and keycaps sit on those grounds, so they need tones of their
+    /// own to show against them.
+    fn forge(c: [&str; 25], [hov, btn]: [&str; 2], syntax: Syntax) -> Theme {
+        Theme {
+            hov: hex(hov),
+            btn: hex(btn),
+            ..Theme::signature(c, syntax)
+        }
+    }
+
     /// The terminal's own colours plus greys; syntax is told apart by weight.
     fn mono() -> Theme {
         let plain = Style::new().fg(Color::Reset);
@@ -892,7 +932,7 @@ mod tests {
 
     #[test]
     fn every_name_loads() {
-        assert_eq!(NAMES.len(), 13);
+        assert_eq!(NAMES.len(), 15);
         for name in NAMES {
             assert!(Theme::named(name).is_some(), "{name}");
             let (_, message) = load(Some(name), &BTreeMap::new());
@@ -1084,7 +1124,10 @@ mod tests {
     #[test]
     fn every_theme_matches_the_readme_tables() {
         let rows = readme_tables();
-        // 25 chrome roles and 13 syntax roles for 12 themes.
+        // 25 chrome roles and 13 syntax roles for 12 themes: `mono` has no hexes
+        // to list, and the README predates the two Tinkery themes, which the
+        // Forge spec's table pins instead.
+        assert!(!rows.iter().any(|(name, ..)| name.starts_with("tinkery")));
         assert_eq!(rows.len(), (25 + 13) * 12);
         for (name, role, want) in rows {
             let theme = Theme::named(&name).unwrap_or_else(|| panic!("no theme {name}"));
@@ -1095,11 +1138,169 @@ mod tests {
         }
     }
 
+    /// The Forge spec's Palette table as (theme, role, colour) triples, read from
+    /// the spec itself so the themes can't drift from it.
+    fn forge_table() -> Vec<(String, String, Color)> {
+        const SPEC: &str = include_str!("../docs/features/tinkery-forge/spec.md");
+        let start = SPEC.find("## Palette").expect("spec has the palette");
+        let end = SPEC
+            .find("## Checks")
+            .expect("spec has a section after the palette");
+        let cells = |line: &str| -> Vec<String> {
+            line.trim()
+                .trim_matches('|')
+                .split('|')
+                .map(|c| c.trim().trim_matches('`').to_string())
+                .collect()
+        };
+        let mut themes = Vec::new();
+        let mut out = Vec::new();
+        for line in SPEC[start..end].lines() {
+            if !line.starts_with('|') || line.starts_with("|---") {
+                continue;
+            }
+            let row = cells(line);
+            if row[0] == "role" {
+                themes = row[1..].to_vec();
+                continue;
+            }
+            let role = row[0].trim_start_matches("syn.").to_string();
+            assert_eq!(row.len(), themes.len() + 1, "{role}");
+            for (theme, value) in themes.iter().zip(&row[1..]) {
+                let color =
+                    parse_color(value).unwrap_or_else(|| panic!("{theme} {role}: bad hex {value}"));
+                out.push((theme.clone(), role.clone(), color));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn the_tinkery_themes_match_the_spec_table() {
+        let rows = forge_table();
+        // 25 signature roles, `hov` and `btn`, and 13 syntax roles for 2 themes.
+        assert_eq!(rows.len(), (25 + 2 + 13) * 2);
+        for name in ["tinkery", "tinkery-light"] {
+            let listed: Vec<&str> = rows
+                .iter()
+                .filter(|(theme, ..)| theme == name)
+                .map(|(_, role, _)| role.as_str())
+                .collect();
+            for role in SYNTAX_ROLES.iter().chain(&["hov", "btn"]) {
+                assert!(listed.contains(role), "{name}: the table has no {role}");
+            }
+        }
+        for (name, role, want) in rows {
+            let theme = Theme::named(&name).unwrap_or_else(|| panic!("no theme {name}"));
+            let got = get(&theme, &role)
+                .unwrap_or_else(|| panic!("{name}: no role {role}"))
+                .fg;
+            assert_eq!(got, Some(want), "{name}: {role}");
+        }
+    }
+
+    #[test]
+    fn the_tinkery_themes_set_hov_and_btn_apart() {
+        for name in ["tinkery", "tinkery-light"] {
+            let theme = Theme::named(name).expect("listed themes exist");
+            assert_ne!(theme.hov, theme.sel, "{name}");
+            assert_ne!(theme.btn, theme.raised2, "{name}");
+            // The v1 names still hold the roles README §6 folded them into.
+            assert_eq!(theme.selection_bg, theme.sel, "{name}");
+            assert_eq!(theme.card2, theme.raised2, "{name}");
+        }
+    }
+
+    #[test]
+    fn the_tinkery_themes_take_overrides() {
+        for name in ["tinkery", "tinkery-light"] {
+            let plain = Theme::named(name).expect("listed themes exist");
+            let (theme, message) = load(
+                Some(name),
+                &overrides("btn = \"#010203\"\nkeyword = 141\naccent = \"light-red\""),
+            );
+            assert_eq!(message, None, "{name}");
+            assert_eq!(theme.btn, Color::Rgb(1, 2, 3), "{name}");
+            assert_eq!(theme.syntax.keyword.fg, Some(Color::Indexed(141)), "{name}");
+            assert_eq!(theme.accent, Color::LightRed, "{name}");
+            assert_eq!(theme.hov, plain.hov, "{name}");
+            assert_eq!(theme.raised2, plain.raised2, "{name}");
+            for role in UI_ROLES.iter().chain(SYNTAX_ROLES) {
+                let (theme, message) =
+                    load(Some(name), &overrides(&format!("{role} = \"#010203\"")));
+                assert_eq!(message, None, "{name}: {role}");
+                let style = get(&theme, role).expect("every role exists");
+                assert_eq!(style.fg, Some(Color::Rgb(1, 2, 3)), "{name}: {role}");
+            }
+        }
+    }
+
+    /// WCAG 2 relative luminance. `luminance` above weighs the gamma-encoded
+    /// channels, which tells dark from light but isn't what the contrast
+    /// minimums are defined against.
+    fn wcag_luminance(c: Color) -> f64 {
+        let Color::Rgb(r, g, b) = c else {
+            panic!("{c:?} is not an RGB colour");
+        };
+        let linear = |v: u8| {
+            let v = f64::from(v) / 255.0;
+            if v <= 0.03928 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
+    }
+
+    /// WCAG 2 contrast ratio, 1..=21.
+    fn contrast(a: Color, b: Color) -> f64 {
+        let (a, b) = (wcag_luminance(a), wcag_luminance(b));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    #[test]
+    fn contrast_is_the_wcag_ratio() {
+        let (black, white) = (Color::Rgb(0, 0, 0), Color::Rgb(255, 255, 255));
+        assert!((contrast(black, white) - 21.0).abs() < 1e-9);
+        assert!((contrast(white, black) - 21.0).abs() < 1e-9);
+        assert!((contrast(white, white) - 1.0).abs() < 1e-9);
+        // #767676 is the usual "just passes AA on white" grey.
+        let grey = contrast(Color::Rgb(0x76, 0x76, 0x76), white);
+        assert!((grey - 4.54).abs() < 0.01, "{grey}");
+    }
+
+    /// Forge spec F2: seshi's pairs and minimums.
+    #[test]
+    fn the_tinkery_themes_read_well() {
+        for name in ["tinkery", "tinkery-light"] {
+            let t = Theme::named(name).expect("listed themes exist");
+            for (what, ink, ground, min) in [
+                ("text on bg", t.text, t.bg, 4.5),
+                ("strong on bg", t.strong, t.bg, 7.0),
+                ("muted on bg", t.muted, t.bg, 3.0),
+                ("muted on surface", t.muted, t.surface, 3.0),
+                ("text on raised", t.text, t.raised, 4.5),
+                ("text on raised2", t.text, t.raised2, 4.0),
+                ("strong on btn", t.strong, t.btn, 4.5),
+                ("accent on btn", t.accent, t.btn, 3.0),
+                ("acc_ink on accent", t.acc_ink, t.accent, 4.5),
+                ("strong on hov", t.strong, t.hov, 4.5),
+                ("err on raised", t.err, t.raised, 3.0),
+                ("ok on surface", t.ok, t.surface, 3.0),
+                ("warn on surface", t.warn, t.surface, 3.0),
+            ] {
+                let ratio = contrast(ink, ground);
+                assert!(ratio >= min, "{name}: {what} is {ratio:.2}, needs {min}");
+            }
+        }
+    }
+
     #[test]
     fn accent2_is_the_syntax_hue_farthest_from_accent() {
         for name in NAMES
             .iter()
-            .filter(|n| !["aurora", "moonlit", "mono"].contains(n))
+            .filter(|n| !["tinkery", "tinkery-light", "aurora", "moonlit", "mono"].contains(n))
         {
             let theme = Theme::named(name).expect("listed themes exist");
             let s = &theme.syntax;
