@@ -4868,6 +4868,7 @@ impl App {
         let debug = self.debug_segment();
         render_status(
             frame,
+            self.look,
             theme,
             panes.status,
             &Status {

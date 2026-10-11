@@ -566,25 +566,50 @@ fn the_status_bar_names_the_project_and_the_splash_keys_and_version() {
     }
     assert!(!status.contains("untitled"), "{status:?}");
     assert!(!status.contains("Ln 1"), "{status:?}");
+    let keys = harness::hints_text(&[("↑↓", "select"), ("⏎", "choose"), ("q", "quit")]);
     assert!(
         status
             .trim_end()
-            .ends_with(&format!("↑↓ select  ⏎ choose  q quit      {version}")),
+            .ends_with(&format!("{keys}      {version}")),
         "{status:?}"
     );
     // Right-aligned to end two cells short of the edge.
     let version_x = COLS - 2 - u16::try_from(version.len()).expect("short version");
     assert_eq!(tinkery.text_col(STATUS, &version), Some(version_x));
-    // Keys lit; their labels and the version muted.
-    let q = tinkery.text_col(STATUS, "q quit").expect("q quit shown");
-    assert_eq!(tinkery.fg_at(q, STATUS), TEXT);
-    assert_eq!(tinkery.fg_at(q + 2, STATUS), MUTED);
+    // Each key is a keycap, strong and bold on a fill of its own between two
+    // round ends drawn in that fill on the bar; the labels and the version
+    // are muted on the bar.
+    let bar = tinkery.bg_at(20, STATUS);
+    let keys_x = tinkery.text_col(STATUS, &keys).expect("the keys");
+    assert_eq!(tinkery.bold_text(STATUS), "✦ tinkery↑↓⏎q");
+    let mut fill = None;
+    for (key, what) in [("↑↓", "select"), ("⏎", "choose"), ("q", "quit")] {
+        let hint = harness::hints_text(&[(key, what)]);
+        let x = tinkery.text_col(STATUS, &hint).expect("the hint");
+        let width = u16::try_from(key.chars().count()).expect("a short key");
+        let cap = tinkery.bg_at(x + 1, STATUS);
+        assert_ne!(cap, bar, "{key}");
+        assert_eq!(*fill.get_or_insert(cap), cap, "{key}");
+        for end in [x, x + 1 + width] {
+            assert_eq!(tinkery.fg_at(end, STATUS), cap, "{key} end");
+            assert_eq!(tinkery.bg_at(end, STATUS), bar, "{key} end");
+        }
+        for col in x + 1..=x + width {
+            assert_eq!(tinkery.fg_at(col, STATUS), STRONG, "{key}");
+            assert_eq!(tinkery.bg_at(col, STATUS), cap, "{key}");
+        }
+        let label = x + width + 3;
+        assert_eq!(tinkery.fg_at(label, STATUS), MUTED, "{what}");
+        assert_eq!(tinkery.bg_at(label, STATUS), bar, "{what}");
+    }
     assert_eq!(tinkery.fg_at(version_x, STATUS), MUTED);
+    // The keys and the version fit beside the project at 100 columns.
+    assert!(keys_x > 20 + 5, "{status:?}");
 
     // Leaving the splash gives the untitled buffer's status back.
     tinkery.send_keys("esc");
     wait_for_status(&tinkery, "Ln 1, Col 1");
-    assert!(!tinkery.screen()[usize::from(STATUS)].contains("q quit"));
+    assert!(!tinkery.screen()[usize::from(STATUS)].contains(" quit"));
 }
 
 #[test]

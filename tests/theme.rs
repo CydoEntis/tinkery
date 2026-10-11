@@ -21,11 +21,25 @@ const NORD_BG: Color = Color::Rgb(0x2e, 0x34, 0x40);
 /// The status bar's brand block covers columns 0..18; the bar is past it.
 const BLOCK_END: u16 = 18;
 
-/// Every cell of the status line past the brand block has background `color`.
+/// Every cell of the status line past the brand block has background `color`,
+/// but for the splash's keys, which sit on keycaps of one other colour.
 fn assert_status_bg(tinkery: &Tinkery, color: Color) {
     tinkery.wait_for_bg(BLOCK_END, STATUS_ROW, color, WAIT);
-    for col in BLOCK_END..COLS {
-        assert_eq!(tinkery.bg_at(col, STATUS_ROW), color, "status column {col}");
+    let row: Vec<char> = tinkery.screen()[usize::from(STATUS_ROW)].chars().collect();
+    let off: Vec<u16> = (BLOCK_END..COLS)
+        .filter(|&col| tinkery.bg_at(col, STATUS_ROW) != color)
+        .collect();
+    let keys: String = off
+        .iter()
+        .filter_map(|&col| row.get(usize::from(col)))
+        .collect();
+    // A long message drops the keys, and then the whole bar is `color`.
+    assert!(keys.is_empty() || keys == "↑↓⏎q", "off the bar: {keys:?}");
+    if let Some(&first) = off.first() {
+        let cap = tinkery.bg_at(first, STATUS_ROW);
+        for col in off {
+            assert_eq!(tinkery.bg_at(col, STATUS_ROW), cap, "keycap column {col}");
+        }
     }
 }
 
