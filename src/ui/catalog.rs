@@ -1,5 +1,5 @@
 //! The catalog `>language servers` opens (tinkery-catalog spec C1, C2;
-//! tinkery-debugger spec D8): a card in the cast's style listing each language
+//! tinkery-debugger spec D8; tinkery-forge spec F19): a panel listing each language
 //! server, then each debug adapter under a `debuggers` heading, with its command
 //! and whether it's installed, missing, waiting on its install tool, running, or
 //! failed this session and why.
@@ -20,22 +20,21 @@ use crate::dap::adapters;
 use crate::keymap::{Action, Input};
 use crate::lsp::servers;
 use crate::theme::Theme;
-use crate::ui::{dialog_card, dim, footer, glow_row};
+use crate::ui::kit::{self, Look};
 
 /// The card's width before clamping to the screen, and the row it drops from:
 /// the cast palette's, so the catalog reads as the palette turning into it.
 const WIDTH: u16 = 86;
 const TOP: u16 = 4;
-/// The rows other than the servers and debuggers: the lit edge, a blank, the
-/// header and the rule above them; a blank and the footer below.
-const CHROME: u16 = 6;
+/// The rows other than the servers and debuggers: the edge, a blank, the
+/// header's strip and a blank above them; a blank, the keys and the edge below.
+const CHROME: u16 = 7;
 /// The rows between the servers and the debuggers: a blank and the heading.
 const GAP: u16 = 2;
+/// The panel's title, in its top edge, and what the header's strip says.
+const TITLE: &str = "Language servers";
 const HEADER: &str = "language servers";
 const DEBUGGERS: &str = "debuggers";
-const FOOTER: &str = "⏎ install  c copy command  esc close";
-/// The footer on a failed row, where Enter starts the server again.
-const FOOTER_RETRY: &str = "⏎ retry  c copy command  esc close";
 /// Cells for the row's name, so the commands line up: the longest name and two
 /// blanks.
 const NAME_WIDTH: u16 = 25;
@@ -390,122 +389,109 @@ impl Catalog {
         }
     }
 
-    /// Dims `area` and draws the card over it: the lit edge; `✦ language
-    /// servers`; a rule; a row per server, a blank, `debuggers` and a row per
-    /// adapter, the selected one on the glow row with its failure reason, if
-    /// any, below it; the footer.
-    pub fn render(&self, theme: &Theme, frame: &mut Frame, area: Rect) {
-        dim(theme, frame.buffer_mut(), area);
+    /// Dims `area` and draws the panel over it: `Language servers` in its top
+    /// edge; the header's strip; a row per server, a blank, `debuggers` and a
+    /// row per adapter, the selected one a row pill with its failure reason,
+    /// if any, below it; a blank and the keys.
+    pub fn render(&self, look: Look, theme: &Theme, frame: &mut Frame, area: Rect) {
+        let out = frame.buffer_mut();
+        kit::dim(theme, out, area);
         let card = self.card(area);
-        dialog_card(theme, frame, card);
+        let inside = kit::panel_at(look, theme, out, card, TITLE);
         let full = CHROME.saturating_add(self.body_height());
-        if card.height < full || card.width < 40 {
+        if inside.is_empty() || card.height < full || card.width < 40 {
             return;
         }
-        let out = frame.buffer_mut();
         let left = card.x + 4;
+        let right = card.right() - 4;
 
-        let header_y = card.y + 2;
-        out.set_string(
-            left,
-            header_y,
-            "✦",
-            Style::new().fg(theme.accent2).add_modifier(Modifier::BOLD),
+        // Nothing is typed here, so the strip says what the list is.
+        let field = kit::header(look, theme, out, card, Vec::new());
+        out.set_stringn(
+            field.x,
+            field.y,
+            HEADER,
+            usize::from(field.width),
+            Style::new().fg(theme.strong).bg(theme.raised2),
         );
-        out.set_string(left + 2, header_y, HEADER, Style::new().fg(theme.strong));
-
-        for x in card.x + 2..card.right() - 2 {
-            out[(x, card.y + 3)].set_symbol("─").set_fg(theme.line2);
-        }
 
         for (i, row) in self.rows.iter().enumerate() {
             let y = card.y + self.row_offset(i);
-            self.render_row(theme, out, card, y, row, i == self.selected);
+            render_row(look, theme, out, card, y, row, i == self.selected);
         }
+        let quiet = Style::new().fg(theme.muted).bg(theme.raised);
         if let Some(reason) = self.reason() {
             // Under the name, as far as the states reach: a reason is often a
             // long error, and the card doesn't grow for it.
             let x = left + 2;
             let y = card.y + self.row_offset(self.selected) + 1;
-            out.set_stringn(
-                x,
-                y,
-                reason,
-                usize::from((card.right() - 4).saturating_sub(x)),
-                Style::new().fg(theme.muted),
-            );
+            out.set_stringn(x, y, reason, usize::from(right.saturating_sub(x)), quiet);
         }
         if self.rows.len() > self.servers {
             // As the cast labels its sections.
             let y = card.y + self.row_offset(self.servers) - 1;
-            out.set_string(
-                left,
-                y,
-                DEBUGGERS,
-                Style::new().fg(theme.muted).add_modifier(Modifier::BOLD),
-            );
+            out.set_string(left, y, DEBUGGERS, quiet.add_modifier(Modifier::BOLD));
         }
 
-        let hints = if self.reason().is_some() {
-            FOOTER_RETRY
+        let enter = if self.reason().is_some() {
+            "retry"
         } else {
-            FOOTER
+            "install"
         };
-        footer(theme, out, card, hints);
+        let keys = [("⏎", enter), ("c", "copy command"), ("Esc", "close")];
+        let hints = kit::hints(look, theme, &keys, theme.raised);
+        kit::put(out, left, card.bottom() - 2, &hints, right);
     }
+}
 
-    /// The name, the command in `muted`, and the state at the right in its
-    /// colour. A selected row is on the glow row, its text in `strong`; in
-    /// `mono` it carries no colours, so the reverse video reads.
-    fn render_row(
-        &self,
-        theme: &Theme,
-        out: &mut Buffer,
-        card: Rect,
-        y: u16,
-        row: &Row,
-        selected: bool,
-    ) {
-        let left = card.x + 4;
-        let right = card.right() - 4;
-        if selected {
-            glow_row(theme, out, card.x, card.right(), y);
-        }
-        let plain = selected && !theme.ramps();
-        let pick = |style: Style| if plain { Style::new() } else { style };
+/// The name, the command in `muted`, and the state at the right in its
+/// colour, on the row `sel_row` draws: a pill when selected, its name in
+/// `strong` bold.
+fn render_row(
+    look: Look,
+    theme: &Theme,
+    out: &mut Buffer,
+    card: Rect,
+    y: u16,
+    row: &Row,
+    selected: bool,
+) {
+    let left = card.x + 4;
+    let right = card.right() - 4;
+    let whole = Rect::new(card.x + 1, y, card.width.saturating_sub(2), 1);
+    // Nothing reports the mouse's position yet, so no row is hovered.
+    let ink = kit::sel_row(look, theme, out, whole, selected, false, theme.raised);
 
-        let state = row.state.label();
-        let state_x = right.saturating_sub(width_of(&state));
-        out.set_string(
-            state_x,
-            y,
-            &state,
-            pick(Style::new().fg(row.state.color(theme))),
-        );
+    let state = row.state.label();
+    let state_x = right.saturating_sub(width_of(&state));
+    let state_style = match row.state.color(theme) {
+        // `muted` is too close to a lit row's fill to read; the row knows.
+        color if color == theme.muted => ink.faint,
+        color => ink.of(Style::new().fg(color)),
+    };
+    out.set_string(state_x, y, &state, state_style);
 
-        let name = pick(Style::new().fg(if selected { theme.strong } else { theme.fg }));
+    out.set_stringn(
+        left,
+        y,
+        row.name,
+        usize::from(state_x.saturating_sub(left + 2)),
+        ink.label,
+    );
+    // Two blanks short of the state, so a long command never runs into it.
+    let command_x = left + NAME_WIDTH;
+    if command_x + 2 < state_x {
+        let line = std::iter::once(row.command.as_str())
+            .chain(row.args.iter().copied())
+            .collect::<Vec<_>>()
+            .join(" ");
         out.set_stringn(
-            left,
+            command_x,
             y,
-            row.name,
-            usize::from(state_x.saturating_sub(left + 2)),
-            name,
+            &line,
+            usize::from(state_x - command_x - 2),
+            ink.faint,
         );
-        // Two blanks short of the state, so a long command never runs into it.
-        let command_x = left + NAME_WIDTH;
-        if command_x + 2 < state_x {
-            let line = std::iter::once(row.command.as_str())
-                .chain(row.args.iter().copied())
-                .collect::<Vec<_>>()
-                .join(" ");
-            out.set_stringn(
-                command_x,
-                y,
-                &line,
-                usize::from(state_x - command_x - 2),
-                pick(Style::new().fg(theme.muted)),
-            );
-        }
     }
 }
 
@@ -541,7 +527,7 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
-    use crate::theme::mix;
+    use crate::ui::kit::{CAP_L, CAP_R};
 
     fn exe(name: &str) -> String {
         if cfg!(windows) {
@@ -754,7 +740,8 @@ mod tests {
     }
 
     #[test]
-    fn the_selected_failed_row_has_its_reason_below_and_a_retry_footer() -> anyhow::Result<()> {
+    fn the_selected_failed_row_has_its_reason_below_and_retry_among_the_keys() -> anyhow::Result<()>
+    {
         let dir = tempfile::tempdir()?;
         touch(&dir.path().join(exe("rust-analyzer")))?;
         let long = format!("Cannot start: {}", "x".repeat(100));
@@ -768,35 +755,42 @@ mod tests {
         let area = Rect::new(0, 0, 100, 30);
         let card = c.card(area);
         // One line taller than without a reason.
-        assert_eq!(card, Rect::new(7, 4, 86, 19));
+        assert_eq!(card, Rect::new(7, 4, 86, 20));
         let buffer = draw(&c, &theme)?;
-        let rust = card_row(&buffer, card, card.y + 4);
-        assert!(rust.ends_with("failed    "), "{rust:?}");
-        assert_eq!(buffer[(card.right() - 10, card.y + 4)].fg, theme.err);
+        let rust = text_row(&buffer, card, card.y + 4);
+        assert!(rust.starts_with("Rust "), "{rust:?}");
+        assert!(rust.ends_with(" failed"), "{rust:?}");
+        // `err` on the selected row's pill.
+        let state = &buffer[(card.right() - 10, card.y + 4)];
+        assert_eq!((state.fg, state.bg), (theme.err, theme.hov));
 
-        // Under the name, in `muted`, cut where the states end.
-        let reason = card_row(&buffer, card, card.y + 5);
+        // Under the name, in `muted` on the card, cut where the states end.
+        let reason = text_row(&buffer, card, card.y + 5);
         let shown = &long[..usize::from(card.width - 10)];
-        assert_eq!(reason, format!("      {shown}    "));
-        assert_eq!(buffer[(card.x + 6, card.y + 5)].fg, theme.muted);
-        assert_ne!(
-            buffer[(card.x, card.y + 5)].bg,
-            mix(theme.raised, theme.accent, 0.3)
+        assert_eq!(reason, format!("  {shown}"));
+        let cell = &buffer[(card.x + 6, card.y + 5)];
+        assert_eq!((cell.fg, cell.bg), (theme.muted, theme.raised));
+        // The reason isn't a row: no pill behind it.
+        assert_eq!(
+            card_row(&buffer, card, card.y + 5),
+            format!("▕   {reason}   ▏")
         );
+        assert_eq!(buffer[(card.x + 2, card.y + 5)].bg, theme.raised);
         // The rows below move down for it.
-        let go = card_row(&buffer, card, card.y + 6);
-        assert!(go.starts_with("    Go "), "{go:?}");
-        let foot = card_row(&buffer, card, card.bottom() - 1);
-        assert!(foot.starts_with(&format!("  {FOOTER_RETRY}")), "{foot:?}");
+        let go = text_row(&buffer, card, card.y + 6);
+        assert!(go.starts_with("Go "), "{go:?}");
+        assert_eq!(text_row(&buffer, card, card.bottom() - 3).trim(), "");
+        let foot = text_row(&buffer, card, card.bottom() - 2);
+        assert_eq!(foot.trim_end(), keys(&theme, "retry"), "{foot:?}");
 
-        // Off the failed row: no reason, the usual footer.
+        // Off the failed row: no reason, and Enter installs.
         c.handle(Input::Action(Action::Move(Motion::Down)));
-        assert_eq!(c.card(area).height, 18);
+        assert_eq!(c.card(area).height, 19);
         let buffer = draw(&c, &theme)?;
-        let go = card_row(&buffer, card, card.y + 5);
-        assert!(go.starts_with("    Go "), "{go:?}");
-        let foot = card_row(&buffer, card, card.y + 17);
-        assert!(foot.starts_with(&format!("  {FOOTER}")), "{foot:?}");
+        let go = text_row(&buffer, card, card.y + 5);
+        assert!(go.starts_with("Go "), "{go:?}");
+        let foot = text_row(&buffer, card, card.y + 17);
+        assert_eq!(foot.trim_end(), keys(&theme, "install"), "{foot:?}");
         Ok(())
     }
 
@@ -897,80 +891,172 @@ mod tests {
 
     fn draw(c: &Catalog, theme: &Theme) -> anyhow::Result<Buffer> {
         let mut terminal = Terminal::new(TestBackend::new(100, 30))?;
-        terminal.draw(|frame| c.render(theme, frame, frame.area()))?;
+        terminal.draw(|frame| c.render(Look::default(), theme, frame, frame.area()))?;
         Ok(terminal.backend().buffer().clone())
     }
 
+    /// Row `y` of the card, edge to edge.
     fn card_row(buffer: &Buffer, card: Rect, y: u16) -> String {
         (card.x..card.right())
             .map(|x| buffer[(x, y)].symbol())
             .collect()
     }
 
+    /// The cells of row `y` a row's text takes: four in from either edge.
+    fn text_row(buffer: &Buffer, card: Rect, y: u16) -> String {
+        (card.x + 4..card.right() - 4)
+            .map(|x| buffer[(x, y)].symbol())
+            .collect()
+    }
+
+    /// The keys on the card's last row as the kit draws them, Enter doing
+    /// `enter`.
+    fn keys(theme: &Theme, enter: &str) -> String {
+        let pairs = [("⏎", enter), ("c", "copy command"), ("Esc", "close")];
+        kit::hints(Look::default(), theme, &pairs, theme.raised)
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
+    }
+
     #[test]
-    fn the_card_is_the_casts_with_header_rule_rows_and_footer() -> anyhow::Result<()> {
+    fn the_card_is_a_panel_with_a_header_strip_pill_rows_and_keycap_hints() -> anyhow::Result<()> {
         let c = catalog(&["rust-analyzer", "npm"], &[])?;
         let theme = Theme::default();
         let card = c.card(Rect::new(0, 0, 100, 30));
-        assert_eq!(card, Rect::new(7, 4, 86, 18));
+        assert_eq!(card, Rect::new(7, 4, 86, 19));
         let buffer = draw(&c, &theme)?;
-        assert_eq!(buffer[(card.x, card.y)].symbol(), "▀");
+        // The panel's edge in the accent, its title set into the top of it.
+        let top = card_row(&buffer, card, card.y);
+        assert!(top.starts_with(" ▁ Language servers ▁"), "{top:?}");
+        assert_eq!(buffer[(card.x + 1, card.y)].fg, theme.accent);
+        assert_eq!(buffer[(card.x, card.y + 1)].symbol(), "▕");
+        let bottom = card_row(&buffer, card, card.bottom() - 1);
+        assert_eq!(bottom, format!(" {} ", "▔".repeat(84)));
+
+        // The header: a strip of `raised2` across the inside.
         let header = card_row(&buffer, card, card.y + 2);
-        assert!(header.starts_with("    ✦ language servers "), "{header:?}");
-        assert_eq!(buffer[(card.x + 4, card.y + 2)].fg, theme.accent2);
-        assert_eq!(buffer[(card.x + 5, card.y + 3)].symbol(), "─");
+        assert_eq!(
+            header,
+            format!("▕{CAP_L}  ✦ {:<76}  {CAP_R}▏", "language servers")
+        );
+        let mark = &buffer[(card.x + 4, card.y + 2)];
+        assert_eq!((mark.fg, mark.bg), (theme.accent2, theme.raised2));
+        let said = &buffer[(card.x + 6, card.y + 2)];
+        assert_eq!((said.fg, said.bg), (theme.strong, theme.raised2));
+        assert_eq!(text_row(&buffer, card, card.y + 3).trim(), "");
 
+        // The first row is selected: a pill of `hov` with `›` in the accent,
+        // its name in `strong` bold.
         let rust = card_row(&buffer, card, card.y + 4);
-        assert_eq!(
-            rust,
-            format!("    {:<25}{:<44}installed    ", "Rust", "rust-analyzer")
-        );
-        // The first row is selected: on the glow, its name in `strong`.
-        assert_eq!(
-            buffer[(card.x, card.y + 4)].bg,
-            mix(theme.raised, theme.accent, 0.3)
-        );
-        assert_eq!(buffer[(card.x + 4, card.y + 4)].fg, theme.strong);
-        assert_eq!(buffer[(card.x + 29, card.y + 4)].fg, theme.muted);
-        assert_eq!(buffer[(card.right() - 13, card.y + 4)].fg, theme.ok);
+        let text = format!("{:<25}{:<44}installed", "Rust", "rust-analyzer");
+        assert_eq!(rust, format!("▕{CAP_L}› {text}  {CAP_R}▏"));
+        let cap = &buffer[(card.x + 1, card.y + 4)];
+        assert_eq!((cap.fg, cap.bg), (theme.hov, theme.raised));
+        let mark = &buffer[(card.x + 2, card.y + 4)];
+        assert_eq!((mark.fg, mark.bg), (theme.accent, theme.hov));
+        let name = &buffer[(card.x + 4, card.y + 4)];
+        assert_eq!((name.fg, name.bg), (theme.strong, theme.hov));
+        assert!(name.modifier.contains(Modifier::BOLD));
+        // `muted` wouldn't read on the pill: the command is in `text` there.
+        let command = &buffer[(card.x + 29, card.y + 4)];
+        assert_eq!((command.fg, command.bg), (theme.text, theme.hov));
+        let state = &buffer[(card.right() - 13, card.y + 4)];
+        assert_eq!((state.fg, state.bg), (theme.ok, theme.hov));
 
+        // Any other row is left on the card.
         let go = card_row(&buffer, card, card.y + 5);
-        assert!(go.ends_with("needs go    "), "{go:?}");
+        let text = format!("{:<25}{:<45}needs go", "Go", "gopls");
+        assert_eq!(go, format!("▕   {text}   ▏"));
         let state_x = card.right() - 4 - 8;
         assert_eq!(buffer[(state_x, card.y + 5)].fg, theme.warn);
-        assert_eq!(buffer[(card.x, card.y + 5)].bg, theme.raised);
-        let ts = card_row(&buffer, card, card.y + 6);
-        assert!(ts.starts_with("    TypeScript / JavaScript  typescript-language-server"));
-        assert!(ts.ends_with("missing    "), "{ts:?}");
+        for x in [card.x + 1, card.x + 2, card.x + 4, state_x] {
+            assert_eq!(buffer[(x, card.y + 5)].bg, theme.raised, "{x}");
+        }
+        assert_eq!(buffer[(card.x + 4, card.y + 5)].fg, theme.fg);
+        assert_eq!(buffer[(card.x + 29, card.y + 5)].fg, theme.muted);
+        let ts = text_row(&buffer, card, card.y + 6);
+        assert!(ts.starts_with("TypeScript / JavaScript  typescript-language-server"));
+        assert!(ts.ends_with(" missing"), "{ts:?}");
         assert_eq!(buffer[(card.right() - 11, card.y + 6)].fg, theme.muted);
-        let sql = card_row(&buffer, card, card.y + 10);
-        assert!(sql.starts_with("    SQL "), "{sql:?}");
+        let sql = text_row(&buffer, card, card.y + 10);
+        assert!(sql.starts_with("SQL "), "{sql:?}");
 
         // A blank, the `debuggers` heading as the cast labels a section, and
         // a row per adapter.
-        assert_eq!(card_row(&buffer, card, card.y + 11).trim(), "");
-        let heading = card_row(&buffer, card, card.y + 12);
-        assert_eq!(heading.trim_end(), "    debuggers", "{heading:?}");
-        assert_eq!(buffer[(card.x + 4, card.y + 12)].fg, theme.muted);
-        assert!(
-            buffer[(card.x + 4, card.y + 12)]
-                .modifier
-                .contains(Modifier::BOLD)
-        );
-        let debugpy = card_row(&buffer, card, card.y + 14);
+        assert_eq!(text_row(&buffer, card, card.y + 11).trim(), "");
+        let heading = text_row(&buffer, card, card.y + 12);
+        assert_eq!(heading.trim_end(), "debuggers", "{heading:?}");
+        let cell = &buffer[(card.x + 4, card.y + 12)];
+        assert_eq!((cell.fg, cell.bg), (theme.muted, theme.raised));
+        assert!(cell.modifier.contains(Modifier::BOLD));
+        let debugpy = text_row(&buffer, card, card.y + 14);
         assert_eq!(
             debugpy,
             format!(
-                "    {:<25}{:<41}needs python    ",
+                "{:<25}{:<41}needs python",
                 "debugpy", "python -m debugpy.adapter"
             )
         );
-        let dlv = card_row(&buffer, card, card.y + 15);
-        assert!(dlv.starts_with("    dlv                      dlv dap "));
+        let dlv = text_row(&buffer, card, card.y + 15);
+        assert!(dlv.starts_with("dlv                      dlv dap "));
 
-        assert_eq!(card_row(&buffer, card, card.y + 16).trim(), "");
-        let foot = card_row(&buffer, card, card.y + 17);
-        assert!(foot.starts_with(&format!("  {FOOTER}")), "{foot:?}");
+        // A blank, then the keys as keycaps on the card.
+        assert_eq!(text_row(&buffer, card, card.y + 16).trim(), "");
+        let foot = text_row(&buffer, card, card.y + 17);
+        assert_eq!(foot.trim_end(), keys(&theme, "install"), "{foot:?}");
+        assert!(foot.starts_with(&format!("{CAP_L}⏎{CAP_R} install   {CAP_L}c{CAP_R} copy")));
+        let cap = &buffer[(card.x + 4, card.y + 17)];
+        assert_eq!((cap.fg, cap.bg), (theme.btn, theme.raised));
+        let key = &buffer[(card.x + 5, card.y + 17)];
+        assert_eq!((key.fg, key.bg), (theme.strong, theme.btn));
+        assert!(key.modifier.contains(Modifier::BOLD));
+        assert_eq!(buffer[(card.x + 8, card.y + 17)].fg, theme.muted);
+        Ok(())
+    }
+
+    #[test]
+    fn a_missing_state_reads_on_the_selected_rows_pill() -> anyhow::Result<()> {
+        // Python is missing, with npm there to install it.
+        let mut c = catalog(&["npm"], &[])?;
+        let theme = Theme::default();
+        let card = c.card(Rect::new(0, 0, 100, 30));
+        let state_x = card.right() - 4 - 7;
+        let buffer = draw(&c, &theme)?;
+        assert_eq!(buffer[(state_x, card.y + 7)].fg, theme.muted);
+        for _ in 0..3 {
+            c.handle(Input::Action(Action::Move(Motion::Down)));
+        }
+        let buffer = draw(&c, &theme)?;
+        let state = &buffer[(state_x, card.y + 7)];
+        assert_eq!((state.fg, state.bg), (theme.text, theme.hov));
+        Ok(())
+    }
+
+    #[test]
+    fn square_ends_and_rounded_corners_follow_the_look() -> anyhow::Result<()> {
+        use crate::config::Corners;
+        let c = catalog(&["rust-analyzer"], &[])?;
+        let theme = Theme::default();
+        let look = Look {
+            pill_caps: false,
+            corners: Corners::Rounded,
+        };
+        let mut terminal = Terminal::new(TestBackend::new(100, 30))?;
+        terminal.draw(|frame| c.render(look, &theme, frame, frame.area()))?;
+        let buffer = terminal.backend().buffer();
+        let card = c.card(Rect::new(0, 0, 100, 30));
+        let top = card_row(buffer, card, card.y);
+        assert!(top.starts_with("╭─ Language servers ─"), "{top:?}");
+        let rust = card_row(buffer, card, card.y + 4);
+        let text = format!("{:<25}{:<44}installed", "Rust", "rust-analyzer");
+        assert_eq!(rust, format!("│ › {text}   │"));
+        assert_eq!(buffer[(card.x + 1, card.y + 4)].bg, theme.hov);
+        let foot = text_row(buffer, card, card.bottom() - 2);
+        assert!(
+            foot.starts_with(" ⏎  install    c  copy command"),
+            "{foot:?}"
+        );
         Ok(())
     }
 
@@ -1154,19 +1240,31 @@ mod tests {
     }
 
     #[test]
-    fn mono_reverses_the_selected_row() -> anyhow::Result<()> {
+    fn mono_reverses_the_selected_row_and_carries_no_colours_on_it() -> anyhow::Result<()> {
         let mut c = catalog(&[], &[])?;
         let mono = Theme::named("mono").expect("mono exists");
         let card = c.card(Rect::new(0, 0, 100, 30));
         let buffer = draw(&c, &mono)?;
-        for x in [card.x, card.x + 4, card.right() - 8, card.right() - 1] {
-            assert!(
-                buffer[(x, card.y + 4)]
-                    .modifier
-                    .contains(Modifier::REVERSED),
-                "{x}"
-            );
+        // The card's inside from edge to edge, with the mark and no caps.
+        let rust = card_row(&buffer, card, card.y + 4);
+        let text = format!("{:<25}{:<41}needs rustup", "Rust", "rust-analyzer");
+        assert_eq!(rust, format!("▕ › {text}   ▏"));
+        let lit = &buffer[(card.x + 1, card.y + 4)];
+        for x in card.x + 1..card.right() - 1 {
+            let cell = &buffer[(x, card.y + 4)];
+            assert!(cell.modifier.contains(Modifier::REVERSED), "{x}");
+            // `warn` on the state would break the reverse video up.
+            assert_eq!((cell.fg, cell.bg), (lit.fg, lit.bg), "{x}");
         }
+        for x in [card.x, card.right() - 1] {
+            let edge = &buffer[(x, card.y + 4)];
+            assert!(!edge.modifier.contains(Modifier::REVERSED), "{x}");
+        }
+        // Off the selected row the states keep their colours.
+        let state_x = card.right() - 4 - 8;
+        let go = &buffer[(state_x, card.y + 5)];
+        assert!(!go.modifier.contains(Modifier::REVERSED));
+        assert_eq!(go.fg, mono.warn);
         assert!(
             !buffer[(card.x + 4, card.y + 5)]
                 .modifier
@@ -1184,6 +1282,14 @@ mod tests {
                 .modifier
                 .contains(Modifier::REVERSED)
         );
+        // The keys are bold on `btn`, with blanks for ends.
+        let foot = text_row(&buffer, card, card.bottom() - 2);
+        assert!(
+            foot.starts_with(" ⏎  install    c  copy command"),
+            "{foot:?}"
+        );
+        let key = &buffer[(card.x + 5, card.bottom() - 2)];
+        assert!(key.modifier.contains(Modifier::BOLD));
         Ok(())
     }
 }

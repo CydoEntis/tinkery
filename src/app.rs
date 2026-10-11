@@ -4907,10 +4907,10 @@ impl App {
         }
         // Nothing is typed into the catalog, so it shows no cursor.
         if let Some(catalog) = &self.catalog {
-            catalog.render(theme, frame, frame.area());
+            catalog.render(self.look, theme, frame, frame.area());
         }
         if let Some(card) = &self.keybindings {
-            let at = card.render(theme, frame, frame.area());
+            let at = card.render(self.look, theme, frame, frame.area());
             frame.set_cursor_position(at);
         }
         if let Some(panel) = &self.project_search {
