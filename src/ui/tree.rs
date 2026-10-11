@@ -42,6 +42,8 @@ pub struct TreeMarks<'a> {
     pub active: Option<&'a Path>,
     /// Open files with unsaved changes, which get a `•`.
     pub dirty: &'a [PathBuf],
+    /// The row the pointer is on, as an index into the tree's rows.
+    pub hovered: Option<usize>,
 }
 
 /// The part of the tree's `area` the nodes are listed in, between the brand
@@ -75,9 +77,10 @@ pub fn project_label(root: &Path, home: Option<&Path>) -> String {
 /// row: a `hov` pill with `›` and a bold `strong` name, or reverse video in
 /// `mono`. The active file's row, when the selection isn't on it or the tree
 /// isn't focused, is the pill without the `›`, its name bold in `strong`; in
-/// `mono`, which has no fills, the bold name alone. An unfocused selection
-/// shows nothing. Returns where the selected row's marker is, for the terminal
-/// cursor.
+/// `mono`, which has no fills, the bold name alone. The row under the pointer
+/// is that pill too, with its name as it was: only the active file's is bold.
+/// An unfocused selection shows nothing. Returns where the selected row's
+/// marker is, for the terminal cursor.
 pub fn render_tree(
     look: Look,
     theme: &Theme,
@@ -127,15 +130,16 @@ pub fn render_tree(
         let selected = index == tree.selected();
         let chosen = selected && focused;
         let active = marks.active == Some(path.as_path());
-        // The active file's row is the kit's pill without the `›`, which is
-        // how it draws a hovered row; the pointer itself lights nothing here.
+        // The active file's row and the one under the pointer are both the
+        // kit's pill without the `›`; the name's weight tells them apart.
+        let lit = active || marks.hovered == Some(index);
         let ink = kit::sel_row(
             look,
             theme,
             out,
             Rect::new(inside.x, y, inside.width, 1),
             chosen,
-            active && !chosen,
+            lit && !chosen,
             theme.surface,
         );
         let depth = u16::try_from(row.depth).unwrap_or(u16::MAX);
@@ -306,6 +310,7 @@ mod tests {
             project: "",
             active: None,
             dirty: &[],
+            hovered: None,
         };
         let (buffer, _) = draw(&theme, &tree, &marks, false)?;
         assert_eq!(row(&buffer, 0), format!(" {} ", "▁".repeat(26)));
@@ -350,6 +355,7 @@ mod tests {
             project: "~/src",
             active: Some(&long),
             dirty: std::slice::from_ref(&long),
+            hovered: None,
         };
         let (buffer, at) = draw(&theme, &tree, &marks, false)?;
         assert_eq!(row(&buffer, 1), framed("  ✦ tinkery ~/src"));
@@ -390,6 +396,71 @@ mod tests {
     }
 
     #[test]
+    fn the_row_under_the_pointer_is_lit_and_only_the_active_file_is_bold() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        fs::create_dir(dir.path().join("lib"))?;
+        fs::write(dir.path().join("a.txt"), "")?;
+        fs::write(dir.path().join("b.txt"), "")?;
+        let tree = Tree::new(dir.path());
+        let b = std::path::absolute(dir.path().join("b.txt"))?;
+        // Rows 3, 4 and 5 are `lib`, `a.txt` and `b.txt`; the pointer is on
+        // `a.txt` and `b.txt` is the active file.
+        let marks = TreeMarks {
+            project: "",
+            active: Some(&b),
+            dirty: &[],
+            hovered: Some(1),
+        };
+        let theme = Theme::default();
+        let (buffer, _) = draw(&theme, &tree, &marks, false)?;
+        // Both are the pill without the mark.
+        for y in [4, 5] {
+            assert_pill(&buffer, &theme, y);
+            assert_eq!(buffer[(2, y)].symbol(), " ", "{y}");
+        }
+        // The pointer's row keeps its name as it was; the active file's is
+        // `strong` and bold.
+        assert_eq!(buffer[(5, 4)].fg, theme.text);
+        assert!(!buffer[(5, 4)].modifier.contains(Modifier::BOLD));
+        assert_eq!(buffer[(5, 5)].fg, theme.strong);
+        assert!(buffer[(5, 5)].modifier.contains(Modifier::BOLD));
+        assert_eq!(buffer[(2, 3)].bg, theme.surface);
+
+        // The pointer on the active file changes nothing, and with it gone
+        // the active file is still lit.
+        let on_active = TreeMarks {
+            hovered: Some(2),
+            ..marks
+        };
+        let away = TreeMarks {
+            hovered: None,
+            ..marks
+        };
+        let (over, _) = draw(&theme, &tree, &on_active, false)?;
+        let (rest, _) = draw(&theme, &tree, &away, false)?;
+        assert_eq!(over, rest);
+        assert_pill(&rest, &theme, 5);
+        assert_eq!(rest[(2, 4)].bg, theme.surface);
+
+        // The focused selection under the pointer stays the marked pill.
+        let (buffer, _) = draw(&theme, &tree, &marks, true)?;
+        let selected = TreeMarks {
+            hovered: Some(0),
+            ..marks
+        };
+        let (pointed, _) = draw(&theme, &tree, &selected, true)?;
+        assert_eq!(pointed[(2, 3)].symbol(), SEL_MARK);
+        assert_eq!(buffer[(2, 3)].symbol(), SEL_MARK);
+
+        // `mono` has no fills: the pointer shows nothing there.
+        let mono = Theme::named("mono").expect("mono exists");
+        let (lit, _) = draw(&mono, &tree, &marks, false)?;
+        let (unlit, _) = draw(&mono, &tree, &away, false)?;
+        assert_eq!(lit, unlit);
+        Ok(())
+    }
+
+    #[test]
     fn the_focused_selection_is_a_marked_pill_and_mono_reverses_it() -> anyhow::Result<()> {
         let dir = tempfile::tempdir()?;
         fs::create_dir(dir.path().join("lib"))?;
@@ -403,6 +474,7 @@ mod tests {
             project: "",
             active: Some(&b),
             dirty: std::slice::from_ref(&a),
+            hovered: None,
         };
 
         let theme = Theme::default();

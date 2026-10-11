@@ -361,7 +361,7 @@ fn list_row(
     selected: bool,
 ) -> (RowInk, u16) {
     let row = Rect::new(list.x, y, list.width, 1);
-    // Nothing reports the mouse's position yet, so no row is hovered.
+    // The panel answers no click, so the pointer lights no row of it.
     let ink = kit::sel_row(look, theme, out, row, selected, false, theme.bg);
     (ink, list.right().saturating_sub(1))
 }

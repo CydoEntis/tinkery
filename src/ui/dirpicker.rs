@@ -257,8 +257,16 @@ impl DirPicker {
     /// F15): its title in the edge; `✦`, the folder and the query on a strip,
     /// with `open · folders` at the right; the open row; the folders, the
     /// selected row a pill; then the keys, on the row above the bottom edge.
-    /// Returns where the cursor goes.
-    pub fn render(&self, look: Look, theme: &Theme, frame: &mut Frame, area: Rect) -> (u16, u16) {
+    /// Returns where the cursor goes. `hovered` is the screen row the pointer
+    /// is on, inside the card (`kit::row_under`); the row drawn there is lit.
+    pub fn render(
+        &self,
+        look: Look,
+        theme: &Theme,
+        frame: &mut Frame,
+        area: Rect,
+        hovered: Option<u16>,
+    ) -> (u16, u16) {
         let out = frame.buffer_mut();
         kit::dim(theme, out, area);
         let card = self.card(area);
@@ -268,7 +276,12 @@ impl DirPicker {
         if inside.is_empty() || card.height < full || card.width < 40 {
             return (card.x, card.y);
         }
-        let list = List { look, theme, card };
+        let list = List {
+            look,
+            theme,
+            card,
+            hovered,
+        };
 
         let quiet = kit::ink(theme, theme.muted, theme.raised2);
         let scope = vec![Span::styled(SCOPE, Style::new().fg(quiet))];
@@ -381,6 +394,8 @@ struct List<'a> {
     look: Look,
     theme: &'a Theme,
     card: Rect,
+    /// The screen row the pointer is on.
+    hovered: Option<u16>,
 }
 
 impl List<'_> {
@@ -394,18 +409,17 @@ impl List<'_> {
         self.card.right().saturating_sub(4)
     }
 
-    /// Draws row `y` as the one Enter acts on when `selected`, and returns
-    /// the styles its text goes in.
+    /// Draws row `y` as the one Enter acts on when `selected`, lit when the
+    /// pointer is on it, and returns the styles its text goes in.
     fn ink(&self, out: &mut Buffer, y: u16, selected: bool) -> RowInk {
         let row = Rect::new(self.card.x + 1, y, self.card.width.saturating_sub(2), 1);
-        // Nothing reports the mouse's position yet, so no row is hovered.
         kit::sel_row(
             self.look,
             self.theme,
             out,
             row,
             selected,
-            false,
+            self.hovered == Some(y),
             self.theme.raised,
         )
     }
@@ -677,7 +691,7 @@ mod tests {
     fn draw(p: &DirPicker, theme: &Theme) -> anyhow::Result<Buffer> {
         let mut terminal = Terminal::new(TestBackend::new(100, 30))?;
         terminal.draw(|frame| {
-            p.render(Look::default(), theme, frame, frame.area());
+            p.render(Look::default(), theme, frame, frame.area(), None);
         })?;
         Ok(terminal.backend().buffer().clone())
     }

@@ -295,8 +295,17 @@ impl Keybindings {
     /// Dims `area` and draws the panel over it: `Keybindings` in its top edge;
     /// the query on the header's strip; the list, scrolled just far enough to
     /// keep the selected row, a row pill, in view; a blank and the keys.
-    /// Returns where the cursor goes, in the query.
-    pub fn render(&self, look: Look, theme: &Theme, frame: &mut Frame, area: Rect) -> (u16, u16) {
+    /// Returns where the cursor goes, in the query. `hovered` is the screen
+    /// row the pointer is on, inside the card (`kit::row_under`); the row
+    /// drawn there is lit.
+    pub fn render(
+        &self,
+        look: Look,
+        theme: &Theme,
+        frame: &mut Frame,
+        area: Rect,
+        hovered: Option<u16>,
+    ) -> (u16, u16) {
         let out = frame.buffer_mut();
         kit::dim(theme, out, area);
         let card = self.card(area);
@@ -333,7 +342,8 @@ impl Keybindings {
                     } else {
                         Lit::Selected
                     };
-                    render_row(look, theme, out, card, y, row, state);
+                    let lit = hovered == Some(y);
+                    render_row(look, theme, out, card, y, row, (state, lit));
                 }
                 Line::Heading(heading) => {
                     out.set_string(left, y, heading, quiet.add_modifier(Modifier::BOLD));
@@ -358,8 +368,8 @@ enum Lit {
 
 /// The title, the config name in `muted`, and the keys at the right as
 /// keycaps, on the row `sel_row` draws: a pill when selected, its title in
-/// `strong` bold. While it waits for a new key, `WAITING` stands in for its
-/// keys, in `accent`.
+/// `strong` bold; the pill alone when `lit`, under the pointer. While it
+/// waits for a new key, `WAITING` stands in for its keys, in `accent`.
 fn render_row(
     look: Look,
     theme: &Theme,
@@ -367,14 +377,13 @@ fn render_row(
     card: Rect,
     y: u16,
     row: &Row,
-    state: Lit,
+    (state, lit): (Lit, bool),
 ) {
     let left = card.x + 4;
     let right = card.right() - 4;
     let whole = Rect::new(card.x + 1, y, card.width.saturating_sub(2), 1);
-    // Nothing reports the mouse's position yet, so no row is hovered.
     let selected = state != Lit::No;
-    let ink = kit::sel_row(look, theme, out, whole, selected, false, theme.raised);
+    let ink = kit::sel_row(look, theme, out, whole, selected, lit, theme.raised);
 
     // The keys get what the title's minimum and two blanks leave, cut with
     // `…` beyond that.
@@ -713,7 +722,7 @@ mod tests {
     fn draw(k: &Keybindings, theme: &Theme) -> anyhow::Result<Buffer> {
         let mut terminal = Terminal::new(TestBackend::new(100, 30))?;
         terminal.draw(|frame| {
-            k.render(Look::default(), theme, frame, frame.area());
+            k.render(Look::default(), theme, frame, frame.area(), None);
         })?;
         Ok(terminal.backend().buffer().clone())
     }
@@ -943,7 +952,13 @@ mod tests {
         assert_eq!(card.width, 41);
         let mut terminal = Terminal::new(TestBackend::new(45, 30))?;
         terminal.draw(|frame| {
-            k.render(Look::default(), &Theme::default(), frame, frame.area());
+            k.render(
+                Look::default(),
+                &Theme::default(),
+                frame,
+                frame.area(),
+                None,
+            );
         })?;
         let row = text_row(terminal.backend().buffer(), card, card.y + 4);
         // The title up to two blanks short of the keys; one whole keycap, and

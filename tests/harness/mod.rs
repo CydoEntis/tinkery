@@ -314,6 +314,11 @@ impl Tinkery {
         self.write(&drag_bytes(from, to));
     }
 
+    /// Moves the pointer to a 0-based cell with no button held.
+    pub fn move_to(&mut self, col: u16, row: u16) {
+        self.write(&move_bytes(col, row));
+    }
+
     pub fn scroll_down(&mut self, col: u16, row: u16) {
         self.write(&scroll_down_bytes(col, row));
     }
@@ -1424,6 +1429,12 @@ pub fn drag_bytes(from: (u16, u16), to: (u16, u16)) -> Vec<u8> {
     out
 }
 
+/// Motion to a 0-based cell with no button held: SGR adds 32 for motion to
+/// button 3, which is none.
+pub fn move_bytes(col: u16, row: u16) -> Vec<u8> {
+    sgr(35, col, row, true)
+}
+
 pub fn scroll_up_bytes(col: u16, row: u16) -> Vec<u8> {
     sgr(64, col, row, true)
 }
@@ -1634,5 +1645,11 @@ mod tests {
             double_click_bytes(0, 0),
             b"\x1b[<0;1;1M\x1b[<0;1;1m\x1b[<0;1;1M\x1b[<0;1;1m"
         );
+    }
+
+    #[test]
+    fn a_move_with_no_button_is_sgr_motion_on_button_three() {
+        assert_eq!(move_bytes(0, 0), b"\x1b[<35;1;1M");
+        assert_eq!(move_bytes(4, 2), b"\x1b[<35;5;3M");
     }
 }

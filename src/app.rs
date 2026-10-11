@@ -48,7 +48,7 @@ use crate::ui::dirpicker::{Browsed, DirPicker};
 use crate::ui::find::{FindBar, Step};
 use crate::ui::hover::render_hover;
 use crate::ui::keybindings::{self, Keybindings};
-use crate::ui::kit::Look;
+use crate::ui::kit::{self, Look};
 use crate::ui::nofile;
 use crate::ui::picker::{self, Picked, Picker};
 use crate::ui::prompt::{Outcome, PromptBar};
@@ -854,6 +854,38 @@ fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
+/// A screen with rows or chips for the pointer to be over.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Place {
+    Search,
+    Keybindings,
+    Catalog,
+    Folders,
+    /// The cast palette and the run picker.
+    Picker,
+    Completion,
+    Find,
+}
+
+/// What the pointer is over: the one thing drawn lit. Moving within it is
+/// no change, so nothing is drawn again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Hovered {
+    /// A row of the tree, as an index into its rows.
+    Tree(usize),
+    /// A tab of a split.
+    Tab { split: usize, index: usize },
+    /// A button of the confirm card.
+    Button(usize),
+    /// An action of the splash.
+    Splash(splash::Item),
+    /// A screen row inside a list's card; the row the list draws there, if
+    /// it draws one, is lit.
+    Row(Place, u16),
+    /// A toggle: 0 for `Aa`, 1 for `.*`.
+    Chip(Place, usize),
+}
+
 /// All editor state, owned by the main task.
 #[derive(Debug, Default)]
 pub struct App {
@@ -951,6 +983,10 @@ pub struct App {
     /// Char index a left press landed on while the button is held, so a drag
     /// selects from there.
     drag_from: Option<usize>,
+    /// The cell the mouse last moved to, as (column, row); `None` until it
+    /// moves and once the terminal loses the focus. Drawing lights what is
+    /// under it (see `hovered`); nothing else reads it.
+    pointer: Option<(u16, u16)>,
     backups: Backups,
     /// The backup text the recover prompt is offering.
     recovery: Option<String>,
@@ -1139,11 +1175,126 @@ impl App {
             if let AppEvent::Input(Event::Resize(width, height)) = event {
                 self.screen = Rect::new(0, 0, width, height);
             }
-            self.handle_event(event);
+            // The pointer moving over the same thing changes nothing on
+            // screen, and a terminal reports every cell it crosses.
+            if !self.apply(event) {
+                continue;
+            }
             self.sync_lsp();
             self.draw(terminal)?;
         }
         Ok(())
+    }
+
+    /// Handles `event` and says whether the screen needs drawing again. Only
+    /// the pointer moving can leave it as it was: within one row, button, tab
+    /// or chip, or across cells that light nothing.
+    fn apply(&mut self, event: AppEvent) -> bool {
+        let moved = matches!(
+            &event,
+            AppEvent::Input(Event::Mouse(mouse)) if mouse.kind == MouseEventKind::Moved
+        );
+        if !moved {
+            self.handle_event(event);
+            return true;
+        }
+        let before = self.hovered(self.screen);
+        self.handle_event(event);
+        self.hovered(self.screen) != before
+    }
+
+    /// What the pointer is over, on a screen of `screen`: the one row, button,
+    /// tab or chip that is drawn lit. It is worked out from the pointer's cell
+    /// and what is open, with the geometry clicks use, so it follows a list
+    /// that scrolls under a still pointer. A dialog takes the pointer from
+    /// everything behind it, topmost first, as they are drawn.
+    fn hovered(&self, screen: Rect) -> Option<Hovered> {
+        let (x, y) = self.pointer?;
+        let at = Position::new(x, y);
+        let row =
+            |place: Place, card: Rect| kit::row_under(card, at).map(|y| Hovered::Row(place, y));
+        if let Some(prompt) = self.prompt {
+            let button = self.confirm(prompt).button_at(screen, at);
+            return button.map(Hovered::Button);
+        }
+        if self.project_search.is_some() {
+            return ProjectSearch::chip_at(screen, at)
+                .map(|chip| Hovered::Chip(Place::Search, chip))
+                .or_else(|| row(Place::Search, ProjectSearch::card(screen)));
+        }
+        if let Some(card) = &self.keybindings {
+            return row(Place::Keybindings, card.card(screen));
+        }
+        if let Some(catalog) = &self.catalog {
+            return row(Place::Catalog, catalog.card(screen));
+        }
+        if let Some(browser) = &self.folders {
+            return row(Place::Folders, browser.card(screen));
+        }
+        if let Some(picker) = &self.picker {
+            return row(Place::Picker, picker.card(screen));
+        }
+        let panes = self.panes_in(screen);
+        // A bar takes the keys, and the mouse does nothing behind it.
+        if let Some(find) = &self.find {
+            let chip = panes.bar.and_then(|bar| find.chip_at(bar, at));
+            return chip.map(|chip| Hovered::Chip(Place::Find, chip));
+        }
+        if self.name_prompt.is_some() {
+            return None;
+        }
+        // The completion popup is drawn over the editor and whatever it
+        // reaches past.
+        if let Some((open, typed, cell, bounds)) = self.completion_shown(&panes, screen)
+            && let Some(card) = open.card(&typed, cell, bounds)
+            && card.contains(at)
+        {
+            return row(Place::Completion, card);
+        }
+        if let Some(tree) = panes.tree
+            && tree.contains(at)
+        {
+            return self.tree_row_at(tree, at).map(Hovered::Tree);
+        }
+        if self.splash.is_some() {
+            let editor = panes.splits[self.tabs.focused].editor;
+            return Splash::item_at(editor, at).map(Hovered::Splash);
+        }
+        // The key list's tab bar holds no tab.
+        if self.no_file {
+            return None;
+        }
+        let split = panes.splits.iter().position(|s| s.header.contains(at))?;
+        let labels = self.tabs.labels(split);
+        let active = self.tabs.splits[split].active;
+        tab_at(&labels, active, panes.splits[split].header, x, y)
+            .map(|index| Hovered::Tab { split, index })
+    }
+
+    /// The completion popup when it is on show, with what placing it takes:
+    /// the word typed so far, the cursor's cell and the bounds it stays in,
+    /// everything but the status line, which stays readable.
+    fn completion_shown(
+        &self,
+        panes: &Panes,
+        screen: Rect,
+    ) -> Option<(&Completion, String, (u16, u16), Rect)> {
+        let open = self.completion.as_ref()?;
+        if open.doc != self.tabs.active().id || self.modal_open() {
+            return None;
+        }
+        let focused = self.tabs.focused;
+        let area = panes.splits[focused].editor;
+        let view = &self.tabs.splits[focused].active().view;
+        let shown = self.tabs.shown(focused);
+        let buffer = shown.buffer();
+        let bounds = Rect {
+            height: screen.height.saturating_sub(1),
+            ..screen
+        };
+        let typed = completion::typed_word(&buffer.rope, open.start, buffer.cursor)?;
+        let cell = cursor_cell(buffer, view, self.editor.tab_width, area)?;
+        Some((open, typed, cell, bounds))
     }
 
     /// Draws one frame as a synchronized update, so a terminal shows it whole: a
@@ -1180,6 +1331,16 @@ impl App {
     }
 
     fn handle_event(&mut self, event: AppEvent) {
+        // Where the pointer is, whatever is open: each screen lights what is
+        // under it. A terminal says nothing when the pointer leaves it; losing
+        // the focus is the nearest it comes.
+        match &event {
+            AppEvent::Input(Event::Mouse(mouse)) if mouse.kind == MouseEventKind::Moved => {
+                self.pointer = Some((mouse.column, mouse.row));
+            }
+            AppEvent::Input(Event::FocusLost) => self.pointer = None,
+            _ => {}
+        }
         match event {
             AppEvent::Input(Event::Key(key)) => self.handle_key(key),
             AppEvent::Input(Event::Paste(text)) if self.prompt.is_none() => {
@@ -4015,9 +4176,8 @@ impl App {
                 self.focus = Focus::Tree;
                 // The brand rows above the nodes, and the card's edge below
                 // them, only take focus.
-                let on_node = (nodes.top()..nodes.bottom()).contains(&mouse.row);
-                let row = on_node.then(|| usize::from(mouse.row - nodes.y));
-                if let Some(index) = row.and_then(|line| self.tree.row_at(line)) {
+                let at = Position::new(mouse.column, mouse.row);
+                if let Some(index) = self.tree_row_at(area, at) {
                     self.tree.select(index);
                     self.activate_tree_row();
                     self.follow_tree();
@@ -4027,6 +4187,16 @@ impl App {
             MouseEventKind::ScrollDown => self.tree.scroll_by(WHEEL_LINES, height),
             _ => {}
         }
+    }
+
+    /// The tree row at `at` when the tree is drawn in `area`: the one a click
+    /// there opens, and the one the pointer there lights. None on the brand
+    /// rows, the card's bottom edge and the blank rows after the last node.
+    fn tree_row_at(&self, area: Rect, at: Position) -> Option<usize> {
+        let nodes = nodes_area(area);
+        let on_node = (nodes.top()..nodes.bottom()).contains(&at.y);
+        let line = on_node.then(|| usize::from(at.y - nodes.y))?;
+        self.tree.row_at(line)
     }
 
     /// Puts the selection on the clipboard. Returns whether something was copied,
@@ -4703,8 +4873,13 @@ impl App {
     }
 
     fn panes(&self) -> Panes {
+        self.panes_in(self.screen)
+    }
+
+    /// The panes on a screen of `screen`.
+    fn panes_in(&self, screen: Rect) -> Panes {
         Panes::new(
-            self.screen,
+            screen,
             self.tree_visible,
             self.run_panel_visible,
             self.name_prompt.is_some() || self.find.is_some(),
@@ -4719,14 +4894,18 @@ impl App {
 
     /// Draws the whole screen. Pure: reads `self`, never changes it.
     pub fn render(&self, frame: &mut Frame) {
-        let panes = Panes::new(
-            frame.area(),
-            self.tree_visible,
-            self.run_panel_visible,
-            self.name_prompt.is_some() || self.find.is_some(),
-            self.tabs.splits.len(),
-        );
+        let panes = self.panes_in(frame.area());
         let theme = &self.theme;
+        // What the pointer is over is lit; each screen is handed its share.
+        let hovered = self.hovered(frame.area());
+        let hovered_row = |place: Place| match hovered {
+            Some(Hovered::Row(on, y)) if on == place => Some(y),
+            _ => None,
+        };
+        let hovered_chip = |place: Place| match hovered {
+            Some(Hovered::Chip(on, chip)) if on == place => Some(chip),
+            _ => None,
+        };
         // The editor ground; chrome paints its own `sidebar_bg` over it.
         let screen = frame.area();
         frame
@@ -4743,7 +4922,12 @@ impl App {
             // The splash has the editor area to itself: no pills over
             // it, and no cursor in a buffer that isn't shown.
             if let Some(splash) = &self.splash {
-                splash.render(self.look, theme, &self.project, frame, area.editor);
+                // Clicks, and so the pointer, count rows in the focused split.
+                let item = match hovered {
+                    Some(Hovered::Splash(item)) if split == focused => Some(item),
+                    _ => None,
+                };
+                splash.render(self.look, theme, &self.project, item, frame, area.editor);
                 continue;
             }
             // The key list keeps the tab bar, with no tab on it, and has the
@@ -4753,7 +4937,7 @@ impl App {
                     self.look,
                     theme,
                     &[],
-                    0,
+                    (0, None),
                     split == focused,
                     area.header,
                     frame,
@@ -4763,11 +4947,15 @@ impl App {
                 nofile::render(self.look, theme, &folder, &rows, frame, area.editor);
                 continue;
             }
+            let tab = match hovered {
+                Some(Hovered::Tab { split: on, index }) if on == split => Some(index),
+                _ => None,
+            };
             render_tabs(
                 self.look,
                 theme,
                 &self.tabs.labels(split),
-                tabs.active,
+                (tabs.active, tab),
                 split == focused,
                 area.header,
                 frame,
@@ -4810,6 +4998,10 @@ impl App {
                 project: &self.project,
                 active: active.as_deref(),
                 dirty: &dirty,
+                hovered: match hovered {
+                    Some(Hovered::Tree(row)) => Some(row),
+                    _ => None,
+                },
             };
             let selected = render_tree(self.look, theme, &self.tree, &marks, focused, tree, frame);
             // The cursor marks the focused pane; `render_buffer` put it in the editor.
@@ -4905,23 +5097,9 @@ impl App {
                 render_hover(self.look, theme, text, at, bounds, frame);
             }
         }
-        if let Some(open) = &self.completion
-            && open.doc == self.tabs.active().id
-            && !self.modal_open()
-        {
-            let area = panes.splits[focused].editor;
-            let view = &self.tabs.splits[focused].active().view;
-            let shown = self.tabs.shown(focused);
-            let buffer = shown.buffer();
-            let bounds = Rect {
-                height: screen.height.saturating_sub(1),
-                ..screen
-            };
-            if let Some(typed) = completion::typed_word(&buffer.rope, open.start, buffer.cursor)
-                && let Some(at) = cursor_cell(buffer, view, self.editor.tab_width, area)
-            {
-                open.render(self.look, theme, &typed, at, bounds, frame);
-            }
+        if let Some((open, typed, at, bounds)) = self.completion_shown(&panes, screen) {
+            let row = hovered_row(Place::Completion);
+            open.render(self.look, theme, &typed, at, bounds, row, frame);
         }
         if let (Some(name_prompt), Some(area)) = (&self.name_prompt, panes.bar) {
             let hint = name_prompt.op.hint();
@@ -4929,32 +5107,43 @@ impl App {
             frame.set_cursor_position(at);
         }
         if let (Some(find), Some(area)) = (&self.find, panes.bar) {
-            let at = find.render(self.look, theme, frame, area);
+            let chip = hovered_chip(Place::Find);
+            let at = find.render(self.look, theme, frame, area, chip);
             frame.set_cursor_position(at);
         }
         if let Some(picker) = &self.picker {
-            let at = picker.render(self.look, theme, frame, frame.area());
+            let row = hovered_row(Place::Picker);
+            let at = picker.render(self.look, theme, frame, frame.area(), row);
             frame.set_cursor_position(at);
         }
         if let Some(browser) = &self.folders {
-            let at = browser.render(self.look, theme, frame, frame.area());
+            let row = hovered_row(Place::Folders);
+            let at = browser.render(self.look, theme, frame, frame.area(), row);
             frame.set_cursor_position(at);
         }
         // Nothing is typed into the catalog, so it shows no cursor.
         if let Some(catalog) = &self.catalog {
-            catalog.render(self.look, theme, frame, frame.area());
+            let row = hovered_row(Place::Catalog);
+            catalog.render(self.look, theme, frame, frame.area(), row);
         }
         if let Some(card) = &self.keybindings {
-            let at = card.render(self.look, theme, frame, frame.area());
+            let row = hovered_row(Place::Keybindings);
+            let at = card.render(self.look, theme, frame, frame.area(), row);
             frame.set_cursor_position(at);
         }
         if let Some(panel) = &self.project_search {
-            let at = panel.render(self.look, theme, frame, frame.area());
+            let over = (hovered_row(Place::Search), hovered_chip(Place::Search));
+            let at = panel.render(self.look, theme, frame, frame.area(), over);
             frame.set_cursor_position(at);
         }
         if let Some(prompt) = self.prompt {
+            let button = match hovered {
+                Some(Hovered::Button(button)) => Some(button),
+                _ => None,
+            };
+            let area = frame.area();
             self.confirm(prompt)
-                .render(self.look, theme, frame, frame.area(), self.prompt_button);
+                .render(self.look, theme, frame, area, self.prompt_button, button);
         }
         // Last, so a note raised under a card or a prompt is still read. The
         // editor area is every split's, so the toast sits at its far right.
@@ -6990,6 +7179,246 @@ world",
         press(&mut app, &["x"]);
         app.handle_mouse(mouse(middle, 2, 1), Instant::now());
         assert_eq!(app.prompt, Some(Prompt::UnsavedClose));
+    }
+
+    /// Moves the pointer to a cell and says whether the screen needs drawing
+    /// again.
+    fn point(app: &mut App, col: u16, row: u16) -> bool {
+        app.apply(AppEvent::Input(Event::Mouse(mouse(
+            MouseEventKind::Moved,
+            col,
+            row,
+        ))))
+    }
+
+    /// `app` drawn at 100x30, cells and all.
+    fn frame_of(app: &App) -> Result<ratatui::buffer::Buffer> {
+        let mut terminal = Terminal::new(TestBackend::new(100, 30))?;
+        terminal.draw(|frame| app.render(frame))?;
+        Ok(terminal.backend().buffer().clone())
+    }
+
+    #[test]
+    fn the_pointer_moving_within_one_tab_changes_nothing_and_draws_nothing() {
+        let mut app = app_with("one", &FakeClipboard::default());
+        press(&mut app, &["ctrl+n"]);
+        assert_eq!(app.hovered(app.screen), None);
+        // Two ` untitled ` pills on row 1: columns 1..=12 and 14..=25, the
+        // second the current tab.
+        assert!(point(&mut app, 2, 1));
+        let first = Some(Hovered::Tab { split: 0, index: 0 });
+        assert_eq!(app.hovered(app.screen), first);
+        // Along the same pill: the same target, and no frame is drawn.
+        for col in 1..=12 {
+            assert!(!point(&mut app, col, 1), "{col}");
+            assert_eq!(app.pointer, Some((col, 1)));
+            assert_eq!(app.hovered(app.screen), first, "{col}");
+        }
+        // The gap between two pills is nothing; the next pill is another tab.
+        assert!(point(&mut app, 13, 1));
+        assert_eq!(app.hovered(app.screen), None);
+        assert!(point(&mut app, 14, 1));
+        let second = Some(Hovered::Tab { split: 0, index: 1 });
+        assert_eq!(app.hovered(app.screen), second);
+        assert!(!point(&mut app, 25, 1));
+        // Off the pills, over the editor: nothing, however far it moves.
+        assert!(point(&mut app, 30, 10));
+        assert_eq!(app.hovered(app.screen), None);
+        assert!(!point(&mut app, 31, 11));
+        assert!(!point(&mut app, 60, 20));
+        // Any other event is drawn.
+        assert!(app.apply(key("x")));
+        assert!(app.apply(AppEvent::Input(Event::Mouse(mouse(LEFT_DOWN, 30, 10)))));
+    }
+
+    #[test]
+    fn the_pointer_lights_another_tab_and_changes_no_selection_or_focus() -> Result<()> {
+        let mut app = app_with("one", &FakeClipboard::default());
+        press(&mut app, &["ctrl+n"]);
+        let rest = frame_of(&app)?;
+        let (hov, raised) = (app.theme.hov, app.theme.raised);
+        assert_eq!(rest[(3, 1)].bg, raised);
+
+        point(&mut app, 3, 1);
+        let lit = frame_of(&app)?;
+        for x in 2..=11 {
+            assert_eq!(lit[(x, 1)].bg, hov, "{x}");
+        }
+        // The current tab is as it was, and so is what a key or a click does.
+        assert_eq!(lit[(15, 1)], rest[(15, 1)]);
+        assert_eq!(app.tabs.split().active, 1);
+        assert_eq!(app.focus, Focus::Editor);
+        point(&mut app, 15, 1);
+        assert_eq!(frame_of(&app)?, rest);
+        point(&mut app, 3, 1);
+        app.handle_mouse(mouse(LEFT_DOWN, 3, 1), Instant::now());
+        assert_eq!(app.tabs.split().active, 0);
+        // The tab clicked is the current one now, and no longer lit.
+        assert_eq!(frame_of(&app)?[(3, 1)].bg, app.theme.accent);
+
+        // The terminal losing the focus is the pointer leaving it.
+        point(&mut app, 15, 1);
+        assert_eq!(frame_of(&app)?[(15, 1)].bg, hov);
+        assert!(app.apply(AppEvent::Input(Event::FocusLost)));
+        assert_eq!(app.pointer, None);
+        assert_eq!(app.hovered(app.screen), None);
+        assert_eq!(frame_of(&app)?[(15, 1)].bg, raised);
+        Ok(())
+    }
+
+    #[test]
+    fn the_pointer_lights_a_tree_row_without_selecting_or_focusing_it() -> Result<()> {
+        let (_dir, mut app) = project_in_tree()?;
+        press(&mut app, &["ctrl+e"]);
+        let focus = app.focus;
+        let selected = app.tree.selected();
+        assert_eq!(selected, 0);
+        let (hov, surface) = (app.theme.hov, app.theme.surface);
+        // `a.txt` and `b.txt` are rows 3 and 4 of the tree's 28 columns.
+        assert!(point(&mut app, 10, 4));
+        assert_eq!(app.hovered(app.screen), Some(Hovered::Tree(1)));
+        assert!(!point(&mut app, 20, 4));
+        let lit = frame_of(&app)?;
+        assert_eq!(lit[(10, 4)].bg, hov);
+        assert_eq!(lit[(2, 4)].symbol(), " ");
+        assert_eq!(app.tree.selected(), selected);
+        assert_eq!(app.focus, focus);
+        // The brand rows, the rows after the last node and the card's bottom
+        // edge are no row.
+        for row in [0, 1, 2, 5, 28] {
+            point(&mut app, 10, row);
+            assert_eq!(app.hovered(app.screen), None, "{row}");
+        }
+        assert_eq!(frame_of(&app)?[(10, 4)].bg, surface);
+        // The row a click opens is the row the pointer lit.
+        point(&mut app, 10, 4);
+        app.handle_mouse(mouse(LEFT_DOWN, 10, 4), Instant::now());
+        assert_eq!(app.tree.selected(), 1);
+        assert_eq!(selected_name(&app), Some("b.txt"));
+        Ok(())
+    }
+
+    #[test]
+    fn a_dialog_takes_the_pointer_from_everything_behind_it() -> Result<()> {
+        let mut app = app_with("one", &FakeClipboard::default());
+        press(&mut app, &["ctrl+n", "x"]);
+        point(&mut app, 3, 1);
+        let tab = Some(Hovered::Tab { split: 0, index: 0 });
+        assert_eq!(app.hovered(app.screen), tab);
+        let hov = app.theme.hov;
+        assert_eq!(frame_of(&app)?[(3, 1)].bg, hov);
+
+        // The unsaved-changes card opens over the tab the pointer is on.
+        press(&mut app, &["ctrl+w"]);
+        let prompt = app.prompt.expect("the close asks first");
+        assert_eq!(app.hovered(app.screen), None);
+        let behind = frame_of(&app)?;
+        // The tab is drawn as it rests, then dimmed with the screen.
+        app.pointer = None;
+        assert_eq!(frame_of(&app)?, behind);
+        // Moving over it lights nothing and draws nothing.
+        assert!(!point(&mut app, 4, 1));
+        assert_eq!(app.hovered(app.screen), None);
+
+        // On the card, the button under the pointer is lit unless it is the
+        // focused one; the focus stays where it was.
+        let card = app.confirm(prompt);
+        let buttons: Vec<u16> = (0..100)
+            .filter(|x| {
+                let at = Position::new(*x, 16);
+                let here = card.button_at(app.screen, at);
+                here.is_some() && here != card.button_at(app.screen, Position::new(x - 1, 16))
+            })
+            .collect();
+        assert_eq!(buttons.len(), card.choices.len());
+        assert!(point(&mut app, buttons[1], 16));
+        assert_eq!(app.hovered(app.screen), Some(Hovered::Button(1)));
+        assert!(!point(&mut app, buttons[1] + 2, 16));
+        assert_eq!(frame_of(&app)?[(buttons[1] + 2, 16)].bg, hov);
+        assert_eq!(frame_of(&app)?[(buttons[0] + 2, 16)].bg, app.theme.accent);
+        assert_eq!(app.prompt_button, 0);
+        assert_eq!(app.prompt, Some(prompt));
+        point(&mut app, buttons[0], 16);
+        assert_eq!(frame_of(&app)?[(buttons[0] + 2, 16)].bg, app.theme.accent);
+
+        // Closed, the tab under the pointer lights again.
+        press(&mut app, &["esc"]);
+        assert_eq!(app.prompt, None);
+        point(&mut app, 3, 1);
+        assert_eq!(app.hovered(app.screen), tab);
+        Ok(())
+    }
+
+    #[test]
+    fn the_find_bars_off_chip_lights_and_nothing_behind_the_bar_does() -> Result<()> {
+        let mut app = app_with("one", &FakeClipboard::default());
+        press(&mut app, &["ctrl+n", "ctrl+f"]);
+        assert!(app.find.is_some());
+        // The tab that lit before the bar opened doesn't now.
+        point(&mut app, 3, 1);
+        assert_eq!(app.hovered(app.screen), None);
+        let rest = frame_of(&app)?;
+        let (hov, btn) = (app.theme.hov, app.theme.btn);
+        // The bar is the row above the status line; both chips are off, two
+        // letters each between their round ends.
+        let chips: Vec<u16> = (0..100).filter(|x| rest[(*x, 28)].bg == btn).collect();
+        assert_eq!(chips.len(), 4);
+        assert!(point(&mut app, chips[0], 28));
+        assert_eq!(app.hovered(app.screen), Some(Hovered::Chip(Place::Find, 0)));
+        // Its round end is the chip too.
+        assert!(!point(&mut app, chips[0] - 1, 28));
+        assert!(!point(&mut app, chips[1], 28));
+        let lit = frame_of(&app)?;
+        for (i, x) in chips.iter().enumerate() {
+            let fill = if i < 2 { hov } else { btn };
+            assert_eq!(lit[(*x, 28)].bg, fill, "{x}");
+        }
+        assert!(point(&mut app, chips[2], 28));
+        assert_eq!(app.hovered(app.screen), Some(Hovered::Chip(Place::Find, 1)));
+        // The pointer toggles nothing: the chip it left is off as before.
+        assert_eq!(frame_of(&app)?[(chips[0], 28)].bg, btn);
+        Ok(())
+    }
+
+    #[test]
+    fn the_pointer_lights_a_splash_action_and_leaves_the_selected_one() -> Result<()> {
+        let (_dir, mut app) = project()?;
+        let rest = frame_of(&app)?;
+        let (hov, btn, accent) = (app.theme.hov, app.theme.btn, app.theme.accent);
+        let ground = app.theme.bg;
+        let row_of = |label: &str| {
+            (0..30u16)
+                .find(|y| {
+                    let line: String = (0..100).map(|x| rest[(x, *y)].symbol()).collect();
+                    line.contains(label)
+                })
+                .expect("the action is drawn")
+        };
+        let (new_file, open) = (row_of("New file"), row_of("Open directory"));
+        let cell = |frame: &ratatui::buffer::Buffer, y: u16| {
+            let x = (0..100)
+                .find(|x| frame[(*x, y)].bg != ground)
+                .expect("a button is drawn");
+            frame[(x + 2, y)].bg
+        };
+        assert_eq!((cell(&rest, new_file), cell(&rest, open)), (accent, btn));
+        assert!(point(&mut app, 40, open));
+        assert_eq!(
+            app.hovered(app.screen),
+            Some(Hovered::Splash(splash::Item::OpenDirectory))
+        );
+        assert!(!point(&mut app, 50, open));
+        let lit = frame_of(&app)?;
+        assert_eq!(cell(&lit, open), hov);
+        assert_eq!(cell(&lit, new_file), accent);
+        // The selection stays on the first action, which doesn't light.
+        assert_eq!(
+            app.splash.as_ref().map(Splash::selected),
+            Some(splash::Item::NewFile)
+        );
+        point(&mut app, 40, new_file);
+        assert_eq!(frame_of(&app)?, rest);
+        Ok(())
     }
 
     fn type_keys(app: &mut App, text: &str) {

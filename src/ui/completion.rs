@@ -26,6 +26,13 @@ const LEFT: u16 = 1 + MARK;
 /// The row pill's other end and the card's edge after it.
 const RIGHT: u16 = 2;
 
+/// How wide the kinds' column is for `shown`, and the blank after it: none
+/// when no item has a kind.
+fn kind_column(shown: &[&CompletionItem]) -> (usize, usize) {
+    let width = shown.iter().map(|i| i.kind.width()).max().unwrap_or(0);
+    (width, usize::from(width > 0))
+}
+
 /// Whether `c` belongs to the word being completed.
 pub fn is_word_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
@@ -124,27 +131,16 @@ impl Completion {
         }
     }
 
-    /// Draws the items matching `typed` in a card anchored at the cursor cell
-    /// `cursor`, inside `bounds`: each row its kind in `muted`, its label in `fg`
-    /// with the typed prefix in `accent` bold, and its detail right-aligned in
-    /// `muted`. The selected row is the kit's: a pill with its mark, the label
-    /// in `strong` bold. Nothing when nothing matches.
-    pub fn render(
-        &self,
-        look: Look,
-        theme: &Theme,
-        typed: &str,
-        cursor: (u16, u16),
-        bounds: Rect,
-        frame: &mut Frame,
-    ) {
+    /// Where the card listing the items that match `typed` goes, anchored at
+    /// the cursor cell `cursor` inside `bounds`: as wide as its widest kind,
+    /// label and detail and a row per item. None when nothing matches or
+    /// there's no room for a row, and so nothing is drawn.
+    pub fn card(&self, typed: &str, cursor: (u16, u16), bounds: Rect) -> Option<Rect> {
         let shown = self.shown(typed);
         if shown.is_empty() {
-            return;
+            return None;
         }
-        let selected = self.selected.min(shown.len() - 1);
-        let kind_width = shown.iter().map(|i| i.kind.width()).max().unwrap_or(0);
-        let gap = usize::from(kind_width > 0);
+        let (kind_width, gap) = kind_column(&shown);
         let label_width = shown.iter().map(|i| i.label.width()).max().unwrap_or(0);
         let detail_width = shown.iter().map(|i| i.detail.width()).max().unwrap_or(0);
         // Two blanks keep the detail apart from the longest label.
@@ -157,9 +153,33 @@ impl Completion {
         let rows = u16::try_from(shown.len()).unwrap_or(u16::MAX);
         let width = u16::try_from(text_width).unwrap_or(u16::MAX);
         let card = anchor(cursor, width + LEFT + RIGHT, rows + 2, bounds);
-        if card.width <= LEFT + RIGHT || card.height <= 2 {
+        (card.width > LEFT + RIGHT && card.height > 2).then_some(card)
+    }
+
+    /// Draws the items matching `typed` in a card anchored at the cursor cell
+    /// `cursor`, inside `bounds`: each row its kind in `muted`, its label in `fg`
+    /// with the typed prefix in `accent` bold, and its detail right-aligned in
+    /// `muted`. The selected row is the kit's: a pill with its mark, the label
+    /// in `strong` bold. `hovered` is the screen row the pointer is on, inside
+    /// the card (`kit::row_under`); the row drawn there is the pill alone.
+    /// Nothing when nothing matches.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render(
+        &self,
+        look: Look,
+        theme: &Theme,
+        typed: &str,
+        cursor: (u16, u16),
+        bounds: Rect,
+        hovered: Option<u16>,
+        frame: &mut Frame,
+    ) {
+        let Some(card) = self.card(typed, cursor, bounds) else {
             return;
-        }
+        };
+        let shown = self.shown(typed);
+        let selected = self.selected.min(shown.len().saturating_sub(1));
+        let (kind_width, gap) = kind_column(&shown);
         let out = frame.buffer_mut();
         let inner = popup_card(look, theme, out, card);
         if inner.is_empty() {
@@ -172,9 +192,9 @@ impl Completion {
         let typed_chars = typed.chars().count();
         for (index, (y, item)) in (inner.y..inner.bottom()).zip(&shown).enumerate() {
             let row = Rect::new(inner.x, y, inner.width, 1);
-            // Nothing reports the mouse's position yet, so no row is hovered.
             let chosen = index == selected;
-            let ink = kit::sel_row(look, theme, out, row, chosen, false, theme.raised);
+            let lit = hovered == Some(y);
+            let ink = kit::sel_row(look, theme, out, row, chosen, lit, theme.raised);
             out.set_stringn(x, y, item.kind, room, ink.faint);
             let offset = kind_width + gap;
             if offset >= room {
@@ -304,6 +324,11 @@ mod tests {
     /// selected, with the cursor at (2, 1) of a 32 by 7 screen of `x`: the card
     /// is at (2, 2), 27 by 4, and its rows' text starts at column 6.
     fn popup(look: Look, theme: &Theme) -> anyhow::Result<Buffer> {
+        popup_under(look, theme, None)
+    }
+
+    /// The same popup with the pointer on screen row `hovered`.
+    fn popup_under(look: Look, theme: &Theme, hovered: Option<u16>) -> anyhow::Result<Buffer> {
         let mut push = item("push", None);
         push.detail = "fn(char)".into();
         let completion = Completion::new(1, 0, 0, vec![push, item("push_str", None)]);
@@ -314,7 +339,7 @@ mod tests {
             for y in area.top()..area.bottom() {
                 out.set_string(0, y, "x".repeat(32), Style::new().fg(Color::Red));
             }
-            completion.render(look, theme, "pu", (2, 1), area, frame);
+            completion.render(look, theme, "pu", (2, 1), area, hovered, frame);
         })?;
         Ok(terminal.backend().buffer().clone())
     }
@@ -458,13 +483,53 @@ mod tests {
     }
 
     #[test]
+    fn the_pointer_lights_a_row_without_the_mark_and_leaves_the_selection() -> anyhow::Result<()> {
+        let theme = Theme::default();
+        let rest = popup(LOOKS[0], &theme)?;
+        // The card is at (2, 2), 27 by 4: `push` on row 3, selected, and
+        // `push_str` on row 4.
+        let mut push = item("push", None);
+        push.detail = "fn(char)".into();
+        let completion = Completion::new(1, 0, 0, vec![push, item("push_str", None)]);
+        let bounds = Rect::new(0, 0, 32, 7);
+        let card = completion.card("pu", (2, 1), bounds);
+        assert_eq!(card, Some(Rect::new(2, 2, 27, 4)));
+        assert_eq!(completion.card("zz", (2, 1), bounds), None);
+
+        let lit = popup_under(LOOKS[0], &theme, Some(4))?;
+        for x in 4..27 {
+            assert_eq!(rest[(x, 4)].bg, theme.raised, "{x}");
+            assert_eq!(lit[(x, 4)].bg, theme.hov, "{x}");
+        }
+        assert_eq!(lit[(4, 4)].symbol(), " ");
+        assert!(!lit[(11, 4)].modifier.contains(Modifier::BOLD));
+        // The selected row is as it was, mark and all.
+        for x in 0..32 {
+            assert_eq!(lit[(x, 3)], rest[(x, 3)], "{x}");
+        }
+        assert_eq!(lit[(4, 3)].symbol(), SEL_MARK);
+        // On the selected row, or on the card's edge, nothing changes.
+        for y in [2, 3, 5] {
+            assert_eq!(popup_under(LOOKS[0], &theme, Some(y))?, rest, "{y}");
+        }
+        // `mono` has no fills.
+        let mono = Theme::named("mono").expect("mono exists");
+        assert_eq!(
+            popup_under(LOOKS[0], &mono, Some(4))?,
+            popup(LOOKS[0], &mono)?
+        );
+        Ok(())
+    }
+
+    #[test]
     fn a_popup_with_no_room_for_a_row_draws_nothing() -> anyhow::Result<()> {
         let completion = Completion::new(1, 0, 0, vec![item("push", None)]);
         let theme = Theme::default();
         // Six cells is the edges, the mark's three and the pill's end: no text.
         let mut terminal = Terminal::new(TestBackend::new(6, 6))?;
-        terminal
-            .draw(|frame| completion.render(LOOKS[0], &theme, "", (0, 0), frame.area(), frame))?;
+        terminal.draw(|frame| {
+            completion.render(LOOKS[0], &theme, "", (0, 0), frame.area(), None, frame)
+        })?;
         assert_eq!(
             terminal.backend().buffer(),
             &Buffer::empty(Rect::new(0, 0, 6, 6))

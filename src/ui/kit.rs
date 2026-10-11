@@ -23,7 +23,7 @@
 //! needs it, so drawing stays a pure function of `App`.
 
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
+use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 
@@ -145,6 +145,34 @@ pub fn chip(
     pill(look, theme, vec![label], fill, ground)
 }
 
+/// A toggle on `ground`, a chip as wide as `" text "`: `acc_ink` on `accent`,
+/// bold, while `on`; `muted` on `btn` while off. `hovered` turns an off
+/// toggle's fill to `hov`, with its text in `text`, as `muted` is too close to
+/// that fill to read; one that is on doesn't change, and nor does any in
+/// `mono`, which has no fills.
+pub fn toggle(
+    look: Look,
+    theme: &Theme,
+    text: &str,
+    on: bool,
+    hovered: bool,
+    ground: Color,
+) -> Vec<Span<'static>> {
+    let style = if on {
+        Style::new()
+            .bg(theme.accent)
+            .fg(theme.acc_ink)
+            .add_modifier(Modifier::BOLD)
+    } else if hovered && !theme.flat() {
+        Style::new().bg(theme.hov).fg(theme.text)
+    } else {
+        Style::new()
+            .bg(theme.btn)
+            .fg(ink(theme, theme.muted, theme.btn))
+    };
+    chip(look, theme, text, style, ground)
+}
+
 /// An empty pill of `fill` on `ground`, `width` cells from `(x, y)`, over
 /// whatever was drawn there: the ground of a selected row or an input. Draw
 /// its text afterwards, from `x + 1`. Narrower than its two ends, it draws
@@ -179,6 +207,24 @@ pub fn row_pill(
     );
 }
 
+/// The cells `strip` returns for a bar across the top row of `area`, without
+/// drawing it: where the pointer is looked for is where the bar's content was
+/// drawn.
+pub fn strip_inside(area: Rect) -> Rect {
+    let row = Rect {
+        height: area.height.min(1),
+        ..area
+    };
+    if row.width < 3 {
+        return row;
+    }
+    Rect {
+        x: row.x + 1,
+        width: row.width - 2,
+        ..row
+    }
+}
+
 /// A one-row bar of `fill` across the top row of `area`, on `ground`: a row
 /// pill, or just the fill where there's no room for two ends and something
 /// between them. Returns the cells between the ends, where the bar's content
@@ -206,11 +252,7 @@ pub fn strip(
         return row;
     }
     row_pill(look, theme, buf, (row.x, row.y), row.width, fill, ground);
-    Rect {
-        x: row.x + 1,
-        width: row.width - 2,
-        ..row
-    }
+    strip_inside(area)
 }
 
 /// A key as a keycap: a chip on `btn` with the key in `strong`, bold.
@@ -650,17 +692,19 @@ impl RowInk {
 /// three cells into it, after the mark.
 ///
 /// A `selected` row is a row pill of `hov` with `SEL_MARK` in `accent` bold a
-/// cell in; a `hovered` one gets the pill without the mark; any other row is
-/// left as it is. Accent is never a row's fill. `mono` has no fills: there the
+/// cell in; a `lit` one gets the pill without the mark; any other row is left
+/// as it is. A row is lit while the pointer is on it (see `row_under`), and
+/// for whatever else a list marks without selecting, as the tree does its
+/// active file. Accent is never a row's fill. `mono` has no fills: there the
 /// selected row is reverse video from edge to edge, with the mark and nothing
-/// coloured on it, and hovering shows nothing.
+/// coloured on it, and a lit row shows nothing.
 pub fn sel_row(
     look: Look,
     theme: &Theme,
     buf: &mut Buffer,
     row: Rect,
     selected: bool,
-    hovered: bool,
+    lit: bool,
     ground: Color,
 ) -> RowInk {
     let bold = Modifier::BOLD;
@@ -695,7 +739,7 @@ pub fn sel_row(
             plain: true,
         };
     }
-    if !selected && !hovered {
+    if !selected && !lit {
         return resting;
     }
     let fill = theme.hov;
@@ -720,6 +764,20 @@ pub fn sel_row(
         fill,
         plain: false,
     }
+}
+
+/// The screen row of a list in `card` that the pointer at `at` is on: any row
+/// inside the card's edges, as a list's rows run from one edge to the other.
+/// Pass it to the list's drawing, which lights the row it draws there; a
+/// heading or a blank on that row isn't a `sel_row` and stays as it is.
+pub fn row_under(card: Rect, at: Position) -> Option<u16> {
+    let inside = Rect {
+        x: card.x.saturating_add(1),
+        y: card.y.saturating_add(1),
+        width: card.width.saturating_sub(2),
+        height: card.height.saturating_sub(2),
+    };
+    inside.contains(at).then_some(at.y)
 }
 
 /// How far the text behind a panel moves towards its own ground, and then how
@@ -1728,6 +1786,82 @@ mod tests {
             assert_eq!(
                 list_row(look, &theme, true, true),
                 list_row(look, &theme, true, false)
+            );
+        }
+    }
+
+    #[test]
+    fn the_row_under_the_pointer_is_any_row_inside_the_cards_edges() {
+        let card = Rect::new(10, 4, 20, 6);
+        let under = |x, y| row_under(card, Position::new(x, y));
+        // Rows 5 to 8, columns 11 to 28: a list's rows run edge to edge.
+        for y in 5..9 {
+            assert_eq!(under(11, y), Some(y));
+            assert_eq!(under(28, y), Some(y));
+            // The edges themselves, and beside the card, are no row.
+            assert_eq!(under(10, y), None);
+            assert_eq!(under(29, y), None);
+            assert_eq!(under(9, y), None);
+        }
+        assert_eq!(under(15, 4), None);
+        assert_eq!(under(15, 9), None);
+        assert_eq!(under(15, 3), None);
+        // Anywhere along a row is the same row.
+        assert_eq!(under(12, 6), under(27, 6));
+        assert_ne!(under(12, 6), under(12, 7));
+        // A card with no inside has no rows.
+        assert_eq!(row_under(Rect::new(0, 0, 2, 2), Position::new(0, 0)), None);
+        assert_eq!(row_under(Rect::new(0, 0, 0, 0), Position::new(0, 0)), None);
+    }
+
+    #[test]
+    fn a_strips_inside_is_known_without_drawing_it() {
+        let theme = Theme::default();
+        for area in [
+            Rect::new(1, 0, 10, 2),
+            Rect::new(0, 0, 3, 1),
+            Rect::new(0, 0, 2, 1),
+            Rect::new(4, 0, 0, 1),
+        ] {
+            let mut buf = Buffer::empty(Rect::new(0, 0, 12, 2));
+            let drawn = strip(ROUND, &theme, &mut buf, area, FILL, GROUND);
+            assert_eq!(strip_inside(area), drawn, "{area:?}");
+        }
+    }
+
+    #[test]
+    fn a_toggle_is_accent_while_on_and_an_off_one_lights_under_the_pointer() {
+        for (look, theme, round) in looks().into_iter().take(2) {
+            assert_ne!(theme.hov, theme.btn);
+            let fills = [
+                // On, whatever the pointer is over.
+                (true, false, theme.accent, theme.acc_ink, true),
+                (true, true, theme.accent, theme.acc_ink, true),
+                (false, false, theme.btn, theme.muted, false),
+                // `muted` is too close to `hov` to read on it.
+                (false, true, theme.hov, theme.text, false),
+            ];
+            for (on, hovered, fill, fg, bold) in fills {
+                let toggle = toggle(look, &theme, "Aa", on, hovered, GROUND);
+                // As wide as ` Aa `, lit or not, so nothing beside it moves.
+                assert_eq!(width(&toggle), 4, "{on} {hovered}");
+                let buf = drawn(&toggle, 4);
+                assert_end(&buf, 0, CAP_L, round, fill, GROUND);
+                assert_end(&buf, 3, CAP_R, round, fill, GROUND);
+                for x in 1..3 {
+                    let cell = &buf[(x, 0)];
+                    assert_eq!((cell.fg, cell.bg), (fg, fill), "{on} {hovered} {x}");
+                    assert_eq!(cell.modifier.contains(Modifier::BOLD), bold, "{x}");
+                }
+            }
+        }
+        // `mono` has no fills: the pointer changes nothing.
+        let mono = mono();
+        for on in [false, true] {
+            assert_eq!(
+                toggle(ROUND, &mono, "Aa", on, true, GROUND),
+                toggle(ROUND, &mono, "Aa", on, false, GROUND),
+                "{on}"
             );
         }
     }

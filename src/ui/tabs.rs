@@ -102,12 +102,13 @@ pub fn tab_at(
 /// Draws the header into `header`: the pills on row 1, rows 0 and 2 left as
 /// the editor ground. The current tab is the one pill in `accent`; in the
 /// split without focus it drops to `btn`, so the accent always names where
-/// keys go.
+/// keys go. The tab at `hovered`, the one under the pointer, is lit unless it
+/// is the current one.
 pub fn render_tabs(
     look: Look,
     theme: &Theme,
     labels: &[TabLabel],
-    active: usize,
+    (active, hovered): (usize, Option<usize>),
     focused: bool,
     header: Rect,
     frame: &mut Frame,
@@ -128,12 +129,13 @@ pub fn render_tabs(
             (false, _) => Tab::Other,
         };
         let x = pills.x + x;
+        let lit = hovered == Some(index);
         // A pill cut short by the split's edge stops there.
         kit::put(
             out,
             x,
             pills.y,
-            &pill(look, theme, &labels[index], state),
+            &pill(look, theme, &labels[index], state, lit),
             x + w,
         );
     }
@@ -150,8 +152,15 @@ enum Tab {
 }
 
 /// One tab's pill on the editor ground: the name and a dirty `•` between
-/// blanks, between the kit's ends.
-fn pill(look: Look, theme: &Theme, label: &TabLabel, state: Tab) -> Vec<Span<'static>> {
+/// blanks, between the kit's ends. `hovered` turns the fill of a tab that
+/// isn't a split's current one to `hov`; `mono` has no fills to turn.
+fn pill(
+    look: Look,
+    theme: &Theme,
+    label: &TabLabel,
+    state: Tab,
+    hovered: bool,
+) -> Vec<Span<'static>> {
     let flat = theme.flat();
     if flat && state == Tab::Current {
         // `mono` can't count on `accent` filling a cell, so its current tab is
@@ -179,6 +188,7 @@ fn pill(look: Look, theme: &Theme, label: &TabLabel, state: Tab) -> Vec<Span<'st
             theme.warn,
         ),
         Tab::Unfocused => (theme.btn, Style::new().fg(theme.strong), theme.warn),
+        Tab::Other if hovered && !flat => (theme.hov, Style::new().fg(theme.text), theme.warn),
         Tab::Other => (theme.raised, Style::new().fg(theme.text), theme.warn),
     };
     let mut spans = vec![Span::raw(" "), Span::styled(label.name.clone(), name)];
@@ -255,6 +265,18 @@ mod tests {
         (active, focused): (usize, bool),
         width: u16,
     ) -> Buffer {
+        draw_under(look, theme, labels, (active, None), focused, width)
+    }
+
+    /// The header with the pointer on the tab at `hovered`.
+    fn draw_under(
+        look: Look,
+        theme: &Theme,
+        labels: &[TabLabel],
+        (active, hovered): (usize, Option<usize>),
+        focused: bool,
+        width: u16,
+    ) -> Buffer {
         let mut terminal = Terminal::new(TestBackend::new(width, 3)).expect("test terminal");
         terminal
             .draw(|frame| {
@@ -262,7 +284,7 @@ mod tests {
                     look,
                     theme,
                     labels,
-                    active,
+                    (active, hovered),
                     focused,
                     Rect::new(0, 0, width, 3),
                     frame,
@@ -274,6 +296,34 @@ mod tests {
 
     fn draw(theme: &Theme, labels: &[TabLabel], active: usize, focused: bool) -> Buffer {
         draw_in(ROUND, theme, labels, (active, focused), 40)
+    }
+
+    #[test]
+    fn the_pointer_lights_another_tab_and_never_a_current_one() {
+        let labels = [label("a.txt", false), label("b.txt", true)];
+        let theme = Theme::default();
+        assert_ne!(theme.hov, theme.raised);
+        let rest = draw(&theme, &labels, 0, true);
+        // `b.txt •`, the other tab, fills columns 11..=21.
+        let lit = draw_under(ROUND, &theme, &labels, (0, Some(1)), true, 40);
+        assert_pill(&lit, &theme, 11, 21, theme.hov);
+        assert_eq!(row(&lit, 1), row(&rest, 1));
+        // Its name and dot keep their colours, and the current tab its fill.
+        assert_eq!(lit[(13, 1)].fg, theme.text);
+        assert_eq!(lit[(19, 1)].fg, theme.warn);
+        assert_pill(&lit, &theme, 1, 9, theme.accent);
+        // On the current tab, in a split with focus or without, nothing
+        // changes.
+        for focused in [true, false] {
+            let rest = draw(&theme, &labels, 0, focused);
+            let over = draw_under(ROUND, &theme, &labels, (0, Some(0)), focused, 40);
+            assert_eq!(over, rest, "{focused}");
+        }
+        // `mono` has no fills to turn.
+        let mono = Theme::named("mono").expect("mono exists");
+        let rest = draw(&mono, &labels, 0, true);
+        let over = draw_under(ROUND, &mono, &labels, (0, Some(1)), true, 40);
+        assert_eq!(over, rest);
     }
 
     fn row(buffer: &Buffer, y: u16) -> String {

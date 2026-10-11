@@ -346,7 +346,8 @@ impl Splash {
         self.selected = usize::try_from(at).unwrap_or(0);
     }
 
-    /// The action whose row is at `at`, for a click.
+    /// The action whose row is at `at`: the one a click there runs, and the
+    /// one whose button the pointer there lights.
     pub fn item_at(area: Rect, at: Position) -> Option<Item> {
         if !area.contains(at) {
             return None;
@@ -362,8 +363,18 @@ impl Splash {
     }
 
     /// Draws the splash centred in `area`, naming `project` (the brand label:
-    /// the home folder shown as `~`) under the wordmark and in the hints.
-    pub fn render(&self, look: Look, theme: &Theme, project: &str, frame: &mut Frame, area: Rect) {
+    /// the home folder shown as `~`) under the wordmark and in the hints. The
+    /// button of the action at `hovered`, the one under the pointer, is lit
+    /// unless it is the selected one.
+    pub fn render(
+        &self,
+        look: Look,
+        theme: &Theme,
+        project: &str,
+        hovered: Option<Item>,
+        frame: &mut Frame,
+        area: Rect,
+    ) {
         let area = area.intersection(frame.area());
         if area.is_empty() {
             return;
@@ -386,7 +397,10 @@ impl Splash {
                 Rule => rule(theme, buf, area, y),
                 Blank => {}
                 Path => path(theme, buf, area, project, y),
-                Line::Item(item) => self.item_row(look, theme, buf, &actions, item, y),
+                Line::Item(item) => {
+                    let lit = hovered == Some(item);
+                    self.item_row(look, theme, buf, &actions, (item, lit), y);
+                }
             }
         }
     }
@@ -400,7 +414,7 @@ impl Splash {
         theme: &Theme,
         buf: &mut Buffer,
         actions: &Actions,
-        item: Item,
+        (item, hovered): (Item, bool),
         y: u16,
     ) {
         let kind = if item == self.selected() {
@@ -408,7 +422,15 @@ impl Splash {
         } else {
             ButtonKind::Normal
         };
-        let button = kit::button(look, theme, item.label(), item.key(), kind, false, theme.bg);
+        let button = kit::button(
+            look,
+            theme,
+            item.label(),
+            item.key(),
+            kind,
+            hovered,
+            theme.bg,
+        );
         kit::put(buf, actions.x, y, &button, actions.end);
         let hint = &actions.hints[item as usize];
         let hint_x = actions.x.saturating_add(HINT_X);
@@ -514,12 +536,61 @@ mod tests {
         w: u16,
         h: u16,
     ) -> anyhow::Result<Buffer> {
+        draw_under(splash, theme, (project, None), w, h)
+    }
+
+    /// The splash with the pointer on `hovered`'s row.
+    fn draw_under(
+        splash: &Splash,
+        theme: &Theme,
+        (project, hovered): (&str, Option<Item>),
+        w: u16,
+        h: u16,
+    ) -> anyhow::Result<Buffer> {
         let mut terminal = Terminal::new(TestBackend::new(w, h))?;
         terminal.draw(|frame| {
             let area = Rect::new(0, 0, w, h);
-            splash.render(Look::default(), theme, project, frame, area);
+            splash.render(Look::default(), theme, project, hovered, frame, area);
         })?;
         Ok(terminal.backend().buffer().clone())
+    }
+
+    #[test]
+    fn the_pointer_lights_an_actions_button_and_never_the_selected_one() -> anyhow::Result<()> {
+        let theme = Theme::default();
+        assert_ne!(theme.hov, theme.btn);
+        let splash = Splash::default();
+        let rest = draw(&splash, &theme, 100, 26)?;
+        let lit = draw_under(
+            &splash,
+            &theme,
+            (PROJECT, Some(Item::NewDirectory)),
+            100,
+            26,
+        )?;
+        let y = ITEM_YS[1];
+        let x = col(&rest, y, Item::NewDirectory.label()).expect("the button is drawn");
+        assert_eq!(rest[(x, y)].bg, theme.btn);
+        assert_eq!(lit[(x, y)].bg, theme.hov);
+        // Only that button's fill changed.
+        for row in 0..26 {
+            for column in 0..100 {
+                let (was, now) = (&rest[(column, row)], &lit[(column, row)]);
+                assert_eq!(was.symbol(), now.symbol(), "{column},{row}");
+                if row != y {
+                    assert_eq!(was, now, "{column},{row}");
+                }
+            }
+        }
+        // The selected action's button is the accent whatever is on it.
+        let over = draw_under(&splash, &theme, (PROJECT, Some(Item::NewFile)), 100, 26)?;
+        assert_eq!(over, rest);
+        // `mono` has no fills to turn.
+        let mono = Theme::named("mono").expect("mono exists");
+        let rest = draw(&splash, &mono, 100, 26)?;
+        let over = draw_under(&splash, &mono, (PROJECT, Some(Item::NewDirectory)), 100, 26)?;
+        assert_eq!(over, rest);
+        Ok(())
     }
 
     /// What a button reads between its round ends.

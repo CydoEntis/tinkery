@@ -6,7 +6,7 @@
 
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
+use ratatui::layout::{Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -311,12 +311,44 @@ impl ProjectSearch {
         }
     }
 
+    /// Where the `Aa` chip starts in `card`: the two chips end four cells in
+    /// from its right edge, and never start before the query's field.
+    fn chips_x(card: Rect) -> u16 {
+        let right = card.right().saturating_sub(4);
+        right
+            .saturating_sub(2 * CHIP_WIDTH + 1)
+            .max(card.x.saturating_add(6))
+    }
+
+    /// The chip under `at` when the panel is drawn in `area`: 0 for `Aa`, 1
+    /// for `.*`. The one the pointer there lights.
+    pub fn chip_at(area: Rect, at: Position) -> Option<usize> {
+        let card = Self::card(area);
+        let right = card.right().saturating_sub(4);
+        if at.y != card.y + 2 || at.x >= right {
+            return None;
+        }
+        let offset = at.x.checked_sub(Self::chips_x(card))?;
+        let (chip, within) = (offset / (CHIP_WIDTH + 1), offset % (CHIP_WIDTH + 1));
+        (chip < 2 && within < CHIP_WIDTH).then_some(usize::from(chip))
+    }
+
     /// Dims `area` and draws the panel centred in it (tinkery-forge spec F15):
     /// its title in the edge; the Search strip with its chips and the Replace
     /// strip under it; a blank; the match count; the hits, the selected one a
     /// pill; then the keys, on the row above the bottom edge. Returns where the
-    /// cursor goes, in the field that takes the keys.
-    pub fn render(&self, look: Look, theme: &Theme, frame: &mut Frame, area: Rect) -> (u16, u16) {
+    /// cursor goes, in the field that takes the keys. `hovered` is what the
+    /// pointer is on: the screen row inside the card (`kit::row_under`), whose
+    /// hit is lit, and the chip (`chip_at`), lit while it's off.
+    pub fn render(
+        &self,
+        look: Look,
+        theme: &Theme,
+        frame: &mut Frame,
+        area: Rect,
+        hovered: (Option<u16>, Option<usize>),
+    ) -> (u16, u16) {
+        let (hovered_row, hovered_chip) = hovered;
         let out = frame.buffer_mut();
         kit::dim(theme, out, area);
         let card = Self::card(area);
@@ -329,8 +361,8 @@ impl ProjectSearch {
         let field = kit::header(look, theme, out, card, Vec::new());
         // The chips keep their own fills, which `header` would paint over, so
         // they're drawn here, where its right-hand text would end.
-        let chips = self.chips(look, theme);
-        let chips_x = right.saturating_sub(kit::width(&chips)).max(field.x);
+        let chips = self.chips(look, theme, hovered_chip);
+        let chips_x = Self::chips_x(card);
         kit::put(out, chips_x, field.y, &chips, right);
         let query_field = Rect {
             width: chips_x.saturating_sub(2).saturating_sub(field.x),
@@ -394,9 +426,9 @@ impl ProjectSearch {
         {
             let y = card.y + 6 + u16::try_from(line).unwrap_or(u16::MAX);
             let row = Rect::new(card.x + 1, y, card.width - 2, 1);
-            // Nothing reports the mouse's position yet, so no row is hovered.
             let selected = index == self.selected;
-            let ink = kit::sel_row(look, theme, out, row, selected, false, theme.raised);
+            let lit = hovered_row == Some(y);
+            let ink = kit::sel_row(look, theme, out, row, selected, lit, theme.raised);
             let text = Rect::new(left, y, right - left, 1);
             render_hit(theme, out, text, hit, place_width, selected, ink);
         }
@@ -412,25 +444,16 @@ impl ProjectSearch {
 
     /// The case and regex chips at the right of the Search strip, a blank
     /// apart, as the find bar draws them: `acc_ink` on the accent and bold
-    /// while on, `muted` on `btn` while off.
-    fn chips(&self, look: Look, theme: &Theme) -> Vec<Span<'static>> {
+    /// while on, `muted` on `btn` while off, and then lit when it's the one
+    /// at `hovered`.
+    fn chips(&self, look: Look, theme: &Theme, hovered: Option<usize>) -> Vec<Span<'static>> {
         let fill = theme.raised2;
-        let chip = |text: &str, on: bool| {
-            let style = if on {
-                Style::new()
-                    .bg(theme.accent)
-                    .fg(theme.acc_ink)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::new()
-                    .bg(theme.btn)
-                    .fg(kit::ink(theme, theme.muted, theme.btn))
-            };
-            kit::chip(look, theme, text, style, fill)
+        let chip = |index: usize, text: &str, on: bool| {
+            kit::toggle(look, theme, text, on, hovered == Some(index), fill)
         };
-        let mut chips = chip("Aa", self.case_sensitive);
+        let mut chips = chip(0, "Aa", self.case_sensitive);
         chips.push(Span::styled(" ", Style::new().bg(fill)));
-        chips.extend(chip(".*", self.regex));
+        chips.extend(chip(1, ".*", self.regex));
         chips
     }
 
@@ -460,6 +483,8 @@ impl ProjectSearch {
 
 /// What the panel's top edge says.
 const TITLE: &str = "Project search";
+/// A chip's cells: its two letters between two ends.
+const CHIP_WIDTH: u16 = 4;
 /// The rows other than the hits: the edge, a blank, the two strips, a blank
 /// and the match count above them; a blank, the hints and the edge below.
 const CHROME: u16 = 9;
@@ -774,7 +799,7 @@ mod tests {
             frame
                 .buffer_mut()
                 .set_style(area, Style::new().bg(theme.bg).fg(theme.fg));
-            at = search.render(Look::default(), theme, frame, area);
+            at = search.render(Look::default(), theme, frame, area, (None, None));
         })?;
         Ok((terminal.backend().buffer().clone(), at))
     }
@@ -1050,7 +1075,7 @@ mod tests {
         let card = ProjectSearch::card(Rect::new(0, 0, 100, 30));
         let mut terminal = Terminal::new(TestBackend::new(100, 30))?;
         terminal.draw(|frame| {
-            search.render(Look::default(), &mono, frame, frame.area());
+            search.render(Look::default(), &mono, frame, frame.area(), (None, None));
         })?;
         let buffer = terminal.backend().buffer();
         // The screen dims with the modifier; the card doesn't.

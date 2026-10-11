@@ -392,8 +392,17 @@ impl Catalog {
     /// Dims `area` and draws the panel over it: `Language servers` in its top
     /// edge; the header's strip; a row per server, a blank, `debuggers` and a
     /// row per adapter, the selected one a row pill with its failure reason,
-    /// if any, below it; a blank and the keys.
-    pub fn render(&self, look: Look, theme: &Theme, frame: &mut Frame, area: Rect) {
+    /// if any, below it; a blank and the keys. `hovered` is the screen row the
+    /// pointer is on, inside the card (`kit::row_under`); the row drawn there
+    /// is lit.
+    pub fn render(
+        &self,
+        look: Look,
+        theme: &Theme,
+        frame: &mut Frame,
+        area: Rect,
+        hovered: Option<u16>,
+    ) {
         let out = frame.buffer_mut();
         kit::dim(theme, out, area);
         let card = self.card(area);
@@ -417,7 +426,8 @@ impl Catalog {
 
         for (i, row) in self.rows.iter().enumerate() {
             let y = card.y + self.row_offset(i);
-            render_row(look, theme, out, card, y, row, i == self.selected);
+            let lit = hovered == Some(y);
+            render_row(look, theme, out, card, y, row, (i == self.selected, lit));
         }
         let quiet = Style::new().fg(theme.muted).bg(theme.raised);
         if let Some(reason) = self.reason() {
@@ -446,7 +456,7 @@ impl Catalog {
 
 /// The name, the command in `muted`, and the state at the right in its
 /// colour, on the row `sel_row` draws: a pill when selected, its name in
-/// `strong` bold.
+/// `strong` bold; the pill alone when `lit`, under the pointer.
 fn render_row(
     look: Look,
     theme: &Theme,
@@ -454,13 +464,12 @@ fn render_row(
     card: Rect,
     y: u16,
     row: &Row,
-    selected: bool,
+    (selected, lit): (bool, bool),
 ) {
     let left = card.x + 4;
     let right = card.right() - 4;
     let whole = Rect::new(card.x + 1, y, card.width.saturating_sub(2), 1);
-    // Nothing reports the mouse's position yet, so no row is hovered.
-    let ink = kit::sel_row(look, theme, out, whole, selected, false, theme.raised);
+    let ink = kit::sel_row(look, theme, out, whole, selected, lit, theme.raised);
 
     let state = row.state.label();
     let state_x = right.saturating_sub(width_of(&state));
@@ -891,7 +900,7 @@ mod tests {
 
     fn draw(c: &Catalog, theme: &Theme) -> anyhow::Result<Buffer> {
         let mut terminal = Terminal::new(TestBackend::new(100, 30))?;
-        terminal.draw(|frame| c.render(Look::default(), theme, frame, frame.area()))?;
+        terminal.draw(|frame| c.render(Look::default(), theme, frame, frame.area(), None))?;
         Ok(terminal.backend().buffer().clone())
     }
 
@@ -1043,7 +1052,7 @@ mod tests {
             corners: Corners::Rounded,
         };
         let mut terminal = Terminal::new(TestBackend::new(100, 30))?;
-        terminal.draw(|frame| c.render(look, &theme, frame, frame.area()))?;
+        terminal.draw(|frame| c.render(look, &theme, frame, frame.area(), None))?;
         let buffer = terminal.backend().buffer();
         let card = c.card(Rect::new(0, 0, 100, 30));
         let top = card_row(buffer, card, card.y);

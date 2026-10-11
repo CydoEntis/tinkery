@@ -426,11 +426,19 @@ impl Picker {
     }
 
     /// Draws the picker over `area` and returns where the cursor goes, in the
-    /// query.
-    pub fn render(&self, look: Look, theme: &Theme, frame: &mut Frame, area: Rect) -> (u16, u16) {
+    /// query. `hovered` is the screen row the pointer is on, inside the card
+    /// (`kit::row_under`); the choice drawn there is lit.
+    pub fn render(
+        &self,
+        look: Look,
+        theme: &Theme,
+        frame: &mut Frame,
+        area: Rect,
+        hovered: Option<u16>,
+    ) -> (u16, u16) {
         match &self.choices {
-            Some(choices) => self.render_choices(look, theme, frame, area, choices),
-            None => self.render_cast(look, theme, frame, area),
+            Some(choices) => self.render_choices(look, theme, frame, (area, hovered), choices),
+            None => self.render_cast(look, theme, frame, area, hovered),
         }
     }
 
@@ -475,7 +483,14 @@ impl Picker {
     /// strip, with the palette's name and what it lists at the right; each
     /// section under its heading, the selected row a pill; then the keys, on
     /// the row above the bottom edge.
-    fn render_cast(&self, look: Look, theme: &Theme, frame: &mut Frame, area: Rect) -> (u16, u16) {
+    fn render_cast(
+        &self,
+        look: Look,
+        theme: &Theme,
+        frame: &mut Frame,
+        area: Rect,
+        hovered: Option<u16>,
+    ) -> (u16, u16) {
         let out = frame.buffer_mut();
         kit::dim(theme, out, area);
         let card = self.cast_card(area);
@@ -486,7 +501,12 @@ impl Picker {
         {
             return (card.x, card.y);
         }
-        let row = Row { look, theme, card };
+        let row = Row {
+            look,
+            theme,
+            card,
+            hovered,
+        };
 
         let quiet = kit::ink(theme, theme.muted, theme.raised2);
         let scope = vec![
@@ -685,7 +705,7 @@ impl Picker {
         look: Look,
         theme: &Theme,
         frame: &mut Frame,
-        area: Rect,
+        (area, hovered): (Rect, Option<u16>),
         choices: &[Choice],
     ) -> (u16, u16) {
         let out = frame.buffer_mut();
@@ -696,7 +716,12 @@ impl Picker {
         if inside.is_empty() || card.height <= CHROME || card.width < 20 {
             return (card.x, card.y);
         }
-        let row = Row { look, theme, card };
+        let row = Row {
+            look,
+            theme,
+            card,
+            hovered,
+        };
 
         let total = self.files.as_ref().map_or(0, Vec::len);
         let quiet = kit::ink(theme, theme.muted, theme.raised2);
@@ -833,6 +858,8 @@ struct Row<'a> {
     look: Look,
     theme: &'a Theme,
     card: Rect,
+    /// The screen row the pointer is on.
+    hovered: Option<u16>,
 }
 
 impl Row<'_> {
@@ -856,18 +883,17 @@ impl Row<'_> {
         Style::new().fg(self.theme.muted).bg(self.theme.raised)
     }
 
-    /// Draws row `y` as the one Enter acts on when `selected`, and returns
-    /// the styles its text goes in.
+    /// Draws row `y` as the one Enter acts on when `selected`, lit when the
+    /// pointer is on it, and returns the styles its text goes in.
     fn ink(&self, out: &mut Buffer, y: u16, selected: bool) -> RowInk {
         let row = Rect::new(self.card.x + 1, y, self.card.width.saturating_sub(2), 1);
-        // Nothing reports the mouse's position yet, so no row is hovered.
         kit::sel_row(
             self.look,
             self.theme,
             out,
             row,
             selected,
-            false,
+            self.hovered == Some(y),
             self.theme.raised,
         )
     }
@@ -1331,7 +1357,7 @@ mod tests {
     fn draw(p: &Picker, theme: &Theme) -> anyhow::Result<Buffer> {
         let mut terminal = Terminal::new(TestBackend::new(100, 30))?;
         terminal.draw(|frame| {
-            p.render(Look::default(), theme, frame, frame.area());
+            p.render(Look::default(), theme, frame, frame.area(), None);
         })?;
         Ok(terminal.backend().buffer().clone())
     }
@@ -1576,7 +1602,7 @@ mod tests {
         let theme = Theme::default();
         let mut terminal = Terminal::new(TestBackend::new(60, 30))?;
         terminal.draw(|frame| {
-            p.render(Look::default(), &theme, frame, frame.area());
+            p.render(Look::default(), &theme, frame, frame.area(), None);
         })?;
         let buffer = terminal.backend().buffer();
         let card = p.card(Rect::new(0, 0, 60, 30));
