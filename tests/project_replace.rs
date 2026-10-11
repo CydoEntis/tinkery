@@ -4,7 +4,7 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
-use harness::{ROWS, Tinkery, buttons_text};
+use harness::{ROWS, Tinkery, buttons_text, hints_text};
 
 const START: Duration = Duration::from_secs(10);
 const WAIT: Duration = Duration::from_secs(5);
@@ -12,26 +12,27 @@ const WAIT: Duration = Duration::from_secs(5);
 /// `// TODO` on line 2; `README.md` none. Four matches in two files.
 const FIXTURE: &str = "tests/fixtures/project_replace";
 
-/// At 100x30 the panel's card starts at column 10, row 4: the Replace field is
-/// on row 6 with its label at column 14 and its value at 23, the match count on
-/// row 7 two cells in, and the hits from row 8.
-const REPLACE_ROW: u16 = 6;
-const LABEL_X: u16 = 14;
-const VALUE_X: u16 = 23;
-const STATUS_ROW: u16 = 7;
-const STATUS_X: usize = 12;
-const FIRST_ROW: u16 = 8;
-const CARD_X: u16 = 10;
-/// The panel's key hints, there while it's open.
-const FOOTER: &str = "alt+a replace all   esc close";
-/// The selected row's glow at its left end: hydra's `raised` (`#0f1821`) lit 30 %
-/// towards its accent (`#c3f53c`).
-const GLOW: vt100::Color = vt100::Color::Rgb(0x45, 0x5a, 0x29);
-/// Hydra's `accent`, `err` and `btn`: a confirm card's focused button, the
-/// same when pressing it loses work, and a button that waits.
-const ACCENT: vt100::Color = vt100::Color::Rgb(0xc3, 0xf5, 0x3c);
-const ERR: vt100::Color = vt100::Color::Rgb(0xff, 0x6b, 0x6b);
-const BTN: vt100::Color = vt100::Color::Rgb(0x1d, 0x2a, 0x37);
+/// At 100x30 the panel's card starts at column 10, row 4: the Replace strip is
+/// on row 7 with its label at column 16 and its value at 25, the match count on
+/// row 9 four cells in, and the hits from row 10. Text ends four cells in from
+/// the card's right edge, at column 86.
+const REPLACE_ROW: u16 = 7;
+const LABEL_X: u16 = 16;
+const VALUE_X: u16 = 25;
+const STATUS_ROW: u16 = 9;
+const STATUS_X: usize = 14;
+const RIGHT: usize = 86;
+const FIRST_ROW: u16 = 10;
+/// Where a selected hit's `›` is, a cell into its pill.
+const MARK_X: u16 = 12;
+/// The default theme, tinkery, which a config naming no theme runs on: `hov`,
+/// a selected hit's pill; then `accent`, `err` and `btn`, a confirm card's
+/// focused button, the same when pressing it loses work, and a button that
+/// waits.
+const HOV: vt100::Color = vt100::Color::Rgb(0x3a, 0x30, 0x2a);
+const ACCENT: vt100::Color = vt100::Color::Rgb(0xff, 0x8a, 0x3d);
+const ERR: vt100::Color = vt100::Color::Rgb(0xff, 0x5d, 0x4d);
+const BTN: vt100::Color = vt100::Color::Rgb(0x33, 0x2a, 0x25);
 /// The confirm card's button row at 100x30, where ` Replace R ` starts and
 /// where ` Cancel Esc ` does.
 const BUTTON_ROW: u16 = 16;
@@ -66,7 +67,7 @@ fn fixture_copy() -> std::io::Result<tempfile::TempDir> {
 fn open_in(dir: &Path) -> Tinkery {
     let tinkery = Tinkery::spawn_in_with_config(
         dir,
-        "theme = \"hydra\"\n[lsp.rust]\ncommand = \"tinkery-no-such-server\"\n",
+        "[lsp.rust]\ncommand = \"tinkery-no-such-server\"\n",
         &[],
     );
     tinkery.wait_for_text("Open directory", START);
@@ -80,6 +81,7 @@ fn wait_for_status(tinkery: &Tinkery, status: &str) {
         let shown: String = lines[usize::from(STATUS_ROW)]
             .chars()
             .skip(STATUS_X)
+            .take(RIGHT - STATUS_X)
             .collect();
         shown.trim_end() == status
     });
@@ -94,10 +96,15 @@ fn wait_for_message(tinkery: &Tinkery, message: &str) {
     );
 }
 
+/// The end of the panel's key hints, there while it's open.
+fn footer() -> String {
+    hints_text(&[("Alt+A", "replace all"), ("Esc", "close")])
+}
+
 /// Opens the panel and searches for `query`.
 fn search(tinkery: &mut Tinkery, query: &str) {
     tinkery.send_keys("alt+f");
-    tinkery.wait_for_text(FOOTER, WAIT);
+    tinkery.wait_for_text(&footer(), WAIT);
     tinkery.type_text(query);
     tinkery.wait_for_text(&format!("Search   {query}"), WAIT);
     tinkery.send_keys("enter");
@@ -159,7 +166,7 @@ fn alt_enter_asks_then_replaces_in_every_listed_file_and_searches_again() -> std
     wait_for_status(&tinkery, "4 matches in 2 files");
     assert_eq!(tinkery.text_col(REPLACE_ROW, "Replace  "), Some(LABEL_X));
     tinkery.send_keys("esc");
-    tinkery.wait_for_text_gone(FOOTER, WAIT);
+    tinkery.wait_for_text_gone(&footer(), WAIT);
 
     replace_todo(&mut tinkery);
     tinkery.type_text("r");
@@ -211,17 +218,17 @@ fn an_open_buffer_is_edited_in_place_and_left_unsaved() -> std::io::Result<()> {
     wait_for_status(&tinkery, "4 matches in 2 files");
     tinkery.send_keys("down");
     tinkery.send_keys("down");
-    tinkery.wait_for_bg(CARD_X, FIRST_ROW + 2, GLOW, WAIT);
+    tinkery.wait_for_bg(MARK_X, FIRST_ROW + 2, HOV, WAIT);
     assert!(tinkery.screen()[usize::from(FIRST_ROW + 2)].contains("src/app.rs:2  // TODO tidy"));
     tinkery.send_keys("enter");
-    tinkery.wait_for_text_gone(FOOTER, WAIT);
+    tinkery.wait_for_text_gone(&footer(), WAIT);
     tinkery.wait_for_text("2      // TODO tidy", WAIT);
 
     replace_todo(&mut tinkery);
     tinkery.type_text("r");
     wait_for_message(&tinkery, "Replaced 4 in 2 files");
     tinkery.send_keys("esc");
-    tinkery.wait_for_text_gone(FOOTER, WAIT);
+    tinkery.wait_for_text_gone(&footer(), WAIT);
     tinkery.wait_for_text("2      // done tidy", WAIT);
     tinkery.wait_for_text("app.rs •", WAIT);
     assert_eq!(fs::read(&code)?, code_before);

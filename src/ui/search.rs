@@ -1,6 +1,6 @@
-//! The project search panel: a dialog card over the dimmed screen with a Search
-//! field and its case and regex chips, a Replace field under it, and every line
-//! in the project the last search found, as `path:line  text`. Enter searches;
+//! The project search panel: a panel over the dimmed screen with a Search strip
+//! and its case and regex chips, a Replace strip under it, and every line in
+//! the project the last search found, as `path:line  text`. Enter searches;
 //! once the hits are in, Enter opens one. Tab moves between the fields, and
 //! Alt+A replaces the hits in every listed file.
 
@@ -8,14 +8,15 @@ use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
+use ratatui::text::Span;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::buffer::movement::Motion;
 use crate::keymap::{Action, Input};
 use crate::search::{Hit, Query};
 use crate::theme::{Theme, mix};
+use crate::ui::kit::{self, Look, RowInk};
 use crate::ui::prompt::{Outcome, PromptBar};
-use crate::ui::{enter_mark, footer, glow_row, input_row};
 
 /// What a key asked the editor to do, when it did more than move or edit.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -310,73 +311,68 @@ impl ProjectSearch {
         }
     }
 
-    /// Dims `area` and draws the card centred in it: the lit top edge, the Search
-    /// and Replace fields, the match count, the hits with the selected one as the
-    /// glow row, and the key hints. Returns where the cursor goes, in the field
-    /// that takes the keys.
-    pub fn render(&self, theme: &Theme, frame: &mut Frame, area: Rect) -> (u16, u16) {
-        crate::ui::dim(theme, frame.buffer_mut(), area);
+    /// Dims `area` and draws the panel centred in it (tinkery-forge spec F15):
+    /// its title in the edge; the Search strip with its chips and the Replace
+    /// strip under it; a blank; the match count; the hits, the selected one a
+    /// pill; then the keys, on the row above the bottom edge. Returns where the
+    /// cursor goes, in the field that takes the keys.
+    pub fn render(&self, look: Look, theme: &Theme, frame: &mut Frame, area: Rect) -> (u16, u16) {
+        let out = frame.buffer_mut();
+        kit::dim(theme, out, area);
         let card = Self::card(area);
-        crate::ui::dialog_card(theme, frame, card);
-        // Edge, two fields, the count and the footer, plus a hit.
-        if card.height < 6 || card.width < 30 {
+        let inside = kit::panel_at(look, theme, out, card, TITLE);
+        if inside.is_empty() || card.height < CHROME + 1 || card.width < 40 {
             return (card.x, card.y);
         }
-        let row = |n: u16| Rect {
-            y: card.y + n,
-            height: 1,
-            ..card
+        let (left, right) = (card.x + 4, card.right() - 4);
+
+        let field = kit::header(look, theme, out, card, Vec::new());
+        // The chips keep their own fills, which `header` would paint over, so
+        // they're drawn here, where its right-hand text would end.
+        let chips = self.chips(look, theme);
+        let chips_x = right.saturating_sub(kit::width(&chips)).max(field.x);
+        kit::put(out, chips_x, field.y, &chips, right);
+        let query_field = Rect {
+            width: chips_x.saturating_sub(2).saturating_sub(field.x),
+            ..field
         };
-        let chips = Rect {
-            x: card.right() - CHIPS_WIDTH,
-            width: CHIPS_WIDTH,
-            ..row(1)
-        };
-        let query_at = input_row(
-            theme,
-            frame,
-            Rect {
-                width: card.width - CHIPS_WIDTH,
-                ..row(1)
-            },
-            "Search",
-            LABEL_WIDTH,
-            &self.query,
-            !self.in_replace,
-        );
-        self.render_chips(theme, frame.buffer_mut(), chips);
-        let replace_at = input_row(
-            theme,
-            frame,
-            row(2),
-            "Replace",
-            LABEL_WIDTH,
-            &self.replace,
-            self.in_replace,
-        );
-        let out = frame.buffer_mut();
+        let query_at = render_field(theme, out, query_field, &self.query, !self.in_replace);
+
+        let replace_y = card.y + 3;
+        let strip = Rect::new(card.x + 1, replace_y, card.width - 2, 1);
+        kit::strip(look, theme, out, strip, theme.raised2, theme.raised);
+        let mark = Style::new()
+            .fg(theme.accent2)
+            .bg(theme.raised2)
+            .add_modifier(Modifier::BOLD);
+        out.set_string(left, replace_y, kit::HEADER_MARK, mark);
+        let replace_field = Rect::new(field.x, replace_y, right.saturating_sub(field.x), 1);
+        let replace_at = render_field(theme, out, replace_field, &self.replace, self.in_replace);
         if !self.in_replace && self.replace.text().is_empty() {
-            out.set_string(
+            let quiet = kit::ink(theme, theme.muted, theme.raised2);
+            out.set_stringn(
                 replace_at.0,
                 replace_at.1,
                 "tab to replace",
-                Style::new().fg(theme.muted),
+                usize::from(right.saturating_sub(replace_at.0)),
+                Style::new().fg(quiet).bg(theme.raised2),
             );
         }
-        let status_style = Style::new().fg(if self.error.is_some() {
+
+        let status_fg = if self.error.is_some() {
             theme.err
         } else {
             theme.muted
-        });
+        };
         out.set_stringn(
-            card.x + 2,
-            card.y + 3,
+            left,
+            card.y + 5,
             self.status(),
-            usize::from(card.width - 4),
-            status_style,
+            usize::from(right - left),
+            Style::new().fg(status_fg).bg(theme.raised),
         );
 
-        let rows = usize::from(card.height - 5);
+        let rows = usize::from(card.height - CHROME);
         // The `path:line` column is as wide as the widest, up to 34, so the
         // lines' text starts in one column.
         let place_width = self
@@ -396,17 +392,17 @@ impl ProjectSearch {
             .take(rows)
             .enumerate()
         {
-            let y = card.y + 4 + u16::try_from(line).unwrap_or(u16::MAX);
+            let y = card.y + 6 + u16::try_from(line).unwrap_or(u16::MAX);
+            let row = Rect::new(card.x + 1, y, card.width - 2, 1);
+            // Nothing reports the mouse's position yet, so no row is hovered.
             let selected = index == self.selected;
-            render_hit(theme, out, card, y, hit, place_width, selected);
+            let ink = kit::sel_row(look, theme, out, row, selected, false, theme.raised);
+            let text = Rect::new(left, y, right - left, 1);
+            render_hit(theme, out, text, hit, place_width, selected, ink);
         }
-        let tab = if self.in_replace { "search" } else { "replace" };
-        footer(
-            theme,
-            out,
-            card,
-            &format!("↑↓ select   ⏎ open   tab {tab} field   alt+a replace all   esc close"),
-        );
+
+        let hints = self.hints(look, theme, right - left);
+        kit::put(out, left, card.bottom() - 2, &hints, right);
         if self.in_replace {
             replace_at
         } else {
@@ -414,30 +410,88 @@ impl ProjectSearch {
         }
     }
 
-    /// The case and regex chips at the right of the Search field: ` Aa ` and
-    /// ` .* `, `acc_ink` on the accent and bold while on, `muted` while off.
-    fn render_chips(&self, theme: &Theme, out: &mut Buffer, area: Rect) {
-        out.set_style(area, Style::new().bg(theme.raised2));
-        let chip = |on: bool| {
-            if on {
+    /// The case and regex chips at the right of the Search strip, a blank
+    /// apart, as the find bar draws them: `acc_ink` on the accent and bold
+    /// while on, `muted` on `btn` while off.
+    fn chips(&self, look: Look, theme: &Theme) -> Vec<Span<'static>> {
+        let fill = theme.raised2;
+        let chip = |text: &str, on: bool| {
+            let style = if on {
                 Style::new()
-                    .fg(theme.acc_ink)
                     .bg(theme.accent)
+                    .fg(theme.acc_ink)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::new().fg(theme.muted)
-            }
+                Style::new()
+                    .bg(theme.btn)
+                    .fg(kit::ink(theme, theme.muted, theme.btn))
+            };
+            kit::chip(look, theme, text, style, fill)
         };
-        out.set_string(area.x, area.y, " Aa ", chip(self.case_sensitive));
-        out.set_string(area.x + 5, area.y, " .* ", chip(self.regex));
+        let mut chips = chip("Aa", self.case_sensitive);
+        chips.push(Span::styled(" ", Style::new().bg(fill)));
+        chips.extend(chip(".*", self.regex));
+        chips
+    }
+
+    /// The keys, ending `Esc close`. All of them need more room than the card
+    /// has on a 100-cell screen, so the ones easiest to guess go first: the
+    /// arrows, then Tab.
+    fn hints(&self, look: Look, theme: &Theme, room: u16) -> Vec<Span<'static>> {
+        let tab = if self.in_replace { "search" } else { "replace" };
+        let all = [
+            ("↑ ↓", "move"),
+            ("⏎", "open"),
+            ("Tab", tab),
+            ("Alt+A", "replace all"),
+            ("Esc", "close"),
+        ];
+        let no_tab = [all[1], all[3], all[4]];
+        let fits = |pairs: &[(&str, &str)]| {
+            let hints = kit::hints(look, theme, pairs, theme.raised);
+            (kit::width(&hints) <= room).then_some(hints)
+        };
+        fits(&all)
+            .or_else(|| fits(&all[1..]))
+            .or_else(|| fits(&no_tab))
+            .unwrap_or_else(|| kit::hints(look, theme, &[all[1], all[4]], theme.raised))
     }
 }
 
-/// ` Aa ` ` .* ` and three blanks to the card's right edge.
-const CHIPS_WIDTH: u16 = 12;
+/// What the panel's top edge says.
+const TITLE: &str = "Project search";
+/// The rows other than the hits: the edge, a blank, the two strips, a blank
+/// and the match count above them; a blank, the hints and the edge below.
+const CHROME: u16 = 9;
 /// The fields' labels, `Search` and `Replace`, padded to one width so the values
 /// line up.
 const LABEL_WIDTH: u16 = 7;
+
+/// One field across `area` on its strip of `raised2`: the label (`text` while
+/// the field takes the keys, else `muted`) padded to `LABEL_WIDTH`, two blanks,
+/// then the value in `strong`. Returns where the cursor goes.
+fn render_field(
+    theme: &Theme,
+    out: &mut Buffer,
+    area: Rect,
+    field: &PromptBar,
+    focused: bool,
+) -> (u16, u16) {
+    if area.width == 0 {
+        return (area.x, area.y);
+    }
+    let on = Style::new().bg(theme.raised2);
+    let quiet = kit::ink(theme, theme.muted, theme.raised2);
+    let label = on.fg(if focused { theme.text } else { quiet });
+    out.set_stringn(area.x, area.y, field.label, usize::from(area.width), label);
+    let x = (area.x + LABEL_WIDTH + 2).min(area.right());
+    let value = Rect {
+        x,
+        width: area.right() - x,
+        ..area
+    };
+    field.render_value(out, value, on.fg(theme.strong))
+}
 
 /// `count` and the noun that goes with it, e.g. `1 file` or `2 files`.
 fn plural(count: usize, one: &str, many: &str) -> String {
@@ -449,36 +503,33 @@ fn place(hit: &Hit) -> String {
     format!("{}:{}", hit.path, hit.line.line + 1)
 }
 
-/// One hit across the card (SPEC_V1_LAYOUT §7.3): `path:line` two cells in,
-/// padded to `place_width` (directory `muted`, file name `strong`), then two
-/// blanks and the line, scrolled so its first match shows, each match on
-/// `find_match_bg`. The selected row is the glow row with `⏎` at its right and
-/// its matches in `find_current` colours.
+/// One hit across `area`, the cells a row's text may take, in the styles
+/// `sel_row` gave for it: `path:line` padded to `place_width` (the file name
+/// `strong`, the rest faint), then two blanks and the line, scrolled so its
+/// first match shows, each match on `find_match_bg`. The selected row's
+/// matches are in `find_current` colours.
 fn render_hit(
     theme: &Theme,
     out: &mut Buffer,
-    card: Rect,
-    y: u16,
+    area: Rect,
     hit: &Hit,
     place_width: usize,
     selected: bool,
+    ink: RowInk,
 ) {
-    let ramps = theme.ramps();
-    if selected {
-        glow_row(theme, out, card.x, card.right(), y);
-        enter_mark(theme, out, card.right() - 4, y);
-    }
-    // In mono the selected row is reverse video, which colours of its own would
-    // break up.
-    let plain = selected && !ramps;
-    let style = |style: Style| if plain { Style::new() } else { style };
-    let muted = style(Style::new().fg(if selected { theme.text } else { theme.muted }));
-    let matched = if !ramps {
-        Style::new().add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+    // A match is told by its ground, which `mono` has none to mix, and which
+    // must not take the row's fill as the rest of the row's text does.
+    let matched = if !theme.ramps() {
+        ink.of(Style::new().add_modifier(Modifier::BOLD | Modifier::UNDERLINED))
     } else if selected {
         Style::new().fg(theme.bg).bg(theme.warn)
     } else {
         Style::new().fg(theme.fg).bg(mix(theme.bg, theme.warn, 0.3))
+    };
+    let name_style = if selected {
+        ink.label
+    } else {
+        ink.of(Style::new().fg(theme.strong))
     };
 
     let (dir, name) = match hit.path.rfind('/') {
@@ -488,24 +539,23 @@ fn render_hit(
     let line = format!(":{}", hit.line.line + 1);
     let mut cells: Vec<(char, Style)> = dir
         .chars()
-        .map(|c| (c, muted))
-        .chain(
-            name.chars()
-                .map(|c| (c, style(Style::new().fg(theme.strong)))),
-        )
-        .chain(line.chars().map(|c| (c, muted)))
+        .map(|c| (c, ink.faint))
+        .chain(name.chars().map(|c| (c, name_style)))
+        .chain(line.chars().map(|c| (c, ink.faint)))
         .collect();
     // Too long for the column: keep the end, where the file name and line are.
     if cells.len() > place_width {
         let cut = cells.len() + 1 - place_width;
-        cells.splice(..cut, [('…', muted)]);
+        cells.splice(..cut, [('…', ink.faint)]);
     }
-    let place_end = card.x + 2 + u16::try_from(place_width).unwrap_or(u16::MAX);
-    put_cells(out, card.x + 2, y, place_end, &cells);
+    let end = area.right();
+    let place_end = area
+        .x
+        .saturating_add(u16::try_from(place_width).unwrap_or(u16::MAX))
+        .min(end);
+    put_cells(out, area.x, area.y, place_end, &cells);
 
-    let text_x = place_end + 2;
-    // One blank before `⏎`, which sits four cells in from the right.
-    let end = card.right().saturating_sub(6);
+    let text_x = place_end.saturating_add(2);
     let room = usize::from(end.saturating_sub(text_x));
     let first_match = hit.line.matches.first().map_or(0, |m| m.start);
     // Scrolled so the match lands 20 cells in when it would be past the room.
@@ -514,9 +564,10 @@ fn render_hit(
     } else {
         0
     };
+    let text = ink.of(Style::new().fg(theme.fg));
     let mut cells: Vec<(char, Style)> = Vec::new();
     if start > 0 {
-        cells.push(('…', style(Style::new().fg(theme.muted))));
+        cells.push(('…', ink.faint));
     }
     cells.extend(
         hit.line
@@ -526,11 +577,10 @@ fn render_hit(
             .skip(start)
             .map(|(at, c)| {
                 let in_match = hit.line.matches.iter().any(|m| m.contains(&at));
-                let text = style(Style::new().fg(theme.fg));
                 (c, if in_match { matched } else { text })
             }),
     );
-    put_cells(out, text_x, y, end, &cells);
+    put_cells(out, text_x, area.y, end, &cells);
 }
 
 /// Draws `cells` from `x` on row `y`, stopping before a cell would cross `end`.
@@ -549,8 +599,19 @@ fn put_cells(out: &mut Buffer, mut x: u16, y: u16, end: u16, cells: &[(char, Sty
 mod tests {
     use super::*;
     use crate::search::LineHit;
+    use crate::ui::kit::{CAP_L, CAP_R};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::style::Color;
+
+    /// What a hint line reads with round ends.
+    fn hints_text(pairs: &[(&str, &str)]) -> String {
+        pairs
+            .iter()
+            .map(|(key, what)| format!("{CAP_L}{key}{CAP_R} {what}"))
+            .collect::<Vec<_>>()
+            .join("   ")
+    }
 
     #[expect(
         clippy::single_range_in_vec_init,
@@ -692,8 +753,7 @@ mod tests {
         assert_eq!(search.status(), "4 matches in 4 files");
     }
 
-    #[test]
-    fn renders_a_dimmed_dialog_with_fields_and_aligned_hits() -> anyhow::Result<()> {
+    fn listed() -> ProjectSearch {
         let mut search = ProjectSearch::new();
         type_query(&mut search, "TODO");
         search.start(1, query("TODO", false, false));
@@ -702,96 +762,330 @@ mod tests {
             vec![hit("src/lib.rs", 2, "TODO later"), hit("x.rs", 0, "TODO")],
         );
         search.finish(1);
-        let theme = Theme::default();
+        search
+    }
+
+    /// The panel over a screen of the theme's `fg` on its `bg`, at 100x30.
+    fn draw(search: &ProjectSearch, theme: &Theme) -> anyhow::Result<(Buffer, (u16, u16))> {
         let mut terminal = Terminal::new(TestBackend::new(100, 30))?;
-        let draw = |terminal: &mut Terminal<TestBackend>, search: &ProjectSearch| {
-            terminal
-                .draw(|frame| {
-                    let area = frame.area();
-                    frame
-                        .buffer_mut()
-                        .set_style(area, Style::new().bg(theme.bg).fg(theme.fg));
-                    search.render(&theme, frame, area);
-                })
-                .map(|_| ())
-        };
-        draw(&mut terminal, &search)?;
-        let buffer = terminal.backend().buffer();
+        let mut at = (0, 0);
+        terminal.draw(|frame| {
+            let area = frame.area();
+            frame
+                .buffer_mut()
+                .set_style(area, Style::new().bg(theme.bg).fg(theme.fg));
+            at = search.render(Look::default(), theme, frame, area);
+        })?;
+        Ok((terminal.backend().buffer().clone(), at))
+    }
+
+    fn card_row(buffer: &Buffer, card: Rect, y: u16) -> String {
+        (card.x..card.right())
+            .map(|x| buffer[(x, y)].symbol())
+            .collect()
+    }
+
+    /// What row `y` of `card` says where a row's text goes: four cells in from
+    /// each edge, without the blanks around it.
+    fn text_of(buffer: &Buffer, card: Rect, y: u16) -> String {
+        let cells: String = (card.x + 4..card.right() - 4)
+            .map(|x| buffer[(x, y)].symbol())
+            .collect();
+        cells.trim().to_string()
+    }
+
+    /// The cells of row `y` of `card` drawn on `bg`, as text.
+    fn on_bg(buffer: &Buffer, card: Rect, y: u16, bg: Color) -> String {
+        (card.x..card.right())
+            .filter(|&x| buffer[(x, y)].bg == bg)
+            .map(|x| buffer[(x, y)].symbol())
+            .collect()
+    }
+
+    /// Asserts row `y` of `card` is a strip: a pill of `raised2` on `raised`
+    /// across the card's inside, with `✦` in `accent2`, bold, four cells in.
+    fn assert_strip(buffer: &Buffer, theme: &Theme, card: Rect, y: u16) {
+        let (left, right) = (&buffer[(card.x + 1, y)], &buffer[(card.right() - 2, y)]);
+        assert_eq!((left.symbol(), right.symbol()), (CAP_L, CAP_R), "row {y}");
+        assert_eq!((left.fg, left.bg), (theme.raised2, theme.raised), "row {y}");
+        assert_eq!(
+            (right.fg, right.bg),
+            (theme.raised2, theme.raised),
+            "row {y}"
+        );
+        let mark = &buffer[(card.x + 4, y)];
+        assert_eq!(mark.symbol(), "✦", "row {y}");
+        assert_eq!(
+            (mark.fg, mark.bg),
+            (theme.accent2, theme.raised2),
+            "row {y}"
+        );
+        assert!(mark.modifier.contains(Modifier::BOLD), "row {y}");
+    }
+
+    /// Asserts row `y` of `card` is the selected row: a pill of `hov` on
+    /// `raised` across the card's inside, with `›` in the accent, bold.
+    fn assert_selected(buffer: &Buffer, theme: &Theme, card: Rect, y: u16) {
+        let (left, right) = (&buffer[(card.x + 1, y)], &buffer[(card.right() - 2, y)]);
+        assert_eq!((left.symbol(), right.symbol()), (CAP_L, CAP_R), "row {y}");
+        assert_eq!((left.fg, left.bg), (theme.hov, theme.raised), "row {y}");
+        assert_eq!((right.fg, right.bg), (theme.hov, theme.raised), "row {y}");
+        let mark = &buffer[(card.x + 2, y)];
+        assert_eq!(mark.symbol(), "›", "row {y}");
+        assert_eq!((mark.fg, mark.bg), (theme.accent, theme.hov), "row {y}");
+        assert!(mark.modifier.contains(Modifier::BOLD), "row {y}");
+    }
+
+    /// Asserts row `y` of `card` isn't lit: no pill, no mark.
+    fn assert_resting(buffer: &Buffer, theme: &Theme, card: Rect, y: u16) {
+        for x in card.x + 1..card.right() - 1 {
+            let cell = &buffer[(x, y)];
+            assert_ne!(cell.bg, theme.hov, "{x},{y}");
+            assert!(!matches!(cell.symbol(), CAP_L | CAP_R | "›"), "{x},{y}");
+        }
+    }
+
+    #[test]
+    fn the_search_is_a_panel_with_two_strips_pill_rows_and_hints() -> anyhow::Result<()> {
+        let search = listed();
         // SPEC_V1_LAYOUT §7.3 at 100x30: 80 wide, 22 tall, centred.
         let card = ProjectSearch::card(Rect::new(0, 0, 100, 30));
         assert_eq!(card, Rect::new(10, 4, 80, 22));
-        let line = |row: u16| -> String {
-            (card.x..card.right())
-                .map(|x| buffer[(x, row)].symbol())
-                .collect()
-        };
-        // Outside the card everything is dimmed towards the scrim.
-        assert_eq!(buffer[(0, 0)].bg, mix(theme.bg, theme.scrim, 0.6));
-        assert_eq!(buffer[(0, 0)].fg, mix(theme.fg, theme.scrim, 0.6));
-        assert_eq!(line(card.y), "▀".repeat(80));
-        assert!(
-            line(card.y + 1).starts_with("  ✦ Search   TODO"),
-            "{}",
-            line(card.y + 1)
-        );
-        assert!(line(card.y + 1).ends_with(" Aa   .*    "));
-        assert_eq!(buffer[(card.x + 1, card.y + 1)].bg, theme.raised2);
-        assert!(line(card.y + 2).starts_with("  ✦ Replace  tab to replace"));
-        assert!(line(card.y + 3).starts_with("  2 matches in 2 files"));
-        // `src/lib.rs:3` sets the path column's width; the text lines up after it.
-        assert!(line(card.y + 4).starts_with("  src/lib.rs:3  TODO later"));
-        assert!(line(card.y + 5).starts_with("  x.rs:1        TODO"));
-        assert!(line(card.y + 21).starts_with("  ↑↓ select   ⏎ open   tab replace field"));
-        // The first hit is selected: the glow row, with `⏎` at its right.
-        let selected = card.y + 4;
-        assert_eq!(
-            buffer[(card.x, selected)].bg,
-            mix(theme.raised, theme.accent, 0.3)
-        );
-        assert_eq!(buffer[(card.right() - 5, selected)].symbol(), "⏎");
-        // The other hit's match sits on `find_match_bg`.
-        let match_bg = mix(theme.bg, theme.warn, 0.3);
-        let matched: String = (card.x..card.right())
-            .filter(|&x| buffer[(x, card.y + 5)].bg == match_bg)
-            .map(|x| buffer[(x, card.y + 5)].symbol())
-            .collect();
-        assert_eq!(matched, "TODO");
+        for name in ["tinkery", "tinkery-light"] {
+            let theme = Theme::named(name).expect("a listed theme exists");
+            let (buffer, at) = draw(&search, &theme)?;
+            // Outside the card the screen is dimmed: text into its ground, then
+            // all of it towards black.
+            let black = Color::Rgb(0, 0, 0);
+            assert_eq!(buffer[(0, 0)].bg, mix(theme.bg, black, 0.45), "{name}");
+            assert_eq!(
+                buffer[(0, 0)].fg,
+                mix(mix(theme.fg, theme.bg, 0.6), black, 0.45),
+                "{name}"
+            );
+            // An accent edge with the title in it.
+            let edge = card_row(&buffer, card, card.y);
+            assert!(edge.starts_with(" ▁ Project search ▁"), "{name}: {edge:?}");
+            assert_eq!(buffer[(card.x + 30, card.y)].fg, theme.accent, "{name}");
+            assert_eq!(buffer[(card.x, card.y + 1)].symbol(), "▕", "{name}");
+            assert_eq!(buffer[(card.x + 1, card.bottom() - 1)].symbol(), "▔");
+            assert_eq!(text_of(&buffer, card, card.y + 1), "", "{name}");
 
-        // A chip that's on is `acc_ink` on the accent.
-        search.handle(Input::Action(Action::FindRegex));
-        draw(&mut terminal, &search)?;
-        let buffer = terminal.backend().buffer();
-        let on: String = (card.x..card.right())
-            .filter(|&x| buffer[(x, card.y + 1)].bg == theme.accent)
-            .map(|x| buffer[(x, card.y + 1)].symbol())
-            .collect();
-        assert_eq!(on, " .* ");
+            // The Search strip, which has the keys: its label in `text`, the
+            // query in `strong`, the chips at the right, both off.
+            let y = card.y + 2;
+            assert_strip(&buffer, &theme, card, y);
+            let line = card_row(&buffer, card, y);
+            assert!(
+                line.starts_with(&format!("▕{CAP_L}  ✦ Search   TODO ")),
+                "{name}: {line:?}"
+            );
+            assert!(
+                line.ends_with(&format!("{CAP_L}Aa{CAP_R} {CAP_L}.*{CAP_R}  {CAP_R}▏")),
+                "{name}: {line:?}"
+            );
+            let label = &buffer[(card.x + 6, y)];
+            assert_eq!((label.fg, label.bg), (theme.text, theme.raised2), "{name}");
+            let value = &buffer[(card.x + 15, y)];
+            assert_eq!((value.fg, value.bg), (theme.strong, theme.raised2));
+            assert_eq!(on_bg(&buffer, card, y, theme.btn), "Aa.*", "{name}");
+            assert_eq!(buffer[(card.right() - 6, y)].fg, theme.muted, "{name}");
+            assert_eq!(on_bg(&buffer, card, y, theme.accent), "", "{name}");
+            assert_eq!(at, (card.x + 19, y), "{name}");
+
+            // The Replace strip under it, waiting: label and hint in `muted`.
+            let y = card.y + 3;
+            assert_strip(&buffer, &theme, card, y);
+            let line = card_row(&buffer, card, y);
+            assert!(
+                line.starts_with(&format!("▕{CAP_L}  ✦ Replace  tab to replace ")),
+                "{name}: {line:?}"
+            );
+            let label = &buffer[(card.x + 6, y)];
+            assert_eq!((label.fg, label.bg), (theme.muted, theme.raised2), "{name}");
+            assert_eq!(buffer[(card.x + 15, y)].fg, theme.muted, "{name}");
+
+            // A blank, the count in `muted`, then the hits.
+            assert_eq!(text_of(&buffer, card, card.y + 4), "", "{name}");
+            let count = text_of(&buffer, card, card.y + 5);
+            assert_eq!(count, "2 matches in 2 files", "{name}");
+            let cell = &buffer[(card.x + 4, card.y + 5)];
+            assert_eq!((cell.fg, cell.bg), (theme.muted, theme.raised), "{name}");
+            assert_resting(&buffer, &theme, card, card.y + 5);
+            // `src/lib.rs:3` sets the path column's width; the text lines up
+            // after it.
+            let (first, second) = (card.y + 6, card.y + 7);
+            assert_eq!(
+                text_of(&buffer, card, first),
+                "src/lib.rs:3  TODO later",
+                "{name}"
+            );
+            assert_eq!(
+                text_of(&buffer, card, second),
+                "x.rs:1        TODO",
+                "{name}"
+            );
+            // The first hit is selected: a pill, its file name `strong` bold,
+            // the folder and line in `text`, its match in `find_current`.
+            assert_selected(&buffer, &theme, card, first);
+            assert_eq!(buffer[(card.x + 4, first)].fg, theme.text, "{name}");
+            let file = &buffer[(card.x + 8, first)];
+            assert_eq!((file.fg, file.bg), (theme.strong, theme.hov), "{name}");
+            assert!(file.modifier.contains(Modifier::BOLD), "{name}");
+            assert_eq!(buffer[(card.x + 14, first)].fg, theme.text, "{name}");
+            assert_eq!(on_bg(&buffer, card, first, theme.warn), "TODO", "{name}");
+            assert_eq!(buffer[(card.x + 18, first)].fg, theme.bg, "{name}");
+            let rest = &buffer[(card.x + 23, first)];
+            assert_eq!((rest.fg, rest.bg), (theme.fg, theme.hov), "{name}");
+            // The other rests: its file name `strong`, its match on
+            // `find_match_bg`.
+            assert_resting(&buffer, &theme, card, second);
+            let file = &buffer[(card.x + 4, second)];
+            assert_eq!((file.fg, file.bg), (theme.strong, theme.raised), "{name}");
+            assert_eq!(buffer[(card.x + 8, second)].fg, theme.muted, "{name}");
+            let match_bg = mix(theme.bg, theme.warn, 0.3);
+            assert_eq!(on_bg(&buffer, card, second, match_bg), "TODO", "{name}");
+            assert_eq!(buffer[(card.x + 18, second)].fg, theme.fg, "{name}");
+
+            // A blank, then the keys on the row above the bottom edge.
+            assert_eq!(text_of(&buffer, card, card.bottom() - 3), "", "{name}");
+            assert_eq!(
+                text_of(&buffer, card, card.bottom() - 2),
+                hints_text(&[
+                    ("⏎", "open"),
+                    ("Tab", "replace"),
+                    ("Alt+A", "replace all"),
+                    ("Esc", "close"),
+                ]),
+                "{name}"
+            );
+            assert_eq!(buffer[(card.x + 4, card.bottom() - 2)].symbol(), CAP_L);
+            // Nothing of the old look: no lit edge, no glow, no `⏎` at the
+            // selected row's right.
+            let glow = mix(theme.raised, theme.accent, 0.3);
+            for row in card.top()..card.bottom() {
+                for x in card.left()..card.right() {
+                    let cell = &buffer[(x, row)];
+                    assert_ne!(cell.symbol(), "▀", "{name}: {x},{row}");
+                    assert_ne!(cell.bg, glow, "{name}: {x},{row}");
+                }
+            }
+            assert!(!card_row(&buffer, card, first).contains('⏎'), "{name}");
+        }
         Ok(())
     }
 
     #[test]
-    fn mono_dims_with_the_modifier_and_reverses_the_selected_row() -> anyhow::Result<()> {
-        let mut search = ProjectSearch::new();
-        search.start(1, query("x", false, false));
-        search.add(1, vec![hit("a.rs", 0, "xxxx")]);
+    fn the_field_with_the_keys_has_its_label_in_text_and_a_chip_that_is_on_is_accent()
+    -> anyhow::Result<()> {
+        let mut search = listed();
+        let theme = Theme::default();
+        let card = ProjectSearch::card(Rect::new(0, 0, 100, 30));
+        search.handle(Input::Action(Action::FindRegex));
+        search.handle(Input::Action(Action::Tab));
+        type_query(&mut search, "ab");
+        search.handle(Input::Action(Action::Move(Motion::Down)));
+        let (buffer, at) = draw(&search, &theme)?;
+        let (search_y, replace_y) = (card.y + 2, card.y + 3);
+        assert_eq!(buffer[(card.x + 6, search_y)].fg, theme.muted);
+        assert_eq!(buffer[(card.x + 6, replace_y)].fg, theme.text);
+        let line = card_row(&buffer, card, replace_y);
+        assert!(
+            line.starts_with(&format!("▕{CAP_L}  ✦ Replace  ab ")),
+            "{line:?}"
+        );
+        assert!(!line.contains("tab to replace"), "{line:?}");
+        assert_eq!(buffer[(card.x + 15, replace_y)].fg, theme.strong);
+        // The cursor is in the Replace field, after what's typed.
+        assert_eq!(at, (card.x + 17, replace_y));
+        // `.*` is on: `acc_ink` on the accent, bold; `Aa` stays on `btn`.
+        assert_eq!(on_bg(&buffer, card, search_y, theme.accent), ".*");
+        assert_eq!(on_bg(&buffer, card, search_y, theme.btn), "Aa");
+        let on = &buffer[(card.right() - 7, search_y)];
+        assert_eq!(on.fg, theme.acc_ink);
+        assert!(on.modifier.contains(Modifier::BOLD));
+        // The pill moved with the selection.
+        assert_resting(&buffer, &theme, card, card.y + 6);
+        assert_selected(&buffer, &theme, card, card.y + 7);
+        // Tab now goes back to the Search field.
+        let hints = text_of(&buffer, card, card.bottom() - 2);
+        assert!(hints.contains(&hints_text(&[("Tab", "search")])), "{hints}");
+        assert!(hints.ends_with(&hints_text(&[("Esc", "close")])), "{hints}");
+        Ok(())
+    }
+
+    #[test]
+    fn the_hints_drop_the_arrows_then_tab_as_the_card_narrows() {
+        let theme = Theme::default();
+        let search = ProjectSearch::new();
+        let look = Look {
+            pill_caps: false,
+            ..Look::default()
+        };
+        let text = |room: u16| -> String {
+            search
+                .hints(look, &theme, room)
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect()
+        };
+        let all = " ↑   ↓  move    ⏎  open    Tab  replace    Alt+A  replace all    Esc  close";
+        assert_eq!(text(75), all);
+        assert_eq!(text(74), all[" ↑   ↓  move   ".len()..]);
+        assert_eq!(text(60), text(74));
+        assert_eq!(text(59), " ⏎  open    Alt+A  replace all    Esc  close");
+        assert_eq!(text(43), " ⏎  open    Esc  close");
+        // Every one of them ends `Esc close`.
+        for room in [0, 43, 59, 74, 75, 200] {
+            assert!(text(room).ends_with(" Esc  close"), "{room}");
+        }
+    }
+
+    #[test]
+    fn mono_reverses_the_selected_hit_and_keeps_matches_bold_and_underlined() -> anyhow::Result<()>
+    {
+        let search = listed();
         let mono = Theme::named("mono").expect("mono exists");
+        let reversed = Theme::highlight(mono.hov, mono.strong);
+        let card = ProjectSearch::card(Rect::new(0, 0, 100, 30));
         let mut terminal = Terminal::new(TestBackend::new(100, 30))?;
         terminal.draw(|frame| {
-            search.render(&mono, frame, frame.area());
+            search.render(Look::default(), &mono, frame, frame.area());
         })?;
         let buffer = terminal.backend().buffer();
-        let card = ProjectSearch::card(Rect::new(0, 0, 100, 30));
+        // The screen dims with the modifier; the card doesn't.
         assert!(buffer[(0, 0)].modifier.contains(Modifier::DIM));
-        assert!(
-            !buffer[(card.x, card.y + 4)]
-                .modifier
-                .contains(Modifier::DIM)
-        );
-        assert!(
-            buffer[(card.x + 2, card.y + 4)]
-                .modifier
-                .contains(Modifier::REVERSED)
-        );
+        let (first, second) = (card.y + 6, card.y + 7);
+        for x in card.x + 1..card.right() - 1 {
+            let cell = &buffer[(x, first)];
+            assert!(cell.modifier.contains(Modifier::REVERSED), "{x}");
+            // Nothing on the row has a colour of its own.
+            assert_eq!((Some(cell.fg), Some(cell.bg)), (reversed.fg, reversed.bg));
+        }
+        assert_eq!(buffer[(card.x + 2, first)].symbol(), "›");
+        // On both rows the match, and nothing else of the line, is bold and
+        // underlined.
+        let marked = Modifier::BOLD | Modifier::UNDERLINED;
+        for y in [first, second] {
+            let matched: String = (card.x + 4..card.right() - 4)
+                .filter(|&x| buffer[(x, y)].modifier.contains(marked))
+                .map(|x| buffer[(x, y)].symbol())
+                .collect();
+            assert_eq!(matched, "TODO", "row {y}");
+        }
+        for row in card.top()..card.bottom() {
+            for x in card.left()..card.right() {
+                let cell = &buffer[(x, row)];
+                // Terminal colours only, and no Nerd Font glyph.
+                let rgb = |c| matches!(c, Color::Rgb(..));
+                assert!(!rgb(cell.fg) && !rgb(cell.bg), "{x},{row}");
+                assert!(!matches!(cell.symbol(), CAP_L | CAP_R), "{x},{row}");
+                assert!(!cell.modifier.contains(Modifier::DIM), "{x},{row}");
+                if row != first {
+                    assert!(!cell.modifier.contains(Modifier::REVERSED), "{x},{row}");
+                }
+            }
+        }
         Ok(())
     }
 }
