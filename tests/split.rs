@@ -3,7 +3,7 @@ mod harness;
 use std::fs;
 use std::time::Duration;
 
-use harness::{ROWS, Tinkery, pill_text};
+use harness::{CAP_L, CAP_R, ROWS, Tinkery, pill_text};
 use tempfile::TempDir;
 use vt100::Color;
 
@@ -20,43 +20,20 @@ const LEFT: usize = LEFT_X as usize;
 /// The tree rows of `a.txt` and `b.txt`, below its brand row.
 const A_ROW: u16 = 3;
 const B_ROW: u16 = 4;
-/// Each split's header: a blank row, the pills, the aurora thread; then its
-/// editor.
+/// Each split's header: a blank row, the pills, a blank row; then its editor.
 const PILL_ROW: u16 = 1;
-const THREAD_ROW: u16 = 2;
+const UNDER_ROW: u16 = 2;
 const TOP: usize = 3;
 
-// The `aurora` roles the splits use (README §4.1).
-const BG: Color = Color::Rgb(0x0b, 0x0a, 0x10);
-const RAISED: Color = Color::Rgb(0x16, 0x14, 0x1f);
-const RAISED2: Color = Color::Rgb(0x1e, 0x1b, 0x2a);
-const GUIDE: Color = Color::Rgb(0x1f, 0x1c, 0x2b);
-const MUTED: Color = Color::Rgb(0x67, 0x62, 0x7d);
-const STRONG: Color = Color::Rgb(0xf4, 0xf2, 0xfb);
-const ACCENT: Color = Color::Rgb(0xb6, 0x9c, 0xff);
-const ACCENT2: Color = Color::Rgb(0x6e, 0xe7, 0xd8);
-
-/// `a` moved `t` of the way to `b`, per channel, rounded, as the editor mixes.
-fn mix(a: Color, b: Color, t: f64) -> Color {
-    let (Color::Rgb(r1, g1, b1), Color::Rgb(r2, g2, b2)) = (a, b) else {
-        panic!("can't mix {a:?} and {b:?}");
-    };
-    let m = |p: u8, q: u8| (f64::from(p) + (f64::from(q) - f64::from(p)) * t).round() as u8;
-    Color::Rgb(m(r1, r2), m(g1, g2), m(b1, b2))
-}
-
-/// The thread's colour in column `x` of a split spanning `from..to`, its active
-/// pill's middle at `pc` (README §2.3, measured from the column before the
-/// split). `reach` is .92 in the focused split and .97 in the other (§5.6).
-fn thread(x: u16, from: u16, to: u16, pc: f64, reach: f64) -> Color {
-    let hue = mix(
-        ACCENT,
-        ACCENT2,
-        f64::from(x + 1 - from) / f64::from(to + 1 - from),
-    );
-    let d = (f64::from(x) - pc).abs();
-    mix(hue, BG, (d / 46.0).clamp(0.0, 1.0) * reach + 0.04)
-}
+// The `tinkery` roles the splits use (tinkery-forge spec, Palette).
+const BG: Color = Color::Rgb(0x11, 0x0f, 0x0e);
+const GUIDE: Color = Color::Rgb(0x25, 0x1f, 0x1c);
+const BTN: Color = Color::Rgb(0x33, 0x2a, 0x25);
+const STRONG: Color = Color::Rgb(0xf8, 0xf0, 0xe6);
+const ACCENT: Color = Color::Rgb(0xff, 0x8a, 0x3d);
+const ACC_INK: Color = Color::Rgb(0x1f, 0x0d, 0x02);
+/// `mono`'s `btn`: the terminal's own dark grey.
+const DARK_GREY: Color = Color::Idx(8);
 
 /// A temp folder holding `a.txt` ("alpha") and `b.txt` ("bravo").
 fn project() -> TempDir {
@@ -112,7 +89,7 @@ fn divided(screen: &[String], divider: usize) -> bool {
 }
 
 /// Waits for the two pill rows to read `left` and `right`, each a split's tab
-/// names with its active one (see `pill_text`).
+/// names (see `pill_text`) with its active one filled as the current tab.
 fn wait_for_bars(
     tinkery: &Tinkery,
     left_x: usize,
@@ -121,11 +98,21 @@ fn wait_for_bars(
     right: (&[&str], usize),
 ) {
     // Each split's first pill starts one column in.
-    let left = format!(" {}", pill_text(left.0, left.1));
-    let right = format!(" {}", pill_text(right.0, right.1));
-    tinkery.wait_for_screen(&format!("pills {left:?} | {right:?}"), WAIT, |screen| {
-        halves(screen, usize::from(PILL_ROW), left_x, divider) == (left.clone(), right.clone())
-    });
+    let (left_text, right_text) = (
+        format!(" {}", pill_text(left.0)),
+        format!(" {}", pill_text(right.0)),
+    );
+    tinkery.wait_for_screen(
+        &format!("pills {left_text:?} | {right_text:?}"),
+        WAIT,
+        |screen| {
+            halves(screen, usize::from(PILL_ROW), left_x, divider)
+                == (left_text.clone(), right_text.clone())
+        },
+    );
+    let col = |x: usize| u16::try_from(x).expect("a screen column");
+    tinkery.wait_for_current_pill(PILL_ROW, col(left_x + 1), left.0, left.1, WAIT);
+    tinkery.wait_for_current_pill(PILL_ROW, col(divider + 2), right.0, right.1, WAIT);
 }
 
 /// Waits for the focused split's active tab, the only bold name on the pill
@@ -143,10 +130,10 @@ fn alt_v_shows_two_editors_side_by_side_and_alt_v_again_closes_the_right_one() {
 
     // The visual check: two editors of about equal width split by a `│`, each with
     // its own pills, and only the focused (new, right) split's name lit.
+    let bar = format!(" {}", pill_text(&["a.txt"]));
     tinkery.wait_for_screen("two splits on a.txt", WAIT, |screen| {
         divided(screen, DIVIDER)
-            && halves(screen, usize::from(PILL_ROW), 0, DIVIDER)
-                == (" ▐ a.txt ▌".into(), " ▐ a.txt ▌".into())
+            && halves(screen, usize::from(PILL_ROW), 0, DIVIDER) == (bar.clone(), bar.clone())
             && halves(screen, TOP, 0, DIVIDER) == ("   1  alpha".into(), "   1  alpha".into())
     });
     wait_for_focused(&tinkery, false, "a.txt");
@@ -176,19 +163,21 @@ fn alt_v_shows_two_editors_side_by_side_and_alt_v_again_closes_the_right_one() {
     tinkery.send_keys("alt+v");
     tinkery.wait_for_screen("one editor", WAIT, |screen| {
         cols(&screen[usize::from(PILL_ROW)], 0, 100)
-            == format!(" {}", pill_text(&["a.txt", "untitled"], 0))
+            == format!(" {}", pill_text(&["a.txt", "untitled"]))
             && screen[TOP].matches("alpha").count() == 1
             && !divided(screen, DIVIDER)
     });
+    tinkery.wait_for_current_pill(PILL_ROW, 1, &["a.txt", "untitled"], 0, WAIT);
     wait_for_focused(&tinkery, false, "a.txt");
     tinkery.send_keys("ctrl+q");
     assert!(tinkery.wait_exit(WAIT).success());
 }
 
 #[test]
-fn aurora_splits_have_a_guide_rule_and_the_unfocused_one_is_dimmed() {
+fn tinkery_splits_have_a_guide_rule_and_the_unfocused_ones_tab_is_on_btn() {
     let dir = project();
-    let mut tinkery = Tinkery::spawn_in_with_config(dir.path(), "theme = \"aurora\"\n", &["a.txt"]);
+    let mut tinkery =
+        Tinkery::spawn_in_with_config(dir.path(), "theme = \"tinkery\"\n", &["a.txt"]);
     tinkery.wait_for_text("1  alpha", START);
     tinkery.send_keys("alt+v");
     wait_for_focused(&tinkery, false, "a.txt");
@@ -196,46 +185,78 @@ fn aurora_splits_have_a_guide_rule_and_the_unfocused_one_is_dimmed() {
 
     // One `│` in `guide` between the editors, the only vertical rule.
     let divider = u16::try_from(DIVIDER).expect("fits");
-    for row in [0, PILL_ROW, THREAD_ROW, 3, ROWS - 2] {
+    for row in [0, PILL_ROW, UNDER_ROW, 3, ROWS - 2] {
         assert_eq!(tinkery.fg_at(divider, row), GUIDE, "row {row}");
     }
 
-    // The left split lost focus: its pill is `muted` on `raised`, its thread
-    // fainter (.97). The right one has focus: `raised2`, the name lit, .92.
-    assert_eq!(tinkery.fg_at(1, PILL_ROW), RAISED);
-    assert_eq!(tinkery.bg_at(2, PILL_ROW), RAISED);
-    assert_eq!(tinkery.fg_at(3, PILL_ROW), MUTED);
-    assert_eq!(tinkery.fg_at(52, PILL_ROW), RAISED2);
-    assert_eq!(tinkery.bg_at(53, PILL_ROW), RAISED2);
-    assert_eq!(tinkery.fg_at(54, PILL_ROW), STRONG);
-    // ` a.txt ` is 7 wide: each pill's middle is 1 + 3.5 past its left cap.
-    let (left_pc, right_pc) = (1.0 + 4.5, 52.0 + 4.5);
-    for x in [5, 6, 30, 49] {
-        assert_eq!(
-            tinkery.fg_at(x, THREAD_ROW),
-            thread(x, 0, divider, left_pc, 0.97),
-            "left column {x}"
-        );
-    }
-    for x in [51, 56, 57, 99] {
-        assert_eq!(
-            tinkery.fg_at(x, THREAD_ROW),
-            thread(x, divider + 1, 100, right_pc, 0.92),
-            "right column {x}"
-        );
+    // The left split lost focus: its current tab is `strong` on `btn`, not
+    // bold. The right one has focus: `acc_ink` bold on `accent`.
+    assert_eq!(tinkery.fg_at(1, PILL_ROW), BTN);
+    assert_eq!(tinkery.bg_at(1, PILL_ROW), BG);
+    assert_eq!(tinkery.bg_at(2, PILL_ROW), BTN);
+    assert_eq!(tinkery.fg_at(3, PILL_ROW), STRONG);
+    assert_eq!(tinkery.bg_at(3, PILL_ROW), BTN);
+    assert!(!tinkery.bold_at(3, PILL_ROW));
+    assert_eq!(tinkery.fg_at(9, PILL_ROW), BTN);
+    assert_eq!(tinkery.fg_at(52, PILL_ROW), ACCENT);
+    assert_eq!(tinkery.bg_at(52, PILL_ROW), BG);
+    assert_eq!(tinkery.bg_at(53, PILL_ROW), ACCENT);
+    assert_eq!(tinkery.fg_at(54, PILL_ROW), ACC_INK);
+    assert!(tinkery.bold_at(54, PILL_ROW));
+    assert_eq!(tinkery.fg_at(60, PILL_ROW), ACCENT);
+
+    // The row under the pills is blank ground in both splits: no thread.
+    let under = tinkery.screen()[usize::from(UNDER_ROW)].clone();
+    assert_eq!(under.replace('│', "").trim(), "", "{under:?}");
+    for x in (0..100).filter(|x| *x != divider) {
+        assert_eq!(tinkery.bg_at(x, UNDER_ROW), BG, "column {x}");
     }
 
-    // F6 swaps which split is lit.
+    // F6 swaps which split has the accent.
     tinkery.send_keys("f6");
-    tinkery.wait_for_fg_at(3, PILL_ROW, STRONG, WAIT);
-    tinkery.wait_for_fg_at(54, PILL_ROW, MUTED, WAIT);
-    tinkery.wait_for_fg_at(
-        52,
-        THREAD_ROW,
-        thread(52, divider + 1, 100, right_pc, 0.97),
-        WAIT,
+    tinkery.wait_for_bg(2, PILL_ROW, ACCENT, WAIT);
+    tinkery.wait_for_fg_at(3, PILL_ROW, ACC_INK, WAIT);
+    tinkery.wait_for_bg(53, PILL_ROW, BTN, WAIT);
+    tinkery.wait_for_fg_at(54, PILL_ROW, STRONG, WAIT);
+    wait_for_focused(&tinkery, false, "a.txt");
+    assert!(tinkery.bold_at(3, PILL_ROW));
+    assert!(!tinkery.bold_at(54, PILL_ROW));
+}
+
+#[test]
+fn mono_underlines_the_unfocused_splits_current_tab() {
+    let dir = project();
+    let mut tinkery = Tinkery::spawn_in_with_config(dir.path(), "theme = \"mono\"\n", &["a.txt"]);
+    tinkery.wait_for_text("1  alpha", START);
+    tinkery.send_keys("alt+v");
+    tinkery.wait_for_screen("two splits", WAIT, |screen| divided(screen, DIVIDER));
+
+    // The right split has focus: its pill is reverse video and bold, ends and
+    // all. The left one's name is underlined, not bold, on the terminal's dark
+    // grey, and nothing else on the row is underlined.
+    tinkery.wait_for_reversed(PILL_ROW, "  a.txt  ", WAIT);
+    tinkery.wait_for_bold(PILL_ROW, "  a.txt  ", WAIT);
+    tinkery.wait_for_underlined(PILL_ROW, "a.txt", WAIT);
+    assert_eq!(tinkery.bg_at(3, PILL_ROW), DARK_GREY);
+    assert!(!tinkery.bold_at(3, PILL_ROW));
+    assert!(tinkery.bold_at(54, PILL_ROW));
+    // No Nerd Font glyph, and nothing under the pills.
+    let screen = tinkery.screen();
+    let all = screen.join("\n");
+    assert!(!all.contains(CAP_L) && !all.contains(CAP_R), "{all}");
+    assert_eq!(
+        halves(&screen, usize::from(PILL_ROW), 0, DIVIDER),
+        ("   a.txt".into(), "   a.txt".into())
     );
-    tinkery.wait_for_fg_at(5, THREAD_ROW, thread(5, 0, divider, left_pc, 0.92), WAIT);
+    assert_eq!(screen[usize::from(UNDER_ROW)].replace('│', "").trim(), "");
+
+    // F6 swaps them: the underline follows the split that lost focus.
+    tinkery.send_keys("f6");
+    tinkery.wait_for_bg(54, PILL_ROW, DARK_GREY, WAIT);
+    tinkery.wait_for_reversed(PILL_ROW, "  a.txt  ", WAIT);
+    tinkery.wait_for_underlined(PILL_ROW, "a.txt", WAIT);
+    assert!(tinkery.bold_at(3, PILL_ROW));
+    assert!(!tinkery.bold_at(54, PILL_ROW));
 }
 
 #[test]
@@ -366,10 +387,10 @@ fn edits_to_a_buffer_open_in_both_splits_show_in_both() {
     // Typed on the right, shown on both sides, both tabs marked dirty.
     tinkery.send_keys("end");
     tinkery.type_text("!");
+    let dirty = format!(" {}", pill_text(&["a.txt •"]));
     tinkery.wait_for_screen("edit in both", WAIT, |screen| {
         halves(screen, TOP, 0, DIVIDER) == ("   1  alpha!".into(), "   1  alpha!".into())
-            && halves(screen, usize::from(PILL_ROW), 0, DIVIDER)
-                == (" ▐ a.txt • ▌".into(), " ▐ a.txt • ▌".into())
+            && halves(screen, usize::from(PILL_ROW), 0, DIVIDER) == (dirty.clone(), dirty.clone())
     });
 
     // Typed on the left, at the left split's own cursor (still at the start).

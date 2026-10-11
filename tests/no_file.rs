@@ -8,7 +8,7 @@ mod harness;
 use std::fs;
 use std::time::Duration;
 
-use harness::{ROWS, Tinkery};
+use harness::{CAP_L, ROWS, Tinkery, pill_text};
 use tempfile::TempDir;
 
 const START: Duration = Duration::from_secs(10);
@@ -79,7 +79,7 @@ fn assert_key_list(tinkery: &Tinkery, folder: &str, x: u16, header: u16) {
 fn assert_no_tabs(tinkery: &Tinkery) {
     let screen = tinkery.screen();
     let pills = &screen[usize::from(PILL_ROW)];
-    assert!(!pills.contains('▐'), "{screen:#?}");
+    assert!(!pills.contains(CAP_L), "{screen:#?}");
     assert!(!pills.contains("untitled"), "{screen:#?}");
 }
 
@@ -120,7 +120,7 @@ fn typing_on_the_key_list_does_nothing_and_ctrl_n_replaces_it() {
     // Ctrl+N gives one empty untitled tab, which takes the typing.
     tinkery.send_keys("ctrl+n");
     tinkery.wait_for_text_gone("no file open", WAIT);
-    tinkery.wait_for_text("▐ untitled ▌", WAIT);
+    tinkery.wait_for_text(&pill_text(&["untitled"]), WAIT);
     tinkery.type_text("hi");
     tinkery.wait_for_text("1  hi", WAIT);
     let pills = tinkery.screen()[usize::from(PILL_ROW)].clone();
@@ -140,7 +140,7 @@ fn opening_a_file_from_ctrl_p_replaces_the_key_list() {
     tinkery.wait_for_text("1  bravo", WAIT);
     tinkery.wait_for_text_gone("no file open", WAIT);
     let pills = tinkery.screen()[usize::from(PILL_ROW)].clone();
-    assert!(pills.contains("▐ b.txt ▌"), "{pills:?}");
+    assert!(pills.contains(&pill_text(&["b.txt"])), "{pills:?}");
     assert!(!pills.contains("untitled"), "{pills:?}");
 }
 

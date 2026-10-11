@@ -4,7 +4,7 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
-use harness::{COLS, ROWS, Tinkery, pill_text};
+use harness::{CAP_L, CAP_R, COLS, ROWS, Tinkery, pill_text, square_pill_text};
 use tempfile::TempDir;
 use vt100::Color;
 
@@ -13,45 +13,22 @@ const WAIT: Duration = Duration::from_secs(5);
 const PROMPT: &str = "has unsaved changes";
 /// The tree's width: the design's `tw`.
 const TREE: u16 = 28;
-/// The first pill's left cap, two columns right of the tree (README §2.2).
+/// The first pill's left end, two columns right of the tree.
 const PILL_X: u16 = TREE + 2;
-/// The pills sit on row 1, under a blank row 0; the thread is on row 2.
+/// The pills sit on row 1, between a blank row 0 and a blank row 2.
 const PILL_ROW: u16 = 1;
-const THREAD_ROW: u16 = 2;
+const UNDER_ROW: u16 = 2;
 /// The tree rows of `a.txt` and `b.txt`, below its brand row.
 const A_ROW: u16 = 3;
 const B_ROW: u16 = 4;
 
-// The `aurora` roles the header uses (README §4.1).
-const BG: Color = Color::Rgb(0x0b, 0x0a, 0x10);
-const RAISED2: Color = Color::Rgb(0x1e, 0x1b, 0x2a);
-const MUTED: Color = Color::Rgb(0x67, 0x62, 0x7d);
-const STRONG: Color = Color::Rgb(0xf4, 0xf2, 0xfb);
-const ACCENT: Color = Color::Rgb(0xb6, 0x9c, 0xff);
-const ACCENT2: Color = Color::Rgb(0x6e, 0xe7, 0xd8);
-const WARN: Color = Color::Rgb(0xf0, 0xcf, 0x7a);
-
-/// `a` moved `t` of the way to `b`, per channel, rounded, as the editor mixes.
-fn mix(a: Color, b: Color, t: f64) -> Color {
-    let (Color::Rgb(r1, g1, b1), Color::Rgb(r2, g2, b2)) = (a, b) else {
-        panic!("can't mix {a:?} and {b:?}");
-    };
-    let m = |p: u8, q: u8| (f64::from(p) + (f64::from(q) - f64::from(p)) * t).round() as u8;
-    Color::Rgb(m(r1, r2), m(g1, g2), m(b1, b2))
-}
-
-/// The thread's colour in column `x` with the active pill's middle at `pc`, by
-/// README §2.3: the hue runs `accent` to `accent2` from the tree's edge to the
-/// screen's, and fades into `bg` with distance from `pc`.
-fn thread(x: u16, pc: f64) -> Color {
-    let hue = mix(
-        ACCENT,
-        ACCENT2,
-        f64::from(x - TREE) / f64::from(COLS - TREE),
-    );
-    let d = (f64::from(x) - pc).abs();
-    mix(hue, BG, (d / 46.0).clamp(0.0, 1.0) * 0.92 + 0.04)
-}
+// The `tinkery` roles the header uses (tinkery-forge spec, Palette).
+const BG: Color = Color::Rgb(0x11, 0x0f, 0x0e);
+const RAISED: Color = Color::Rgb(0x1f, 0x1b, 0x19);
+const TEXT: Color = Color::Rgb(0xb5, 0xa8, 0x9d);
+const ACCENT: Color = Color::Rgb(0xff, 0x8a, 0x3d);
+const ACC_INK: Color = Color::Rgb(0x1f, 0x0d, 0x02);
+const WARN: Color = Color::Rgb(0xf2, 0xc1, 0x4e);
 
 /// A temp folder holding `a.txt` ("alpha") and `b.txt` ("bravo"), opened as the
 /// project with the tree showing, cwd inside it, under the config `toml`.
@@ -72,18 +49,30 @@ fn open_project() -> (TempDir, Tinkery) {
 }
 
 /// Opens both files from the tree, leaving b.txt active.
-fn open_both(tinkery: &mut Tinkery) {
+fn open_files(tinkery: &mut Tinkery) {
     tinkery.click(3, A_ROW);
     tinkery.wait_for_text("1  alpha", WAIT);
     tinkery.click(3, B_ROW);
     tinkery.wait_for_text("1  bravo", WAIT);
+}
+
+/// `open_files`, then waits for the two round pills with b.txt's the current.
+fn open_both(tinkery: &mut Tinkery) {
+    open_files(tinkery);
     wait_for_tabs(tinkery, &["a.txt", "b.txt"], 1);
 }
 
-/// Waits for the pill row to show `names` with `active` capped (see
-/// `pill_text`).
+/// What the screen shows right of the tree on `row`, trailing blanks cut.
+fn right_of_tree(tinkery: &Tinkery, row: u16) -> String {
+    let line = tinkery.screen()[usize::from(row)].clone();
+    let shown: String = line.chars().skip(usize::from(TREE)).collect();
+    shown.trim_end().to_string()
+}
+
+/// Waits for the pill row to show `names` (see `pill_text`) with `active` the
+/// one filled as the current tab.
 fn wait_for_tabs(tinkery: &Tinkery, names: &[&str], active: usize) {
-    let text = pill_text(names, active);
+    let text = pill_text(names);
     tinkery.wait_for_screen(&format!("pills {text:?}"), WAIT, |screen| {
         let row: String = screen[usize::from(PILL_ROW)]
             .chars()
@@ -91,6 +80,7 @@ fn wait_for_tabs(tinkery: &Tinkery, names: &[&str], active: usize) {
             .collect();
         row.trim_end() == text
     });
+    tinkery.wait_for_current_pill(PILL_ROW, PILL_X, names, active, WAIT);
 }
 
 /// Waits for the active tab's name, the only bold text on the pill row beside
@@ -118,26 +108,20 @@ fn pills_show_each_buffer_with_the_active_one_and_dirty_marks() {
     open_both(&mut tinkery);
     wait_for_active(&tinkery, "b.txt");
 
-    // The visual check: both names, the active one capped, the dirty one marked.
+    // The visual check: both names, each a pill, the dirty one marked.
     tinkery.type_text("x");
     wait_for_tabs(&tinkery, &["a.txt", "b.txt •"], 1);
     wait_for_active(&tinkery, "b.txt");
     // From x = 30, each pill steps on by its label plus three: ` a.txt ` is 7.
     assert_eq!(tinkery.text_col(PILL_ROW, "a.txt"), Some(PILL_X + 2));
-    assert_eq!(tinkery.text_col(PILL_ROW, "▐ b.txt"), Some(PILL_X + 10));
-    // Row 0 is blank right of the tree, and row 2 is the thread.
-    let screen = tinkery.screen();
-    let blank: String = screen[0].chars().skip(usize::from(TREE)).collect();
-    assert_eq!(blank.trim(), "", "{screen:#?}");
-    let rule: String = screen[usize::from(THREAD_ROW)]
-        .chars()
-        .skip(usize::from(TREE) + 1)
-        .collect();
     assert_eq!(
-        rule,
-        "─".repeat(usize::from(COLS - TREE - 1)),
-        "{screen:#?}"
+        tinkery.text_col(PILL_ROW, &format!("{CAP_L} b.txt")),
+        Some(PILL_X + 10)
     );
+    // Rows 0 and 2 are blank right of the tree: no thread under the pills.
+    for row in [0, UNDER_ROW] {
+        assert_eq!(right_of_tree(&tinkery, row), "", "{:#?}", tinkery.screen());
+    }
 
     // Opening an already-open file switches to its tab instead of opening another.
     tinkery.click(3, A_ROW);
@@ -150,65 +134,124 @@ fn pills_show_each_buffer_with_the_active_one_and_dirty_marks() {
 }
 
 #[test]
-fn aurora_pills_and_a_thread_that_follows_the_active_tab() {
-    let (_dir, mut tinkery) = open_project_with("theme = \"aurora\"\n");
+fn tinkery_fills_the_current_pill_with_accent_and_draws_no_thread() {
+    let (_dir, mut tinkery) = open_project_with("theme = \"tinkery\"\n");
     open_both(&mut tinkery);
     tinkery.type_text("x");
     wait_for_tabs(&tinkery, &["a.txt", "b.txt •"], 1);
 
-    // Inactive: the label in `muted`, no fill.
+    // Another tab: ends in `raised` on the ground, `text` on `raised`.
     let a = PILL_X;
-    assert_eq!(tinkery.fg_at(a + 2, PILL_ROW), MUTED);
-    assert_eq!(tinkery.bg_at(a + 2, PILL_ROW), BG);
-    // Active: caps in `raised2` on the ground, the label on `raised2`, the name
-    // bold from `strong` to `accent`, the dirty dot in `warn`.
+    assert_eq!(tinkery.fg_at(a, PILL_ROW), RAISED);
+    assert_eq!(tinkery.bg_at(a, PILL_ROW), BG);
+    assert_eq!(tinkery.bg_at(a + 1, PILL_ROW), RAISED);
+    assert_eq!(tinkery.fg_at(a + 2, PILL_ROW), TEXT);
+    assert_eq!(tinkery.bg_at(a + 2, PILL_ROW), RAISED);
+    assert!(!tinkery.bold_at(a + 2, PILL_ROW));
+    assert_eq!(tinkery.fg_at(a + 8, PILL_ROW), RAISED);
+    // The gap between two pills is the ground.
+    assert_eq!(tinkery.bg_at(a + 9, PILL_ROW), BG);
+    // The current tab: ends in `accent` on the ground, the name bold in
+    // `acc_ink` on `accent`, the dirty dot in `acc_ink` too.
     let b = PILL_X + 10;
-    assert_eq!(tinkery.fg_at(b, PILL_ROW), RAISED2);
+    assert_eq!(tinkery.fg_at(b, PILL_ROW), ACCENT);
     assert_eq!(tinkery.bg_at(b, PILL_ROW), BG);
-    assert_eq!(tinkery.bg_at(b + 1, PILL_ROW), RAISED2);
-    assert_eq!(tinkery.fg_at(b + 2, PILL_ROW), STRONG);
-    assert_eq!(tinkery.fg_at(b + 6, PILL_ROW), ACCENT);
-    assert_eq!(tinkery.fg_at(b + 8, PILL_ROW), WARN);
-    assert_eq!(tinkery.bg_at(b + 8, PILL_ROW), RAISED2);
-    // ` b.txt • ` is 9 wide, so the right cap is 10 cells on.
-    assert_eq!(tinkery.fg_at(b + 10, PILL_ROW), RAISED2);
-    assert_eq!(tinkery.text_col(PILL_ROW, "▌"), Some(b + 10));
+    assert_eq!(tinkery.bg_at(b + 1, PILL_ROW), ACCENT);
+    for x in b + 2..b + 7 {
+        assert_eq!(tinkery.fg_at(x, PILL_ROW), ACC_INK, "column {x}");
+        assert_eq!(tinkery.bg_at(x, PILL_ROW), ACCENT, "column {x}");
+        assert!(tinkery.bold_at(x, PILL_ROW), "column {x}");
+    }
+    assert_eq!(tinkery.text_col(PILL_ROW, "•"), Some(b + 8));
+    assert_eq!(tinkery.fg_at(b + 8, PILL_ROW), ACC_INK);
+    assert_eq!(tinkery.bg_at(b + 8, PILL_ROW), ACCENT);
+    // ` b.txt • ` is 9 wide, so the right end is 10 cells on.
+    assert_eq!(tinkery.fg_at(b + 10, PILL_ROW), ACCENT);
+    assert_eq!(tinkery.bg_at(b + 10, PILL_ROW), BG);
+    assert_eq!(
+        right_of_tree(&tinkery, PILL_ROW),
+        format!("  {}", pill_text(&["a.txt", "b.txt •"]))
+    );
 
-    // The thread is brightest under the pill's middle and faint far from it.
-    let pc = f64::from(b) + 1.0 + 9.0 / 2.0;
-    for x in [b + 5, b + 6, TREE + 1, COLS - 1] {
-        assert_eq!(tinkery.fg_at(x, THREAD_ROW), thread(x, pc), "column {x}");
+    // The row under the pills is blank ground from the tree to the edge.
+    assert_eq!(right_of_tree(&tinkery, UNDER_ROW), "");
+    for x in TREE + 1..COLS {
+        assert_eq!(tinkery.bg_at(x, UNDER_ROW), BG, "column {x}");
     }
 
-    // Switching tab moves it, straight away.
+    // Switching tab moves the accent, straight away, and the tab left behind
+    // keeps its dot, now in `warn`.
     tinkery.send_keys("alt+,");
     wait_for_tabs(&tinkery, &["a.txt", "b.txt •"], 0);
-    let pc = f64::from(a) + 1.0 + 7.0 / 2.0;
-    for x in [a + 4, a + 5, b + 5, COLS - 1] {
-        tinkery.wait_for_fg_at(x, THREAD_ROW, thread(x, pc), WAIT);
-    }
+    tinkery.wait_for_bg(a + 1, PILL_ROW, ACCENT, WAIT);
+    tinkery.wait_for_fg_at(a + 2, PILL_ROW, ACC_INK, WAIT);
+    tinkery.wait_for_bg(b + 1, PILL_ROW, RAISED, WAIT);
+    tinkery.wait_for_fg_at(b + 2, PILL_ROW, TEXT, WAIT);
+    tinkery.wait_for_fg_at(b + 8, PILL_ROW, WARN, WAIT);
+    assert_eq!(tinkery.bg_at(b + 8, PILL_ROW), RAISED);
+    assert_eq!(right_of_tree(&tinkery, UNDER_ROW), "");
 }
 
 #[test]
-fn mono_reverses_the_active_pill_and_draws_the_thread_in_accent() {
-    let (_dir, mut tinkery) = open_project_with("theme = \"mono\"\n");
-    open_both(&mut tinkery);
-    tinkery.wait_for_reversed(PILL_ROW, " b.txt ", WAIT);
-    // The whole reversed label is bold, beside the tree's brand.
-    tinkery.wait_for_bold(PILL_ROW, "tinkery b.txt ", WAIT);
-    // `accent` is the terminal's white.
-    let white = tinkery.fg_at(TREE + 1, THREAD_ROW);
-    assert_ne!(white, Color::Default);
-    for x in TREE + 1..COLS {
-        assert_eq!(tinkery.fg_at(x, THREAD_ROW), white, "column {x}");
+fn pill_caps_off_squares_the_pills_and_keeps_them_where_they_were() {
+    let (_dir, mut tinkery) = open_project_with("theme = \"tinkery\"\n[ui]\npill_caps = false\n");
+    open_files(&mut tinkery);
+    let text = format!("  {}", square_pill_text(&["a.txt", "b.txt"]));
+    tinkery.wait_for_screen("square pills", WAIT, |screen| {
+        let row: String = screen[usize::from(PILL_ROW)]
+            .chars()
+            .skip(usize::from(TREE))
+            .collect();
+        row.trim_end() == text
+    });
+    tinkery.wait_for_current_pill(PILL_ROW, PILL_X, &["a.txt", "b.txt"], 1, WAIT);
+    let screen = tinkery.screen().join("\n");
+    assert!(
+        !screen.contains(CAP_L) && !screen.contains(CAP_R),
+        "{screen}"
+    );
+    // Each end is a blank of the pill's fill, in the cell the cap had.
+    let (a, b) = (PILL_X, PILL_X + 10);
+    for x in [a, a + 8] {
+        assert_eq!(tinkery.bg_at(x, PILL_ROW), RAISED, "column {x}");
     }
-    tinkery.send_keys("alt+,");
-    tinkery.wait_for_reversed(PILL_ROW, " a.txt ", WAIT);
+    for x in [b, b + 8] {
+        assert_eq!(tinkery.bg_at(x, PILL_ROW), ACCENT, "column {x}");
+    }
+    assert_eq!(tinkery.bg_at(a + 9, PILL_ROW), BG);
+    assert_eq!(tinkery.text_col(PILL_ROW, "a.txt"), Some(a + 2));
+    // A square end is still part of its pill: a click on it selects the tab.
+    tinkery.click(a, PILL_ROW);
+    tinkery.wait_for_bg(a, PILL_ROW, ACCENT, WAIT);
+    tinkery.wait_for_text("1  alpha", WAIT);
+}
 
-    // A dirty active pill keeps its dot inside the fill, in the pill's own colour,
-    // not a `warn` block cut into it.
+#[test]
+fn mono_reverses_the_current_pill_and_draws_no_cap_or_thread() {
+    let (_dir, mut tinkery) = open_project_with("theme = \"mono\"\n");
+    open_files(&mut tinkery);
+    // The whole pill is reverse video, its two square ends included.
+    tinkery.wait_for_reversed(PILL_ROW, "  b.txt  ", WAIT);
+    // All of it is bold, beside the tree's brand.
+    tinkery.wait_for_bold(PILL_ROW, "tinkery  b.txt  ", WAIT);
+    assert_eq!(
+        right_of_tree(&tinkery, PILL_ROW),
+        format!("  {}", square_pill_text(&["a.txt", "b.txt"]))
+    );
+    // No Nerd Font glyph anywhere, and nothing under the pills.
+    let screen = tinkery.screen().join("\n");
+    assert!(
+        !screen.contains(CAP_L) && !screen.contains(CAP_R),
+        "{screen}"
+    );
+    assert_eq!(right_of_tree(&tinkery, UNDER_ROW), "");
+    tinkery.send_keys("alt+,");
+    tinkery.wait_for_reversed(PILL_ROW, "  a.txt  ", WAIT);
+
+    // A dirty current pill keeps its dot inside the fill, in the pill's own
+    // colour, not a `warn` block cut into it.
     tinkery.type_text("y");
-    tinkery.wait_for_reversed(PILL_ROW, " a.txt • ", WAIT);
+    tinkery.wait_for_reversed(PILL_ROW, "  a.txt •  ", WAIT);
     let name = tinkery
         .text_col(PILL_ROW, "a.txt")
         .expect("a.txt on screen");
@@ -333,13 +376,13 @@ fn ctrl_n_then_alt_s_saves_relative_to_the_project_root() {
 fn click_selects_a_pill_and_middle_click_closes_it() {
     let (_dir, mut tinkery) = open_project();
     open_both(&mut tinkery);
-    // The blank row above the pills and the thread below them are not tabs.
+    // The blank rows above and below the pills are not tabs.
     let a = tinkery.text_col(PILL_ROW, "a.txt").expect("a.txt pill");
     tinkery.click(a, 0);
-    tinkery.click(a, THREAD_ROW);
+    tinkery.click(a, UNDER_ROW);
     tinkery.assert_running_for(Duration::from_millis(200));
     wait_for_active(&tinkery, "b.txt");
-    // Any cell of a pill selects it, from cap to cap.
+    // Any cell of a pill selects it, from end to end.
     tinkery.click(PILL_X, PILL_ROW);
     wait_for_active(&tinkery, "a.txt");
     tinkery.wait_for_text("1  alpha", WAIT);

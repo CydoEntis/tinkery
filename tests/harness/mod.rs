@@ -38,21 +38,24 @@ pub fn shows_position(status: &str, position: &str) -> bool {
         .any(|(at, _)| !status[at + position.len()..].starts_with(|c: char| c.is_ascii_digit()))
 }
 
-/// What a split's pill row reads from the cell its first pill starts in, trailing
-/// blanks cut: each label (` name `, or ` name • ` for a dirty tab named
-/// `name •`) between caps, `▐ ▌` round the active one and blanks round the
-/// rest, one blank apart (design README §2.2).
-pub fn pill_text(names: &[&str], active: usize) -> String {
+/// What a split's pill row reads from the cell its first pill starts in: each
+/// name (`name •` for a dirty tab) between blanks, between the pill's round
+/// ends, one blank between pills. The current tab reads like the rest;
+/// `wait_for_current_pill` tells it by its fill.
+pub fn pill_text(names: &[&str]) -> String {
     names
         .iter()
-        .enumerate()
-        .map(|(index, name)| {
-            if index == active {
-                format!("▐ {name} ▌")
-            } else {
-                format!("  {name}  ")
-            }
-        })
+        .map(|name| format!("{CAP_L} {name} {CAP_R}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The same with square ends (`pill_caps` off, or `mono`): each end is a
+/// blank, so the row starts with two and its trailing ones are cut.
+pub fn square_pill_text(names: &[&str]) -> String {
+    names
+        .iter()
+        .map(|name| format!("  {name}  "))
         .collect::<Vec<_>>()
         .join(" ")
         .trim_end()
@@ -657,6 +660,72 @@ impl Tinkery {
                 panic!(
                     "timed out after {timeout:?} waiting for ({col}, {row}) to have                      background {color:?}; it has {bg:?}
 {}",
+                    dump(&screen_lines(&parser))
+                );
+            }
+            parser = self
+                .shared
+                .changed
+                .wait_timeout(parser, deadline - now)
+                .expect("screen lock poisoned")
+                .0;
+        }
+    }
+
+    /// Waits until, of the pills `names` drawn on `row` from column `x` (see
+    /// `pill_text`), pill `current` alone is filled as it is: its background
+    /// differs from every other pill's and theirs agree. One pill has nothing
+    /// to be told from. Panics with the screen on timeout.
+    pub fn wait_for_current_pill(
+        &self,
+        row: u16,
+        x: u16,
+        names: &[&str],
+        current: usize,
+        timeout: Duration,
+    ) {
+        // Each pill is an end, a blank, the name, a blank and an end, and the
+        // next starts a blank later; a pill is read at its name's first cell.
+        let mut start = x;
+        let cols: Vec<u16> = names
+            .iter()
+            .map(|name| {
+                let col = start + 2;
+                start += u16::try_from(name.chars().count()).expect("a short name") + 5;
+                col
+            })
+            .collect();
+        let deadline = Instant::now() + timeout;
+        let mut parser = self.parser();
+        loop {
+            let fills: Vec<vt100::Color> = cols
+                .iter()
+                .map(|&col| {
+                    parser
+                        .screen()
+                        .cell(row, col)
+                        .map_or(vt100::Color::Default, |cell| cell.bgcolor())
+                })
+                .collect();
+            let others: Vec<vt100::Color> = fills
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| *index != current)
+                .map(|(_, fill)| *fill)
+                .collect();
+            let told_apart = fills.get(current).is_none_or(|fill| {
+                others
+                    .iter()
+                    .all(|other| other != fill && *other == others[0])
+            });
+            if told_apart {
+                return;
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                panic!(
+                    "timed out after {timeout:?} waiting for pill {current} of {names:?} on \
+                     row {row} to be the current one; the fills are {fills:?}\n{}",
                     dump(&screen_lines(&parser))
                 );
             }

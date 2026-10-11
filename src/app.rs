@@ -4743,7 +4743,7 @@ impl App {
         for split in order {
             let area = panes.splits[split];
             let tabs = &self.tabs.splits[split];
-            // The splash has the editor area to itself: no pills or thread over
+            // The splash has the editor area to itself: no pills over
             // it, and no cursor in a buffer that isn't shown.
             if let Some(splash) = &self.splash {
                 splash.render(theme, &self.project, frame, area.editor);
@@ -4752,13 +4752,22 @@ impl App {
             // The key list keeps the tab bar, with no tab on it, and has the
             // editor area to itself.
             if self.no_file {
-                render_tabs(theme, &[], 0, split == focused, area.header, frame);
+                render_tabs(
+                    self.look,
+                    theme,
+                    &[],
+                    0,
+                    split == focused,
+                    area.header,
+                    frame,
+                );
                 let rows = nofile::rows(&self.keymap);
                 let folder = file_name(&absolute(self.tree.root()));
                 nofile::render(theme, &folder, &rows, frame, area.editor);
                 continue;
             }
             render_tabs(
+                self.look,
                 theme,
                 &self.tabs.labels(split),
                 tabs.active,
@@ -4985,7 +4994,7 @@ fn file_name(path: &Path) -> String {
 }
 
 /// One editor split's place on screen: its tab header (a blank row, the pills and
-/// the aurora thread) and the editor below it.
+/// a blank row) and the editor below it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SplitArea {
     header: Rect,
@@ -7289,11 +7298,12 @@ world",
 
         let buffer = terminal.backend().buffer();
         let row = |y: u16| -> String { (0..100).map(|x| buffer[(x, y)].symbol()).collect() };
-        // A blank row, the pill, the thread, then an empty buffer: one numbered
+        // A blank row, the pill, a blank row, then an empty buffer: one numbered
         // line and nothing below.
         assert_eq!(row(0).trim(), "");
-        assert_eq!(row(1).trim(), "▐ untitled ▌");
-        assert!(row(2).chars().all(|c| c == '─'));
+        let (l, r) = (crate::ui::kit::CAP_L, crate::ui::kit::CAP_R);
+        assert_eq!(row(1).trim(), format!("{l} untitled {r}"));
+        assert_eq!(row(2).trim(), "");
         assert_eq!(row(3).trim_end(), "   1");
         for y in 4..29 {
             assert_eq!(row(y).trim(), "", "row {y} should be blank");

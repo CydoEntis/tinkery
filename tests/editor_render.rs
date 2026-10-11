@@ -3,7 +3,7 @@ mod harness;
 use std::fs;
 use std::time::Duration;
 
-use harness::{COLS, ROWS, Tinkery};
+use harness::{COLS, ROWS, Tinkery, pill_text};
 use vt100::Color;
 
 const START: Duration = Duration::from_secs(10);
@@ -101,11 +101,11 @@ fn no_path_opens_untitled_under_the_splash() {
 
     let screen = tinkery.screen();
     assert!(status_line(&tinkery).contains("untitled"), "{screen:#?}");
-    // The tab header (blank, pill, thread), one empty line numbered 1, and
+    // The tab header (blank, pill, blank), one empty line numbered 1, and
     // nothing else.
     assert_eq!(screen[0].trim(), "", "{screen:#?}");
-    assert_eq!(screen[1].trim(), "▐ untitled ▌", "{screen:#?}");
-    assert!(screen[2].chars().all(|c| c == '─'), "{screen:#?}");
+    assert_eq!(screen[1].trim(), pill_text(&["untitled"]), "{screen:#?}");
+    assert_eq!(screen[2].trim(), "", "{screen:#?}");
     assert_eq!(screen[3].trim(), "1", "{screen:#?}");
     assert!(
         screen[4..usize::from(ROWS) - 1]

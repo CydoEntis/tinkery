@@ -132,7 +132,7 @@ fn the_splash_has_the_wordmark_rule_path_and_actions_with_no_card() {
     let (_home, tinkery) = start_bare();
     tinkery.wait_for_fg_at(LABEL_X, NEW_FILE_ROW, STRONG, WAIT);
 
-    // No pills or thread in the header rows.
+    // No pills in the header rows.
     let screen = tinkery.screen();
     for row in 0..3 {
         assert_eq!(screen[row].trim(), "", "header row {row}: {screen:#?}");
@@ -299,7 +299,7 @@ fn esc_or_ctrl_n_leaves_the_splash_for_the_untitled_buffer() {
         tinkery.send_keys(key);
         tinkery.wait_for_text_gone("Open directory", WAIT);
         // One untitled tab, the one the splash stood in for, taking the typing.
-        tinkery.wait_for_text(&pill_text(&["untitled"], 0), WAIT);
+        tinkery.wait_for_text(&pill_text(&["untitled"]), WAIT);
         tinkery.type_text("hi");
         tinkery.wait_for_text("1  hi", WAIT);
     }
@@ -314,7 +314,7 @@ fn opening_a_file_with_ctrl_p_replaces_the_splash() {
     tinkery.wait_for_text("✦ notes.txt", WAIT);
     tinkery.send_keys("enter");
     tinkery.wait_for_text("notes for the tree test", WAIT);
-    tinkery.wait_for_text(&pill_text(&["notes.txt"], 0), WAIT);
+    tinkery.wait_for_text(&pill_text(&["notes.txt"]), WAIT);
     let screen = tinkery.screen().join("\n");
     assert!(!screen.contains("Open directory"), "{screen}");
 }
@@ -387,7 +387,7 @@ fn new_file_creates_in_the_project_folder_and_opens_it() {
     });
     assert!(!parent.path().join("b.txt").exists());
     tinkery.wait_for_text_gone("Open directory", WAIT);
-    tinkery.wait_for_text(&pill_text(&["b.txt"], 0), WAIT);
+    tinkery.wait_for_text(&pill_text(&["b.txt"]), WAIT);
     tinkery.type_text("hi");
     tinkery.wait_for_text("1  hi", WAIT);
 }
@@ -497,7 +497,7 @@ fn open_directory_switches_and_lands_on_the_tree_and_an_empty_pane() {
     tinkery.wait_for_text_gone("Open directory", WAIT);
     tinkery.wait_for_text("no file open", WAIT);
     tinkery.send_keys("enter");
-    tinkery.wait_for_text(&pill_text(&["inside.txt"], 0), WAIT);
+    tinkery.wait_for_text(&pill_text(&["inside.txt"]), WAIT);
 }
 
 #[test]
@@ -547,7 +547,7 @@ fn a_bare_start_keeps_the_tree_hidden_after_the_splash() {
     let (_home, mut tinkery) = start_bare();
     tinkery.send_keys("esc");
     tinkery.wait_for_text_gone("Open directory", WAIT);
-    tinkery.wait_for_text(&pill_text(&["untitled"], 0), WAIT);
+    tinkery.wait_for_text(&pill_text(&["untitled"]), WAIT);
     let screen = tinkery.screen().join("\n");
     assert!(!screen.contains("a.txt"), "{screen}");
 }
