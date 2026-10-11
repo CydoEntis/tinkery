@@ -1,6 +1,6 @@
 # Spec: Tinkery Aurora
 
-Intent: [intent.md](intent.md) · Status: accepted · Date: 2026-10-07
+Intent: [intent.md](intent.md) · Status: superseded by [Tinkery Forge](../tinkery-forge/spec.md) · Date: 2026-10-07
 
 Design source: [design/README.md](design/README.md) (main frame, cast palette, themes,
 restyle rules) wins over [design/SPEC_V1_LAYOUT.md](design/SPEC_V1_LAYOUT.md), which gives
@@ -44,8 +44,10 @@ needs is Phase 11, not this spec.
   `tests/split.rs`.
 - **R5.** Status bar per README §2.5: brand block (gradient bg, `✦ tinkery` in `acc_ink`),
   path at x=20 (dir `muted`, name `strong`, ` •` `warn` when dirty), `Ln l, Col c` and
-  diagnostic counts right-aligned; transient messages and the diagnostic under the cursor
-  take the path slot until the next key. — PTY tests.
+  diagnostic counts right-aligned; the diagnostic under the cursor takes the path slot.
+  Notes from an action no longer sit there until the next key: since Tinkery Forge
+  (2026-10-11) they are toasts that leave by themselves after 2.5 s, or 4.5 s for an error
+  ([Forge spec](../tinkery-forge/spec.md) F22). — PTY tests.
 - **R6.** The status bar shows the language and the server state (ready `● ok` · starting
   `○ warn` · not found `○ muted` + `no server` · crashed `✕ err`), dropping server → language
   → directory as the row narrows (README §2.5). — PTY `tests/lsp.rs` with the fake server.

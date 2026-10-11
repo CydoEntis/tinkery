@@ -393,7 +393,7 @@ const PANEL_ROW: u16 = 20;
 const STACK_END: u16 = 39;
 /// The keys the paused panel's title offers, drawn as keycaps.
 const PAUSED_HINTS: &[(&str, &str)] =
-    &[("tab", "stack/variables"), ("F6", "focus"), ("F4", "hide")];
+    &[("Tab", "stack/variables"), ("F6", "focus"), ("F4", "hide")];
 
 /// Requests named `command` whose `key` argument is `value`.
 fn asked(project: &Project, command: &str, key: &str, value: i64) -> usize {
@@ -463,7 +463,7 @@ fn the_debug_panel_takes_the_run_panels_slot_while_debugging() {
     tinkery.wait_for_text("debug main.py  stopped", WAIT);
     tinkery.wait_for_text_gone("call stack", WAIT);
     tinkery.wait_for_text(
-        &hints_text(&[("alt+F5", "debug again"), ("F4", "hide")]),
+        &hints_text(&[("Alt+F5", "debug again"), ("F4", "hide")]),
         WAIT,
     );
 }
@@ -484,13 +484,13 @@ fn in_mono_the_selected_rows_are_reverse_video_and_the_keycaps_bold_text() {
     }
     let title = &tinkery.screen()[usize::from(PANEL_ROW)];
     assert!(
-        title.ends_with("    tab  stack/variables    F6  focus    F4  hide"),
+        title.ends_with("    Tab  stack/variables    F6  focus    F4  hide"),
         "{title:?}"
     );
     assert_eq!(title.chars().count(), usize::from(harness::COLS) - 1);
     assert_eq!(
         tinkery.bold_text(PANEL_ROW).replace(' ', ""),
-        "debugmain.pytabF6F4"
+        "debugmain.pyTabF6F4"
     );
 
     // With the keys on the variables side, its selected row is reversed too.

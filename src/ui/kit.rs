@@ -1141,13 +1141,13 @@ mod tests {
     fn hints_are_keycaps_and_muted_words_three_blanks_apart() {
         for (look, theme, round) in looks() {
             let ground = theme.raised2;
-            let line = hints(look, &theme, &[("⏎", "create"), ("esc", "cancel")], ground);
-            // ` ⏎  create    esc  cancel`, the blanks round a key being its ends.
+            let line = hints(look, &theme, &[("⏎", "create"), ("Esc", "cancel")], ground);
+            // ` ⏎  create    Esc  cancel`, the blanks round a key being its ends.
             assert_eq!(width(&line), 25);
             let buf = drawn(&line, 25);
             let ends = if round { (CAP_L, CAP_R) } else { (" ", " ") };
             let (l, r) = ends;
-            assert_eq!(row(&buf), format!("{l}⏎{r} create   {l}esc{r} cancel"));
+            assert_eq!(row(&buf), format!("{l}⏎{r} create   {l}Esc{r} cancel"));
             assert_end(&buf, 0, CAP_L, round, theme.btn, ground);
             assert_end(&buf, 2, CAP_R, round, theme.btn, ground);
             assert_eq!((buf[(1, 0)].fg, buf[(1, 0)].bg), (theme.strong, theme.btn));

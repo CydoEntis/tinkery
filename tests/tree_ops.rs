@@ -127,7 +127,7 @@ fn hint_for(label: &str) -> [(&'static str, &'static str); 2] {
     } else {
         "create"
     };
-    [("⏎", enter), ("esc", "cancel")]
+    [("⏎", enter), ("Esc", "cancel")]
 }
 
 /// Waits for the prompt bar to be a strip from edge to edge reading
@@ -155,8 +155,8 @@ fn wait_for_bar(tinkery: &Tinkery, label: &str, value: &str) {
     assert_eq!(tinkery.fg_at(2, row), BAR_TEXT);
     // The keys, and nothing else, are on `btn`, in `strong` and bold; their
     // round ends are `btn` on the strip.
-    assert_eq!(tinkery.bg_text(row, BTN), "⏎esc");
-    assert_eq!(tinkery.bold_text(row), "⏎esc");
+    assert_eq!(tinkery.bg_text(row, BTN), "⏎Esc");
+    assert_eq!(tinkery.bold_text(row), "⏎Esc");
     assert_eq!(tinkery.fg_at(hint_x + 1, row), STRONG);
     // (A blank has no colour of its own to read, so only the glyphs count.)
     let caps = format!("{CAP_L}{CAP_R}{CAP_L}{CAP_R}");
@@ -164,7 +164,7 @@ fn wait_for_bar(tinkery: &Tinkery, label: &str, value: &str) {
     // Everything else between the strip's ends is on `raised2`.
     assert_eq!(
         tinkery.bg_text(row, RAISED2).chars().count(),
-        usize::from(COLS) - 2 - "⏎esc".chars().count()
+        usize::from(COLS) - 2 - "⏎Esc".chars().count()
     );
     // ` create` and ` cancel`: the words follow their keycaps.
     assert_eq!(tinkery.fg_at(hint_x + 4, row), MUTED);
@@ -393,7 +393,7 @@ fn renaming_with(toml: &str) -> (tempfile::TempDir, Tinkery) {
 /// The prompt bar with square ends: every pill end a blank, so the label, the
 /// keys and the words sit in the cells they have with round ends.
 const SQUARE_BAR: &str = "  Rename  notes.txt";
-const SQUARE_HINT: &str = " ⏎  rename    esc  cancel";
+const SQUARE_HINT: &str = " ⏎  rename    Esc  cancel";
 
 fn wait_for_square_bar(tinkery: &Tinkery) {
     let hint_x = usize::from(COLS) - SQUARE_HINT.chars().count() - 2;
@@ -422,10 +422,10 @@ fn pill_caps_off_squares_the_prompt_bar_and_its_keycaps() {
     }
     assert_eq!(
         tinkery.bg_text(row, RAISED2).chars().count(),
-        usize::from(COLS) - " ⏎  esc ".chars().count()
+        usize::from(COLS) - " ⏎  Esc ".chars().count()
     );
-    assert_eq!(tinkery.bg_text(row, BTN), " ⏎  esc ");
-    assert_eq!(tinkery.bold_text(row), "⏎esc");
+    assert_eq!(tinkery.bg_text(row, BTN), " ⏎  Esc ");
+    assert_eq!(tinkery.bold_text(row), "⏎Esc");
     assert_eq!(tinkery.fg_at(COLS - 3, row), MUTED);
 }
 
@@ -437,7 +437,7 @@ fn mono_draws_the_prompt_bar_without_nerd_font_glyphs() {
     let row = BAR as u16;
     // The keys are bold, and the words beside them are not the strip's own
     // dark grey, which `mono`'s `muted` is.
-    assert_eq!(tinkery.bold_text(row), "⏎esc");
+    assert_eq!(tinkery.bold_text(row), "⏎Esc");
     let word = COLS - 3;
     assert_ne!(tinkery.fg_at(word, row), tinkery.bg_at(word, row));
 }

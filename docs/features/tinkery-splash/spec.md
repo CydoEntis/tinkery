@@ -33,26 +33,32 @@ Intent: [intent.md](intent.md) · Status: accepted · Date: 2026-10-08
   opens the file with no splash — checked by PTY tests.
 - **S2.** The splash fills the editor area with no card, as in
   [design/splash.png](design/splash.png), centred as one block: the `tinkery` wordmark in
-  block letters 4 rows tall (half-block pixels), each column coloured along the theme's
-  accent → accent2 ramp (`theme::grad`), on a soft glow (background cells blended toward
-  `accent2`, fading with distance); a one-row rule in the same ramp, fading at both ends; a
+  block letters 5 rows tall (half-block pixels), each column coloured along the theme's
+  accent → accent2 ramp (`theme::grad`), on the plain editor ground with no glow behind
+  it; a one-row rule in the same ramp, fading at both ends; a
   blank row; the project path with the home folder as `~`, its last folder in `strong` bold
-  and the rest in `muted`, cut with `…` to fit; a blank row; three rows one blank row apart
-  — *New file* · `in <path>` · `n`, *New directory* · `in <path>` · `d`, *Open directory* ·
-  `choose a folder` · `o` (label in `text`, hint in `muted`, key right-aligned in `muted`).
-  The selected row lies on the dialog glow with `✦` in `accent2`, its label `strong` bold
-  and its key `accent` bold. With too little room the wordmark becomes `✦ tinkery` on one
-  row; with less, the hints go, then the path. In `mono` there's no glow, the wordmark and
-  rule are plain and the selected row is reverse video — checked by PTY tests (text,
-  positions, colours, mono) and unit tests of each size step.
+  and the rest in `muted`, cut with `…` to fit; a blank row; three rows one blank row apart,
+  each a button holding its label and its key, with a hint in `muted` beside it —
+  ` New file n ` · `in <path>`, ` New directory d ` · `in <path>`, ` Open directory o ` ·
+  `choose a folder`. The buttons share a left edge and the hints a column. The selected
+  action is the primary button (`accent` fill, label and key `acc_ink` bold); the others
+  are normal buttons (`btn` fill, bold), lit `hov` under the pointer. There is no `✦` mark
+  and no glow row. With too little room the wordmark becomes `✦ tinkery` on one
+  row; with less, the hints go, then the path. In `mono` the wordmark and
+  rule are plain and the selected button is reverse video — checked by PTY tests (text,
+  positions, colours, mono) and unit tests of each size step. The look changed with
+  [Tinkery Forge](../tinkery-forge/spec.md) F20 (2026-10-11): buttons replaced the glow
+  rows, and the glow behind the wordmark went.
 - **S3.** ↑ / ↓ move the selection (wrapping), Enter or the row's letter runs it, a click
   on a row runs it. Esc or Ctrl+N leaves the splash for the empty untitled buffer. Opening
   any file (Ctrl+P, the tree) replaces the splash. With the tree open the
   splash has focus at launch; Ctrl+E moves focus to the tree as usual. While the splash is
   up the tree is hidden (Ctrl+B or Ctrl+E shows it), the status bar shows the project path
-  where it would say `untitled` and, on the right, `↑↓ select  ⏎ choose  q quit` and
+  where it would say `untitled` and, on the right, the hints `↑↓` select, `⏎` choose and
+  `q` quit, each key a keycap, and
   Tinkery's version in place of the cursor position and language, and `q` quits as Ctrl+Q
-  does — checked by PTY tests.
+  does — checked by PTY tests. The hints became keycaps with
+  [Tinkery Forge](../tinkery-forge/spec.md) F12 (2026-10-11).
 - **S4.** *New file* opens the name prompt the tree's `a` uses, creates the file in the
   project folder, and opens it in a tab; Esc in the prompt returns to the splash; an
   invalid or existing name shows the existing error and creates nothing — checked by PTY
@@ -63,7 +69,7 @@ Intent: [intent.md](intent.md) · Status: accepted · Date: 2026-10-08
   as the cast palette, lit `▀` edge): header `✦ <folder path>` with `open · folders`
   right-aligned in `muted`; a `line2` rule; first row `⏎ open <folder path>`; then the
   folder's sub-folders sorted case-insensitively, dot-folders last, scrolling past the
-  card; the footer `⏎ into  ← up  ctrl+⏎ open here  esc cancel`. It starts in the current
+  card; the footer `⏎ into  ← up  Ctrl+⏎ open here  Esc close`. It starts in the current
   project folder. Typing filters the folder rows fuzzily (the first row stays). Enter on
   the first row opens that folder; Enter on a folder goes into it; ← or Backspace on an
   empty query goes up (nothing above a drive or `/` root). Typing a path that names an
@@ -92,11 +98,12 @@ Intent: [intent.md](intent.md) · Status: accepted · Date: 2026-10-08
   closing the last tab), the editor area shows the key list of
   [design/no-file-open.png](design/no-file-open.png) and SPEC_V1_LAYOUT 9a, left-aligned
   in the upper third: `<project folder>/` in `strong` bold and `no file open` in `muted`,
-  then rows two apart of key in `accent` bold and label in `text` — `Ctrl+P` cast · files
+  then rows two apart of the key as a keycap and its label in `text` — `Ctrl+P` cast · files
   and commands, `Ctrl+N` new file, `Ctrl+B` toggle tree, `Ctrl+Q` quit (keys read from the
   keymap, so a rebound key shows its new name). The tab bar shows no tab and typing does
-  nothing; opening a file or Ctrl+N replaces it. In `mono` it's plain text — checked by PTY
-  tests.
+  nothing; opening a file or Ctrl+N replaces it. In `mono` it's plain text around bold
+  keycaps — checked by PTY tests. The keys became keycaps with
+  [Tinkery Forge](../tinkery-forge/spec.md) F20 (2026-10-11).
 - **S10.** Every on-screen requirement has a PTY test; `cargo fmt --check && cargo clippy
   --all-targets -- -D warnings && cargo test` passes on Windows and Ubuntu.
 
@@ -117,8 +124,9 @@ Intent: [intent.md](intent.md) · Status: accepted · Date: 2026-10-08
     `n` / `d` / `o`, dismiss) bound in `src/keymap.rs`.
   - A way in `src/lsp/` to shut down and forget every server started for one root.
 - **Reuses**:
-  - `src/ui/mod.rs` — `dim`, `dialog_card`, `glow_row`, `enter_mark`, `footer`, for the
-    browser and splash rows.
+  - `src/ui/kit.rs` — the shared kit (buttons, keycaps, panels), for the browser and
+    splash rows. It replaced the `src/ui/mod.rs` helpers this spec first named, which
+    went with [Tinkery Forge](../tinkery-forge/spec.md) F24 (2026-10-11).
   - `src/ui/confirm.rs` — `Confirm`, `Choice`, for S9.
   - `src/app.rs` — `start_create` / `finish_name_prompt` (`:1720`, `:1768`), for S4–S5.
   - `src/ui/tree.rs:77-85` — the brand ramp (`theme::grad`), for the wordmark.

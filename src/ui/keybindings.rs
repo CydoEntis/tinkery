@@ -26,7 +26,7 @@ const CHROME: u16 = 7;
 // Delete, not Backspace, resets: Backspace keeps correcting the query.
 const HINTS: [(&str, &str); 3] = [("⏎", "rebind"), ("Del", "reset"), ("Esc", "close")];
 /// What the selected row shows in place of its keys while Enter waits for one.
-pub const WAITING: &str = "press a key… (esc cancels)";
+pub const WAITING: &str = "press a key… (Esc cancels)";
 /// What a command with no key shows in place of its keys.
 const NO_KEY: &str = "—";
 /// Cells for the title, so the config names line up: the longest title and two

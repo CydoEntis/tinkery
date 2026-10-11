@@ -262,7 +262,7 @@ mod tests {
         motion: true,
         glide: None,
     };
-    const HINT: [(&str, &str); 2] = [("⏎", "create"), ("esc", "cancel")];
+    const HINT: [(&str, &str); 2] = [("⏎", "create"), ("Esc", "cancel")];
 
     /// Draws `bar` with `HINT` across row 1 of a 50-cell screen filled with the
     /// theme's `bg`, as the app's frame is.
@@ -296,7 +296,7 @@ mod tests {
         assert_eq!(
             row(&buffer, 1),
             format!(
-                "{l}{:<22}{l}⏎{r} create   {l}esc{r} cancel {r}",
+                "{l}{:<22}{l}⏎{r} create   {l}Esc{r} cancel {r}",
                 " New file  notes.md"
             )
         );
@@ -339,7 +339,7 @@ mod tests {
             // Every end is a blank, so nothing moved.
             assert_eq!(
                 row(&buffer, 1),
-                format!("{:<23} ⏎  create    esc  cancel  ", "  New file  notes.md")
+                format!("{:<23} ⏎  create    Esc  cancel  ", "  New file  notes.md")
             );
             assert_eq!(at, (20, 1));
             for x in [0, 49] {
@@ -363,7 +363,7 @@ mod tests {
         let bar = PromptBar::new("Rename", "a.md");
         let mut terminal = Terminal::new(TestBackend::new(20, 1))?;
         terminal.draw(|frame| {
-            let hint = [("⏎", "rename"), ("esc", "cancel")];
+            let hint = [("⏎", "rename"), ("Esc", "cancel")];
             bar.render(ROUND, &theme, frame, frame.area(), &hint);
         })?;
         let buffer = terminal.backend().buffer();

@@ -390,7 +390,7 @@ impl ProjectSearch {
             out.set_stringn(
                 replace_at.0,
                 replace_at.1,
-                "tab to replace",
+                "Tab to replace",
                 usize::from(right.saturating_sub(replace_at.0)),
                 Style::new().fg(quiet).bg(theme.raised2),
             );
@@ -928,7 +928,7 @@ mod tests {
             assert_strip(&buffer, &theme, card, y);
             let line = card_row(&buffer, card, y);
             assert!(
-                line.starts_with(&format!("▕{CAP_L}  ✦ Replace  tab to replace ")),
+                line.starts_with(&format!("▕{CAP_L}  ✦ Replace  Tab to replace ")),
                 "{name}: {line:?}"
             );
             let label = &buffer[(card.x + 6, y)];
@@ -1024,7 +1024,7 @@ mod tests {
             line.starts_with(&format!("▕{CAP_L}  ✦ Replace  ab ")),
             "{line:?}"
         );
-        assert!(!line.contains("tab to replace"), "{line:?}");
+        assert!(!line.contains("Tab to replace"), "{line:?}");
         assert_eq!(buffer[(card.x + 15, replace_y)].fg, theme.strong);
         // The cursor is in the Replace field, after what's typed.
         assert_eq!(at, (card.x + 17, replace_y));

@@ -35,6 +35,8 @@ All three must pass before a change is done. CI runs them on Windows and Ubuntu.
 | `src/buffer/` | `Buffer`: rope, cursor, selection, edits, undo history, line endings |
 | `src/view/` | editor viewport and rendering of a buffer |
 | `src/ui/` | chrome: tab bar, status line, tree panel, popups, picker, find bar, run panel |
+| `src/ui/kit.rs` | the shared drawing kit every screen draws through: pills, buttons, keycaps and hints, cards and panels, the selected row |
+| `src/ui/toast.rs` | toasts: the notes from an action, shown at the top right of the editor area |
 | `src/workspace/` | project root, file walking, tree model, file operations |
 | `src/save.rs`, `src/backup.rs` | atomic save, crash backups |
 | `src/theme.rs` | themes and overrides |

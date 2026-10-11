@@ -17,8 +17,8 @@ use crate::theme::Theme;
 use crate::ui::kit::{self, Look, RowInk};
 use crate::ui::run::{Hints, RunView, render_output};
 
-const PAUSED_HINTS: &Hints = &[("tab", "stack/variables"), ("F6", "focus"), ("F4", "hide")];
-const RUNNING_HINTS: &Hints = &[("alt+F6", "stop"), ("F4", "hide")];
+const PAUSED_HINTS: &Hints = &[("Tab", "stack/variables"), ("F6", "focus"), ("F4", "hide")];
+const RUNNING_HINTS: &Hints = &[("Alt+F6", "stop"), ("F4", "hide")];
 
 /// Where a row's text starts in its side: past the selected row's pill end,
 /// its mark and a blank.
@@ -793,7 +793,7 @@ mod tests {
         assert_eq!((right.fg, right.bg), (theme.btn, theme.surface));
         assert_eq!(
             (key.symbol(), key.fg, key.bg),
-            ("t", theme.strong, theme.btn)
+            ("T", theme.strong, theme.btn)
         );
         assert!(key.modifier.contains(Modifier::BOLD));
         let word = &buffer[(at + 6, 0)];
