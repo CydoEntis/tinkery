@@ -128,10 +128,7 @@ fn syncs_document() {
     // The query echoes before the file walk fills the list; Enter on an empty
     // list does nothing, so wait for b.rs's own row to be selected.
     tinkery.wait_for_screen("b.rs's row in the picker", WAIT, |lines| {
-        lines.iter().any(|line| {
-            let row = line.trim();
-            row.starts_with("b.rs") && row.ends_with('⏎')
-        })
+        lines.iter().any(|line| line.contains("› b.rs "))
     });
     tinkery.send_keys("enter");
     tinkery.wait_for_text_gone("cast · files · commands", WAIT);
