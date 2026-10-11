@@ -1,7 +1,8 @@
-//! The status bar on the last row (design README §2.5): the brand block, the
-//! path slot at x = 20, and on the right the debug session's state, the cursor
-//! position, the language, its server's state and the diagnostic counts — or, while the splash is up, its
-//! keys and Tinkery's version.
+//! The status bar on the last row (design README §2.5, tinkery-forge spec F12):
+//! the brand block on its ramp, then everything flat on `surface`: the path
+//! slot at x = 20, and on the right the debug session's state, the cursor
+//! position, the language, its server's state and the diagnostic counts — or,
+//! while the splash is up, its keys as keycap hints and Tinkery's version.
 
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
@@ -11,6 +12,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::lsp::ServerState;
 use crate::theme::{Theme, grad, mix};
+use crate::ui::kit::{self, Look};
 
 /// Cells the brand block covers: ten on the accent ramp, then eight fading into
 /// the bar.
@@ -100,7 +102,7 @@ struct Shown {
 
 /// The fullest `Shown` whose left and right sides fit side by side in `width`.
 /// When even the leanest doesn't fit, the left side is cut as drawn.
-fn layout(theme: &Theme, status: &Status, width: u16) -> Shown {
+fn layout(look: Look, theme: &Theme, status: &Status, width: u16) -> Shown {
     let shown = |server, language, dir| Shown {
         server,
         language,
@@ -124,7 +126,7 @@ fn layout(theme: &Theme, status: &Status, width: u16) -> Shown {
         .chain([last])
         .find(|&shown| {
             let left = runs_width(&left_runs(theme, status, shown.dir));
-            let right = runs_width(&right_runs(theme, status, shown));
+            let right = runs_width(&right_runs(look, theme, status, shown));
             // The left slot stops a cell short of the right side, which ends at W − 2.
             u32::from(PATH_X) + u32::from(left) + 1 + u32::from(right) + 2 <= u32::from(width)
         })
@@ -132,7 +134,7 @@ fn layout(theme: &Theme, status: &Status, width: u16) -> Shown {
 }
 
 /// Draws the one-row status bar.
-pub fn render_status(frame: &mut Frame, theme: &Theme, area: Rect, status: &Status) {
+pub fn render_status(frame: &mut Frame, look: Look, theme: &Theme, area: Rect, status: &Status) {
     let buf = frame.buffer_mut();
     let bar = Style::new().fg(theme.text).bg(theme.surface);
     buf.set_style(area, bar);
@@ -153,8 +155,8 @@ pub fn render_status(frame: &mut Frame, theme: &Theme, area: Rect, status: &Stat
         )],
     );
 
-    let shown = layout(theme, status, area.width);
-    let right = right_runs(theme, status, shown);
+    let shown = layout(look, theme, status, area.width);
+    let right = right_runs(look, theme, status, shown);
     // Right-aligned to W − 2 like the design's `putRight`, which ends just before it.
     let right_x = right_edge
         .saturating_sub(2)
@@ -218,10 +220,10 @@ fn left_runs(theme: &Theme, status: &Status, dir: bool) -> Vec<Run> {
 
 /// The position, the language and its server as `shown` allows, then the counts
 /// while the server reports anything.
-fn right_runs(theme: &Theme, status: &Status, shown: Shown) -> Vec<Run> {
+fn right_runs(look: Look, theme: &Theme, status: &Status, shown: Shown) -> Vec<Run> {
     let text = Style::new().fg(theme.text);
     if status.splash {
-        return splash_runs(theme, shown.language);
+        return splash_runs(look, theme, shown.language);
     }
     let gap = || (GAP.to_string(), Style::new());
     let mut runs = Vec::new();
@@ -276,29 +278,28 @@ fn right_runs(theme: &Theme, status: &Status, shown: Shown) -> Vec<Run> {
     runs
 }
 
-/// The splash's keys, each lit with its label muted, then the version
-/// (design/splash.png). The keys go where the language would, so a long message
-/// or path drops them before it's cut.
-fn splash_runs(theme: &Theme, keys: bool) -> Vec<Run> {
-    let key = Style::new().fg(theme.text);
-    let label = Style::new().fg(theme.muted);
+/// What the splash's keys do, in the order the bar lists them.
+const SPLASH_HINTS: [(&str, &str); 3] = [("↑↓", "select"), ("⏎", "choose"), ("q", "quit")];
+
+/// The splash's keys as keycap hints on the bar, then the version. The keys go
+/// where the language would, so a long message or path drops them before it's
+/// cut.
+fn splash_runs(look: Look, theme: &Theme, keys: bool) -> Vec<Run> {
     let mut runs = Vec::new();
     if keys {
-        for (i, (k, what)) in [("↑↓", "select"), ("⏎", "choose"), ("q", "quit")]
-            .into_iter()
-            .enumerate()
-        {
-            if i > 0 {
-                runs.push(("  ".to_string(), Style::new()));
-            }
-            runs.push((format!("{k} "), key));
-            runs.push((what.to_string(), label));
-        }
+        runs.extend(
+            kit::hints(look, theme, &SPLASH_HINTS, theme.surface)
+                .into_iter()
+                .map(|span| (span.content.into_owned(), span.style)),
+        );
         // Wider than GAP: design/splash.png sets the version six cells clear
         // of `q quit`.
         runs.push((" ".repeat(6), Style::new()));
     }
-    runs.push((format!("v{}", env!("CARGO_PKG_VERSION")), label));
+    runs.push((
+        format!("v{}", env!("CARGO_PKG_VERSION")),
+        Style::new().fg(theme.muted),
+    ));
     runs
 }
 
@@ -326,9 +327,11 @@ fn width(s: &str) -> u16 {
 mod tests {
     use super::*;
 
+    const LOOK: Look = Look { pill_caps: true };
+
     #[test]
     fn the_block_ramps_from_accent_to_accent2_then_fades_into_the_bar() {
-        let theme = Theme::named("aurora").expect("aurora exists");
+        let theme = Theme::named("tinkery").expect("tinkery exists");
         assert_eq!(block_bg(&theme, 0), theme.accent);
         assert_eq!(block_bg(&theme, 9), theme.accent2);
         assert_eq!(
@@ -355,7 +358,7 @@ mod tests {
 
     #[test]
     fn narrowing_drops_the_server_then_the_language_then_the_directory() {
-        let theme = Theme::named("aurora").expect("aurora exists");
+        let theme = Theme::named("tinkery").expect("tinkery exists");
         let status = Status {
             path: "src/ui/status.rs",
             dirty: true,
@@ -365,29 +368,41 @@ mod tests {
             ..Status::default()
         };
         assert_eq!(
-            text(&right_runs(&theme, &status, shown(true, true, true))),
+            text(&right_runs(LOOK, &theme, &status, shown(true, true, true))),
             "Ln 52, Col 22    Rust    ● rust-analyzer"
         );
         // Path 16 + dirty mark 2 = 18; right side 13, +8 for the language, +19
         // for the server. Each width is 20 + left + 1 + right + 2.
         let full = 20 + 18 + 1 + (13 + 8 + 19) + 2;
-        assert_eq!(layout(&theme, &status, full + 10), shown(true, true, true));
-        assert_eq!(layout(&theme, &status, full), shown(true, true, true));
-        assert_eq!(layout(&theme, &status, full - 1), shown(false, true, true));
-        assert_eq!(layout(&theme, &status, full - 19), shown(false, true, true));
         assert_eq!(
-            layout(&theme, &status, full - 20),
+            layout(LOOK, &theme, &status, full + 10),
+            shown(true, true, true)
+        );
+        assert_eq!(layout(LOOK, &theme, &status, full), shown(true, true, true));
+        assert_eq!(
+            layout(LOOK, &theme, &status, full - 1),
+            shown(false, true, true)
+        );
+        assert_eq!(
+            layout(LOOK, &theme, &status, full - 19),
+            shown(false, true, true)
+        );
+        assert_eq!(
+            layout(LOOK, &theme, &status, full - 20),
             shown(false, false, true)
         );
         assert_eq!(
-            layout(&theme, &status, full - 27),
+            layout(LOOK, &theme, &status, full - 27),
             shown(false, false, true)
         );
         assert_eq!(
-            layout(&theme, &status, full - 28),
+            layout(LOOK, &theme, &status, full - 28),
             shown(false, false, false)
         );
-        assert_eq!(layout(&theme, &status, 10), shown(false, false, false));
+        assert_eq!(
+            layout(LOOK, &theme, &status, 10),
+            shown(false, false, false)
+        );
 
         let lean = left_runs(&theme, &status, false);
         assert_eq!(text(&lean), "status.rs •");
@@ -400,14 +415,14 @@ mod tests {
 
     #[test]
     fn each_server_state_has_its_glyph_and_colours() {
-        let theme = Theme::named("aurora").expect("aurora exists");
+        let theme = Theme::named("tinkery").expect("tinkery exists");
         let server = |state| {
             let status = Status {
                 language: "Rust",
                 server: Some((state, "rust-analyzer")),
                 ..Status::default()
             };
-            let runs = right_runs(&theme, &status, shown(true, true, true));
+            let runs = right_runs(LOOK, &theme, &status, shown(true, true, true));
             let n = runs.len();
             (text(&runs[n - 2..]), runs[n - 2].1.fg, runs[n - 1].1.fg)
         };
@@ -450,14 +465,14 @@ mod tests {
             ..Status::default()
         };
         assert_eq!(
-            text(&right_runs(&theme, &status, shown(true, true, true))),
+            text(&right_runs(LOOK, &theme, &status, shown(true, true, true))),
             "Ln 1, Col 1    Plain text"
         );
     }
 
     #[test]
     fn a_message_drops_the_server_and_language_before_it_is_cut() {
-        let theme = Theme::named("aurora").expect("aurora exists");
+        let theme = Theme::named("tinkery").expect("tinkery exists");
         let status = Status {
             message: Some((Tone::Warn, "rust: server not found (rust-analyzer)")),
             language: "Rust",
@@ -466,35 +481,66 @@ mod tests {
         };
         // Message 40, position 11, language 8, server 15.
         assert_eq!(
-            layout(&theme, &status, 20 + 40 + 1 + 34 + 2),
+            layout(LOOK, &theme, &status, 20 + 40 + 1 + 34 + 2),
             shown(true, true, true)
         );
         assert_eq!(
-            layout(&theme, &status, 20 + 40 + 1 + 19 + 2),
+            layout(LOOK, &theme, &status, 20 + 40 + 1 + 19 + 2),
             shown(false, true, true)
         );
         assert_eq!(
-            layout(&theme, &status, 20 + 40 + 1 + 18 + 2),
+            layout(LOOK, &theme, &status, 20 + 40 + 1 + 18 + 2),
             shown(false, false, true)
         );
     }
 
     #[test]
     fn the_splash_shows_its_keys_and_the_version_instead_of_the_cursor() {
-        let theme = Theme::named("aurora").expect("aurora exists");
+        let theme = Theme::named("tinkery").expect("tinkery exists");
         let status = Status {
             path: "~/src",
             language: "Plain text",
             splash: true,
             ..Status::default()
         };
+        let (l, r) = (kit::CAP_L, kit::CAP_R);
+        let keys = right_runs(LOOK, &theme, &status, shown(true, true, true));
         assert_eq!(
-            text(&right_runs(&theme, &status, shown(true, true, true))),
+            text(&keys),
             format!(
-                "↑↓ select  ⏎ choose  q quit      v{}",
+                "{l}↑↓{r} select   {l}⏎{r} choose   {l}q{r} quit      v{}",
                 env!("CARGO_PKG_VERSION")
             )
         );
+        // Each key is a keycap: round ends in `btn` on the bar, the key in
+        // `strong` bold on `btn`; what it does is muted on the bar.
+        assert_eq!(text(&keys[..4]), format!("{l}↑↓{r} select"));
+        for end in [&keys[0], &keys[2]] {
+            assert_eq!((end.1.fg, end.1.bg), (Some(theme.btn), Some(theme.surface)));
+        }
+        assert_eq!(
+            (keys[1].1.fg, keys[1].1.bg),
+            (Some(theme.strong), Some(theme.btn))
+        );
+        assert!(keys[1].1.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(
+            (keys[3].1.fg, keys[3].1.bg),
+            (Some(theme.muted), Some(theme.surface))
+        );
+        let version = keys.last().expect("the version");
+        assert_eq!(version.1.fg, Some(theme.muted));
+        // Squared off, the ends are blanks of `btn` and nothing moves.
+        let square = Look { pill_caps: false };
+        let squared = right_runs(square, &theme, &status, shown(true, true, true));
+        assert_eq!(
+            text(&squared),
+            format!(
+                " ↑↓  select    ⏎  choose    q  quit      v{}",
+                env!("CARGO_PKG_VERSION")
+            )
+        );
+        assert_eq!(squared[0].1.bg, Some(theme.btn));
+        assert_eq!(runs_width(&squared), runs_width(&keys));
         assert_eq!(text(&left_runs(&theme, &status, true)), "~/src");
         // The whole project path is muted, its last folder too.
         assert!(
@@ -504,7 +550,12 @@ mod tests {
         );
         // Too narrow for the keys beside a message: only the version stays.
         assert_eq!(
-            text(&right_runs(&theme, &status, shown(false, false, true))),
+            text(&right_runs(
+                LOOK,
+                &theme,
+                &status,
+                shown(false, false, true)
+            )),
             format!("v{}", env!("CARGO_PKG_VERSION"))
         );
 
@@ -514,30 +565,38 @@ mod tests {
             splash: true,
             ..Status::default()
         };
-        // Path 34, name 7; right side 27 + 6 + 6 = 39.
+        // Path 34, name 7; right side 35 of hints + 6 + 6 = 47.
         assert_eq!(
-            layout(&theme, &status, 20 + 34 + 1 + 39 + 2),
+            layout(LOOK, &theme, &status, 20 + 34 + 1 + 47 + 2),
             shown(false, true, true)
         );
         assert_eq!(
-            layout(&theme, &status, 20 + 34 + 1 + 39 + 1),
+            layout(LOOK, &theme, &status, 20 + 34 + 1 + 47 + 1),
             shown(false, true, false)
         );
         assert_eq!(
-            layout(&theme, &status, 20 + 7 + 1 + 39 + 1),
+            layout(LOOK, &theme, &status, 20 + 7 + 1 + 47 + 2),
+            shown(false, true, false)
+        );
+        assert_eq!(
+            layout(LOOK, &theme, &status, 20 + 7 + 1 + 47 + 1),
             shown(false, false, false)
         );
+        // The harness's 100 columns hold the keys beside a path of up to 30
+        // cells whole.
+        assert_eq!(20 + 30 + 1 + 47 + 2, 100);
     }
 
     #[test]
     fn a_debug_session_leads_the_right_side() {
-        let theme = Theme::named("aurora").expect("aurora exists");
+        let theme = Theme::named("tinkery").expect("tinkery exists");
         let status = |debug| Status {
             language: "Rust",
             debug: Some(debug),
             ..Status::default()
         };
         let running = right_runs(
+            LOOK,
             &theme,
             &status(Debugging::Running),
             shown(false, true, true),
@@ -545,6 +604,7 @@ mod tests {
         assert_eq!(text(&running), "● debugging    Ln 1, Col 1    Rust");
         assert_eq!(running[0].1.fg, Some(theme.warn));
         let paused = right_runs(
+            LOOK,
             &theme,
             &status(Debugging::Paused("main.rs:12")),
             shown(false, false, true),
@@ -553,6 +613,7 @@ mod tests {
         assert_eq!(paused[0].1.fg, Some(theme.accent2));
         assert_eq!(paused[1].1.fg, Some(theme.text));
         let nowhere = right_runs(
+            LOOK,
             &theme,
             &status(Debugging::Paused("")),
             shown(false, false, true),
@@ -565,6 +626,76 @@ mod tests {
         let theme = Theme::named("mono").expect("mono exists");
         for i in 0..BLOCK_WIDTH {
             assert_eq!(block_bg(&theme, i), theme.accent);
+        }
+    }
+
+    #[test]
+    fn mono_draws_the_splash_keys_without_cap_glyphs() {
+        let theme = Theme::named("mono").expect("mono exists");
+        let keys = splash_runs(LOOK, &theme, true);
+        let line = text(&keys);
+        assert!(line.starts_with(" ↑↓  select    ⏎  choose    q  quit"));
+        assert!(!line.contains(kit::CAP_L) && !line.contains(kit::CAP_R));
+        assert_eq!(
+            (keys[1].1.fg, keys[1].1.bg),
+            (Some(theme.strong), Some(theme.btn))
+        );
+    }
+
+    /// The bar as `render_status` draws it, `width` cells wide.
+    fn drawn(theme: &Theme, status: &Status, width: u16) -> Buffer {
+        let backend = ratatui::backend::TestBackend::new(width, 1);
+        let mut terminal = ratatui::Terminal::new(backend).expect("a test terminal");
+        terminal
+            .draw(|frame| render_status(frame, LOOK, theme, frame.area(), status))
+            .expect("draw the bar");
+        terminal.backend().buffer().clone()
+    }
+
+    #[test]
+    fn right_of_the_block_every_cell_is_surface_but_the_keycaps() {
+        let theme = Theme::named("tinkery").expect("tinkery exists");
+        let file = Status {
+            path: "src/ui/status.rs",
+            dirty: true,
+            language: "Rust",
+            server: Some((ServerState::Ready, "rust-analyzer")),
+            warnings: 2,
+            errors: 1,
+            debug: Some(Debugging::Paused("main.rs:12")),
+            ..Status::default()
+        };
+        let message = Status {
+            message: Some((Tone::Err, "could not save")),
+            ..file
+        };
+        for status in [file, message] {
+            let buf = drawn(&theme, &status, 120);
+            for x in BLOCK_WIDTH..120 {
+                assert_eq!(buf[(x, 0)].bg, theme.surface, "column {x}");
+            }
+        }
+        // On the splash only the keys' own cells leave the bar's colour.
+        let splash = Status {
+            path: "~/src",
+            splash: true,
+            ..Status::default()
+        };
+        let buf = drawn(&theme, &splash, 100);
+        let row: String = (0..100).map(|x| buf[(x, 0)].symbol()).collect();
+        let caps: Vec<u16> = (BLOCK_WIDTH..100)
+            .filter(|&x| buf[(x, 0)].bg != theme.surface)
+            .collect();
+        assert!(caps.iter().all(|&x| buf[(x, 0)].bg == theme.btn), "{row}");
+        let on_btn: String = caps.iter().map(|&x| buf[(x, 0)].symbol()).collect();
+        assert_eq!(on_btn, "↑↓⏎q", "{row}");
+        // The brand keeps its ramp and its bold `acc_ink` name.
+        assert_eq!(buf[(0, 0)].bg, theme.accent);
+        assert_eq!(buf[(9, 0)].bg, theme.accent2);
+        for x in 1..10 {
+            let cell = &buf[(x, 0)];
+            assert_eq!(cell.fg, theme.acc_ink, "column {x}");
+            assert!(cell.modifier.contains(Modifier::BOLD), "column {x}");
         }
     }
 }
