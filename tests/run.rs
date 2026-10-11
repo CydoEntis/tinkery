@@ -113,8 +113,11 @@ fn f5_runs_the_only_entry_and_streams_its_output_in_colour() {
     tinkery.wait_for_fg(OUTPUT_ROW, ERR, "red line", WAIT);
     assert_eq!(tinkery.bg_at(1, OUTPUT_ROW), BG);
     assert_eq!(tinkery.text_col(OUTPUT_ROW, "red line"), Some(1));
-    // The editor above stays in view.
-    assert!(row(&tinkery, 4).contains("the editor stays visible"));
+    // The editor above stays in view. Its row is the toast's row, so a note
+    // from a real language server may sit over it until it goes away.
+    tinkery.wait_for_screen("the editor row", WAIT, |screen| {
+        screen[4].contains("the editor stays visible")
+    });
 
     // stderr comes in too, then the title shows the exit code.
     tinkery.wait_for_screen("the stderr line", WAIT, |screen| {
