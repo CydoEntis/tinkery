@@ -327,7 +327,10 @@ fn width(s: &str) -> u16 {
 mod tests {
     use super::*;
 
-    const LOOK: Look = Look { pill_caps: true };
+    const LOOK: Look = Look {
+        pill_caps: true,
+        corners: crate::config::Corners::Flush,
+    };
 
     #[test]
     fn the_block_ramps_from_accent_to_accent2_then_fades_into_the_bar() {
@@ -530,7 +533,10 @@ mod tests {
         let version = keys.last().expect("the version");
         assert_eq!(version.1.fg, Some(theme.muted));
         // Squared off, the ends are blanks of `btn` and nothing moves.
-        let square = Look { pill_caps: false };
+        let square = Look {
+            pill_caps: false,
+            corners: crate::config::Corners::Flush,
+        };
         let squared = right_runs(square, &theme, &status, shown(true, true, true));
         assert_eq!(
             text(&squared),

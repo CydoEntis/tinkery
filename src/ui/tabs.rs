@@ -200,8 +200,14 @@ mod tests {
 
     use crate::ui::kit::{CAP_L, CAP_R};
 
-    const ROUND: Look = Look { pill_caps: true };
-    const SQUARE: Look = Look { pill_caps: false };
+    const ROUND: Look = Look {
+        pill_caps: true,
+        corners: crate::config::Corners::Flush,
+    };
+    const SQUARE: Look = Look {
+        pill_caps: false,
+        corners: crate::config::Corners::Flush,
+    };
 
     fn label(name: &str, dirty: bool) -> TabLabel {
         TabLabel {
