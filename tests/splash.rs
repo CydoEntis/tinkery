@@ -11,7 +11,7 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
-use harness::{COLS, HYDRA, ROWS, Tinkery, pill_text};
+use harness::{CAP_L, CAP_R, COLS, ROWS, Tinkery, buttons_text, pill_text};
 use tempfile::TempDir;
 use vt100::Color;
 
@@ -20,14 +20,18 @@ const WAIT: Duration = Duration::from_secs(5);
 const PROJECT: &str = "tests/fixtures/project";
 const STATUS: u16 = ROWS - 1;
 
-/// hydra's roles, as the splash uses them.
-const ACCENT: Color = Color::Rgb(0xc3, 0xf5, 0x3c);
-const ACCENT2: Color = Color::Rgb(0x5a, 0xa9, 0xff);
-const RAISED: Color = Color::Rgb(0x0f, 0x18, 0x21);
-const MUTED: Color = Color::Rgb(0x71, 0x80, 0x8f);
-const TEXT: Color = Color::Rgb(0xa7, 0xb4, 0xc2);
-const STRONG: Color = Color::Rgb(0xf2, 0xf6, 0xf8);
-const BG: Color = Color::Rgb(0x07, 0x0b, 0x10);
+/// The config that runs on the default theme, `tinkery`, whose colours these
+/// tests read.
+const TINKERY: &str = "";
+
+/// `tinkery`'s roles, as the splash uses them.
+const ACCENT: Color = Color::Rgb(0xff, 0x8a, 0x3d);
+const ACCENT2: Color = Color::Rgb(0xff, 0xd2, 0x7a);
+const ACC_INK: Color = Color::Rgb(0x1f, 0x0d, 0x02);
+const BTN: Color = Color::Rgb(0x33, 0x2a, 0x25);
+const MUTED: Color = Color::Rgb(0x7d, 0x70, 0x67);
+const STRONG: Color = Color::Rgb(0xf8, 0xf0, 0xe6);
+const BG: Color = Color::Rgb(0x11, 0x0f, 0x0e);
 
 /// Without the tree the editor area is the full width from row 3 (below the
 /// tab header) to the status line: 100 × 26. The 14-row splash is centred in
@@ -43,24 +47,22 @@ const OPEN_DIR_ROW: u16 = 22;
 const WORD_W: u16 = 41;
 const WORD_X: u16 = 29;
 const RULE_X: u16 = 18;
-/// The 56-wide action rows, centred: `✦` two cells in, the label four, the
-/// hint 22, and the key two short of the row's right edge.
+/// The 56-wide action rows, centred; a click anywhere in one runs it. Each
+/// holds its action as a button and, 20 cells on, its hint, and the two
+/// columns are centred in the row: with `~/src` the widest hint is `choose a
+/// folder`, so they are 35 wide and start 10 cells in.
 const ROW_X: u16 = 22;
-const TEXT_X: u16 = ROW_X + 2;
-const LABEL_X: u16 = ROW_X + 4;
-const HINT_X: u16 = ROW_X + 22;
-const KEY_X: u16 = ROW_X + 56 - 2;
+const ROW_W: u16 = 56;
+const BUTTON_X: u16 = ROW_X + 10;
+const HINT_X: u16 = BUTTON_X + 20;
+/// The actions' labels, by row.
+const ACTIONS: [(u16, &str); 3] = [
+    (NEW_FILE_ROW, "New file"),
+    (NEW_DIR_ROW, "New directory"),
+    (OPEN_DIR_ROW, "Open directory"),
+];
 /// The folder browser's scope label, right of its header.
 const BROWSER: &str = "open · folders";
-
-/// `a` moved `t` of the way to `b`, per channel, rounded, as the editor mixes.
-fn mix(a: Color, b: Color, t: f64) -> Color {
-    let (Color::Rgb(r1, g1, b1), Color::Rgb(r2, g2, b2)) = (a, b) else {
-        panic!("can't mix {a:?} and {b:?}");
-    };
-    let m = |p: u8, q: u8| (f64::from(p) + (f64::from(q) - f64::from(p)) * t).round() as u8;
-    Color::Rgb(m(r1, r2), m(g1, g2), m(b1, b2))
-}
 
 /// The cells of `row` from `x`, `width` wide, trimmed at the end.
 fn cells(tinkery: &Tinkery, row: u16, x: u16, width: u16) -> String {
@@ -73,11 +75,24 @@ fn cells(tinkery: &Tinkery, row: u16, x: u16, width: u16) -> String {
         .to_string()
 }
 
-/// Waits for the `✦` marking the selected action to be on `row`.
-fn wait_for_selected(tinkery: &Tinkery, x: u16, row: u16) {
-    tinkery.wait_for_screen(&format!("✦ on row {row}"), WAIT, |screen| {
-        screen[usize::from(row)].chars().nth(usize::from(x)) == Some('✦')
-    });
+/// Waits for the action on `row` to be the selected one: its button the
+/// primary one, filled with `accent`. The button is found by its label, so
+/// this holds wherever the rows are.
+fn wait_for_selected(tinkery: &Tinkery, row: u16) {
+    let (_, label) = ACTIONS
+        .into_iter()
+        .find(|&(at, _)| at == row)
+        .expect("an action row");
+    let x = tinkery
+        .text_col(row, label)
+        .unwrap_or_else(|| panic!("no {label:?} on row {row}: {:#?}", tinkery.screen()));
+    tinkery.wait_for_bg(x, row, ACCENT, WAIT);
+    for (other, label) in ACTIONS {
+        if other != row {
+            let x = tinkery.text_col(other, label).expect("the other actions");
+            assert_ne!(tinkery.bg_at(x, other), ACCENT, "{label} is selected too");
+        }
+    }
 }
 
 /// What the name prompt says Enter and Esc do, each key a keycap.
@@ -111,7 +126,7 @@ fn start_bare_with(toml: &str) -> (TempDir, Tinkery) {
 }
 
 fn start_bare() -> (TempDir, Tinkery) {
-    start_bare_with(HYDRA)
+    start_bare_with(TINKERY)
 }
 
 #[test]
@@ -130,7 +145,7 @@ fn tk_alone_and_tk_on_a_folder_show_the_splash_but_a_file_does_not() {
 #[test]
 fn the_splash_has_the_wordmark_rule_path_and_actions_with_no_card() {
     let (_home, tinkery) = start_bare();
-    tinkery.wait_for_fg_at(LABEL_X, NEW_FILE_ROW, STRONG, WAIT);
+    tinkery.wait_for_bg(BUTTON_X + 1, NEW_FILE_ROW, ACCENT, WAIT);
 
     // No pills in the header rows.
     let screen = tinkery.screen();
@@ -140,7 +155,7 @@ fn the_splash_has_the_wordmark_rule_path_and_actions_with_no_card() {
 
     // The block-letter wordmark `tinkery`, five rows of half blocks (the last
     // the `y`'s descender, the rule straight after it), accent at its left
-    // and accent2 at its right, on a glow that's gone by the screen's edge.
+    // and accent2 at its right, with no glow behind it.
     let wordmark: Vec<String> = (WORD_ROW..WORD_ROW + 5)
         .map(|row| cells(&tinkery, row, WORD_X, WORD_W))
         .collect();
@@ -157,8 +172,11 @@ fn the_splash_has_the_wordmark_rule_path_and_actions_with_no_card() {
     assert_eq!(tinkery.text_col(WORD_ROW + 1, "▀█▀"), Some(WORD_X));
     assert_eq!(tinkery.fg_at(WORD_X, WORD_ROW + 1), ACCENT);
     assert_eq!(tinkery.fg_at(WORD_X + WORD_W - 1, WORD_ROW + 1), ACCENT2);
-    assert_ne!(tinkery.bg_at(WORD_X + 15, WORD_ROW + 2), BG);
-    assert_eq!(tinkery.bg_at(0, WORD_ROW + 2), BG);
+    for row in WORD_ROW - 1..=RULE_ROW {
+        for x in 0..COLS {
+            assert_eq!(tinkery.bg_at(x, row), BG, "({x}, {row})");
+        }
+    }
 
     // The rule under it, 63 wide, fading into the ground at both ends.
     assert_eq!(cells(&tinkery, RULE_ROW, RULE_X, 63), "─".repeat(63));
@@ -175,36 +193,66 @@ fn the_splash_has_the_wordmark_rule_path_and_actions_with_no_card() {
     assert_eq!(tinkery.fg_at(49, PATH_ROW), STRONG);
     assert!(tinkery.bold_at(49, PATH_ROW));
 
-    // The actions one blank row apart, with hints and keys; the first
-    // selected on the dialog glow.
-    let row = |label: &str, hint: &str, key: &str| format!("{label:<18}{hint:<32}{key}");
-    assert_eq!(
-        cells(&tinkery, NEW_FILE_ROW, TEXT_X, 56),
-        format!("✦ {}", row("New file", "in ~/src", "n"))
-    );
-    assert_eq!(
-        cells(&tinkery, NEW_DIR_ROW, LABEL_X, 56),
-        row("New directory", "in ~/src", "d")
-    );
-    assert_eq!(
-        cells(&tinkery, OPEN_DIR_ROW, LABEL_X, 56),
-        row("Open directory", "choose a folder", "o")
-    );
+    // The actions one blank row apart: each a button with its key on it,
+    // then its hint; nothing else on the row.
+    let row = |label: &str, key: &str, hint: &str| {
+        let button = buttons_text(&[(label, key)]);
+        let gap = 20 - button.chars().count();
+        format!("{button}{}{hint}", " ".repeat(gap))
+    };
+    for (at, label, key, hint) in [
+        (NEW_FILE_ROW, "New file", "n", "in ~/src"),
+        (NEW_DIR_ROW, "New directory", "d", "in ~/src"),
+        (OPEN_DIR_ROW, "Open directory", "o", "choose a folder"),
+    ] {
+        assert_eq!(cells(&tinkery, at, 0, 100).trim(), row(label, key, hint));
+        assert_eq!(
+            tinkery.text_col(at, &buttons_text(&[(label, key)])),
+            Some(BUTTON_X)
+        );
+        assert_eq!(tinkery.text_col(at, hint), Some(HINT_X));
+        assert_eq!(tinkery.fg_at(HINT_X, at), MUTED, "{label}");
+        assert_eq!(tinkery.bg_at(HINT_X, at), BG, "{label}");
+        // No glow along the row: outside the button it's the ground.
+        for x in [ROW_X, BUTTON_X - 1, ROW_X + ROW_W - 1] {
+            assert_eq!(tinkery.bg_at(x, at), BG, "{label} column {x}");
+        }
+    }
     for blank in [NEW_FILE_ROW + 1, NEW_DIR_ROW + 1, OPEN_DIR_ROW + 1] {
         assert_eq!(cells(&tinkery, blank, 0, 100), "", "row {blank}");
     }
-    assert_eq!(tinkery.bg_at(ROW_X, NEW_FILE_ROW), mix(RAISED, ACCENT, 0.3));
-    assert_eq!(tinkery.fg_at(TEXT_X, NEW_FILE_ROW), ACCENT2);
-    assert_eq!(tinkery.fg_at(LABEL_X, NEW_FILE_ROW), STRONG);
-    assert!(tinkery.bold_at(LABEL_X, NEW_FILE_ROW));
-    assert_eq!(tinkery.fg_at(HINT_X, NEW_FILE_ROW), MUTED);
-    assert_eq!(tinkery.fg_at(KEY_X, NEW_FILE_ROW), ACCENT);
-    assert!(tinkery.bold_at(KEY_X, NEW_FILE_ROW));
-    assert_eq!(tinkery.bg_at(ROW_X, NEW_DIR_ROW), BG);
-    assert_eq!(tinkery.fg_at(LABEL_X, NEW_DIR_ROW), TEXT);
-    assert!(!tinkery.bold_at(LABEL_X, NEW_DIR_ROW));
-    assert_eq!(tinkery.fg_at(HINT_X, NEW_DIR_ROW), MUTED);
-    assert_eq!(tinkery.fg_at(KEY_X, NEW_DIR_ROW), MUTED);
+    // The first is selected, so its button is the primary one: `acc_ink` on
+    // `accent`, bold, key and all, between round ends in `accent` on the
+    // ground. `New file n` is ten cells between its ends.
+    let end = BUTTON_X + 11;
+    for x in [BUTTON_X, end] {
+        assert_eq!(tinkery.fg_at(x, NEW_FILE_ROW), ACCENT, "end {x}");
+        assert_eq!(tinkery.bg_at(x, NEW_FILE_ROW), BG, "end {x}");
+    }
+    for x in BUTTON_X + 1..end {
+        assert_eq!(tinkery.fg_at(x, NEW_FILE_ROW), ACC_INK, "column {x}");
+        assert_eq!(tinkery.bg_at(x, NEW_FILE_ROW), ACCENT, "column {x}");
+        assert!(tinkery.bold_at(x, NEW_FILE_ROW), "column {x}");
+    }
+    assert_eq!(tinkery.bold_text(NEW_FILE_ROW), "New file n");
+    // The others are normal: `strong` on `btn`, bold, the key in `accent`.
+    // `New directory d` is fifteen cells between its ends.
+    let end = BUTTON_X + 16;
+    for x in [BUTTON_X, end] {
+        assert_eq!(tinkery.fg_at(x, NEW_DIR_ROW), BTN, "end {x}");
+        assert_eq!(tinkery.bg_at(x, NEW_DIR_ROW), BG, "end {x}");
+    }
+    for x in BUTTON_X + 1..end {
+        let fg = if x == end - 1 { ACCENT } else { STRONG };
+        assert_eq!(tinkery.fg_at(x, NEW_DIR_ROW), fg, "column {x}");
+        assert_eq!(tinkery.bg_at(x, NEW_DIR_ROW), BTN, "column {x}");
+        assert!(tinkery.bold_at(x, NEW_DIR_ROW), "column {x}");
+    }
+    assert_eq!(tinkery.bold_text(NEW_DIR_ROW), "New directory d");
+    // No `✦` marks a row; the only one on screen is the status bar's brand.
+    for (at, _) in ACTIONS {
+        assert!(!cells(&tinkery, at, 0, 100).contains('✦'), "row {at}");
+    }
 
     // No card: no lit edge and no footer, and the ground below the rows.
     let screen = tinkery.screen().join("\n");
@@ -213,32 +261,55 @@ fn the_splash_has_the_wordmark_rule_path_and_actions_with_no_card() {
 }
 
 #[test]
-fn mono_has_no_glow_and_reverses_the_selected_row() {
+fn mono_has_no_glow_a_plain_wordmark_and_reverses_the_selected_button() {
     let (_home, mut tinkery) = start_bare_with("theme = \"mono\"\n");
-    let selected = format!("  ✦ {:<18}{:<32}n ", "New file", "in ~/src");
-    tinkery.wait_for_reversed(NEW_FILE_ROW, &selected, WAIT);
+    // A button is its text between blanks, bold, in the columns the pill
+    // takes; the selected one is reverse video.
+    tinkery.wait_for_reversed(NEW_FILE_ROW, " New file n ", WAIT);
+    assert_eq!(
+        tinkery.text_col(NEW_FILE_ROW, " New file n "),
+        Some(BUTTON_X)
+    );
+    assert_eq!(tinkery.bold_text(NEW_FILE_ROW), " New file n ");
     assert_eq!(tinkery.reversed_text(NEW_DIR_ROW), "");
+    assert_eq!(tinkery.bold_text(NEW_DIR_ROW), " New directory d ");
+    assert_eq!(
+        cells(&tinkery, NEW_DIR_ROW, BUTTON_X, 56),
+        format!("{:<20}in ~/src", " New directory d ")
+    );
     // The wordmark and rule in the terminal's own colours, on its own ground.
     assert_eq!(tinkery.fg_at(WORD_X, WORD_ROW + 1), Color::Default);
     assert_eq!(tinkery.bg_at(WORD_X + 15, WORD_ROW + 2), Color::Default);
     assert_eq!(tinkery.fg_at(50, RULE_ROW), Color::Default);
+    // No Nerd Font glyph anywhere, and nothing blended.
+    let screen = tinkery.screen().join("\n");
+    assert!(
+        !screen.contains(CAP_L) && !screen.contains(CAP_R),
+        "{screen}"
+    );
+    for row in 0..ROWS {
+        for x in 0..COLS {
+            for color in [tinkery.fg_at(x, row), tinkery.bg_at(x, row)] {
+                assert!(!matches!(color, Color::Rgb(..)), "({x}, {row})");
+            }
+        }
+    }
 
     tinkery.send_keys("down");
-    let selected = format!("  ✦ {:<18}{:<32}d ", "New directory", "in ~/src");
-    tinkery.wait_for_reversed(NEW_DIR_ROW, &selected, WAIT);
+    tinkery.wait_for_reversed(NEW_DIR_ROW, " New directory d ", WAIT);
     assert_eq!(tinkery.reversed_text(NEW_FILE_ROW), "");
 }
 
 #[test]
 fn arrows_move_and_wrap_and_enter_or_a_letter_runs_a_row() {
     let (_dir, mut tinkery) = start_bare();
-    wait_for_selected(&tinkery, TEXT_X, NEW_FILE_ROW);
+    wait_for_selected(&tinkery, NEW_FILE_ROW);
     tinkery.send_keys("up");
-    wait_for_selected(&tinkery, TEXT_X, OPEN_DIR_ROW);
+    wait_for_selected(&tinkery, OPEN_DIR_ROW);
     tinkery.send_keys("down");
-    wait_for_selected(&tinkery, TEXT_X, NEW_FILE_ROW);
+    wait_for_selected(&tinkery, NEW_FILE_ROW);
     tinkery.send_keys("down");
-    wait_for_selected(&tinkery, TEXT_X, NEW_DIR_ROW);
+    wait_for_selected(&tinkery, NEW_DIR_ROW);
 
     // Enter on New directory opens the tree's `A` prompt; Esc comes back.
     tinkery.send_keys("enter");
@@ -246,7 +317,7 @@ fn arrows_move_and_wrap_and_enter_or_a_letter_runs_a_row() {
     tinkery.send_keys("esc");
     tinkery.wait_for_text_gone(" New folder  ", WAIT);
     tinkery.send_keys("down");
-    wait_for_selected(&tinkery, TEXT_X, OPEN_DIR_ROW);
+    wait_for_selected(&tinkery, OPEN_DIR_ROW);
     // Enter on Open directory opens the folder browser; Esc comes back.
     tinkery.send_keys("enter");
     tinkery.wait_for_text(BROWSER, WAIT);
@@ -272,23 +343,38 @@ fn arrows_move_and_wrap_and_enter_or_a_letter_runs_a_row() {
 #[test]
 fn a_click_on_a_row_runs_it() {
     let (_dir, mut tinkery) = start_bare();
-    tinkery.click(TEXT_X + 4, NEW_DIR_ROW);
+    // The whole row answers: left of the button, on it, on the hint and on
+    // the row's last cell.
+    tinkery.click(ROW_X, NEW_DIR_ROW);
     tinkery.wait_for_text(" New folder  ", WAIT);
     tinkery.send_keys("esc");
     tinkery.wait_for_text_gone(" New folder  ", WAIT);
-    wait_for_selected(&tinkery, TEXT_X, NEW_DIR_ROW);
-    tinkery.click(TEXT_X + 4, OPEN_DIR_ROW);
+    wait_for_selected(&tinkery, NEW_DIR_ROW);
+    tinkery.click(BUTTON_X + 4, OPEN_DIR_ROW);
     tinkery.wait_for_text(BROWSER, WAIT);
     tinkery.send_keys("esc");
     tinkery.wait_for_text_gone(BROWSER, WAIT);
-    wait_for_selected(&tinkery, TEXT_X, OPEN_DIR_ROW);
+    wait_for_selected(&tinkery, OPEN_DIR_ROW);
+    tinkery.click(HINT_X + 2, NEW_DIR_ROW);
+    tinkery.wait_for_text(" New folder  ", WAIT);
+    tinkery.send_keys("esc");
+    tinkery.wait_for_text_gone(" New folder  ", WAIT);
+    wait_for_selected(&tinkery, NEW_DIR_ROW);
+    tinkery.click(ROW_X + ROW_W - 1, OPEN_DIR_ROW);
+    tinkery.wait_for_text(BROWSER, WAIT);
+    tinkery.send_keys("esc");
+    tinkery.wait_for_text_gone(BROWSER, WAIT);
+    wait_for_selected(&tinkery, OPEN_DIR_ROW);
     // Off the rows a click does nothing: no cursor is placed in the hidden
     // buffer, and the selection stays.
     tinkery.click(5, 5);
-    tinkery.click(TEXT_X + 4, WORD_ROW + 2);
-    wait_for_selected(&tinkery, TEXT_X, OPEN_DIR_ROW);
+    tinkery.click(BUTTON_X + 4, WORD_ROW + 2);
+    tinkery.click(ROW_X - 1, NEW_FILE_ROW);
+    tinkery.click(ROW_X + ROW_W, NEW_FILE_ROW);
+    tinkery.click(BUTTON_X + 4, NEW_FILE_ROW + 1);
+    wait_for_selected(&tinkery, OPEN_DIR_ROW);
     tinkery.wait_for_text("Open directory", WAIT);
-    tinkery.click(TEXT_X + 4, NEW_FILE_ROW);
+    tinkery.click(BUTTON_X + 4, NEW_FILE_ROW);
     tinkery.wait_for_text(" New file  ", WAIT);
 }
 
@@ -321,18 +407,18 @@ fn opening_a_file_with_ctrl_p_replaces_the_splash() {
 
 #[test]
 fn with_the_tree_open_the_splash_has_focus_and_ctrl_e_moves_it_to_the_tree() {
-    let mut tinkery = Tinkery::spawn(&[PROJECT]);
+    let mut tinkery = Tinkery::spawn_with_config(TINKERY, &[PROJECT]);
     tinkery.wait_for_text("Open directory", START);
     // Ctrl+B shows the tree the splash hides, leaving the keys on the splash.
     tinkery.send_keys("ctrl+b");
     tinkery.wait_for_text("README.md", WAIT);
     // Beside the 28-column tree and its blank column the editor area is 71
-    // wide from column 29, so the action rows start at 36 and `✦` is at 38.
-    let text_x = 38;
-    wait_for_selected(&tinkery, text_x, NEW_FILE_ROW);
+    // wide from column 29, so the action rows start at 36.
+    assert!(tinkery.text_col(NEW_FILE_ROW, "New file") >= Some(36));
+    wait_for_selected(&tinkery, NEW_FILE_ROW);
     // ↓ moves the splash's selection, not the tree's.
     tinkery.send_keys("down");
-    wait_for_selected(&tinkery, text_x, NEW_DIR_ROW);
+    wait_for_selected(&tinkery, NEW_DIR_ROW);
 
     tinkery.send_keys("ctrl+e");
     // In the tree ↓ moves from `docs` past `src` and `.gitignore` to
@@ -509,7 +595,7 @@ fn the_splash_hides_the_tree_until_ctrl_b_or_ctrl_e_shows_it() {
     tinkery.wait_for_text("a.txt", WAIT);
     // The keys stay on the splash beside it: the rows moved right of the tree.
     tinkery.send_keys("down");
-    wait_for_selected(&tinkery, 38, NEW_DIR_ROW);
+    wait_for_selected(&tinkery, NEW_DIR_ROW);
 
     let mut tinkery = Tinkery::spawn(&[PROJECT]);
     tinkery.wait_for_text("Open directory", START);
