@@ -11,7 +11,7 @@ Active phase: **8 — Tome opens on a splash and can switch projects.** Phases 9
 ticketed ahead, as Cody asked to build them in one run (2026-10-08). The person checks for
 Phases 6 and 7 are still open. Phases 12, 13 and 14 are ticketed ahead as well (Cody, 2026-10-08).
 Phases 15 and 16 are ticketed ahead too (Cody, 2026-10-09); Phase 15's rename lands before
-Phase 16 is built.
+Phase 16 is built. Phase 17 is ticketed ahead (Cody, 2026-10-09).
 Next unblocked: #124 — fix(project): open a folder onto the tree and an empty pane, not the
 splash (PR #125).
 
@@ -215,6 +215,22 @@ Exit when:
 8. #192 — feat(run): type a line into a running program · after 7
 9. #193 — feat(debug): debug the open C or C++ file with lldb-dap · after 5
 
+### 17 — Completion opens as you type
+
+Exit when:
+- every ticket below is closed and its change is on `main`;
+- `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` passes on `main`;
+- the person check passes (in a .ts file with the TypeScript server running: type `con`,
+  the popup opens and Tab inserts `console`; after `console.`, Down past the tenth row
+  reaches `log`; `console.` then Esc then `l` shows `log`; with `auto_complete = false`
+  only `.` and Alt+/ open it).
+
+[Completion opens as you type](features/tome-autocomplete/intent.md)
+
+1. #201 — feat(lsp): the completion popup scrolls past ten rows
+2. #202 — feat(lsp): completion opens as you type a word · after 1
+3. #203 — feat(config): auto_complete turns as-you-type completion off · after 2
+
 ## In scope
 
 - Tome v1 — shipped — [intent](features/tome-v1/intent.md) ·
@@ -234,6 +250,7 @@ Exit when:
 - Ctrl+/ comments — active — [intent](features/tome-comments/intent.md)
 - Glyph becomes Tome — active — [intent](features/tome-rename/intent.md)
 - C and C++ — planned — [intent](features/tome-c-cpp/intent.md)
+- Completion opens as you type — planned — [intent](features/tome-autocomplete/intent.md)
 
 ## Out
 
