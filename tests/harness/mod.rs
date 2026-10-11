@@ -29,6 +29,18 @@ pub const ROWS: u16 = 30;
 pub const HYDRA: &str = "theme = \"hydra\"
 ";
 
+/// The row a toast is drawn on: one below the top of the editor area, which
+/// starts under the three-row tab header.
+pub const TOAST_ROW: u16 = 4;
+
+/// The column a toast saying `text` puts its glyph at when the editor area
+/// reaches the right edge of the screen: the pill ends two cells short of it,
+/// and after the text come a blank and the pill's end.
+pub fn toast_col(text: &str) -> u16 {
+    let text = u16::try_from(text.chars().count()).expect("a toast fits the screen");
+    COLS - 2 - 2 - text - 2
+}
+
 /// Whether `status` shows `position` (`Ln 3, Col 1`) whole: not as the start of
 /// a longer column like `Col 12`. The language follows the position, so it no
 /// longer ends the status line.
@@ -362,6 +374,14 @@ impl Tinkery {
         if let Err(screen) = wait_for_contents(&self.shared, text, timeout) {
             panic!("timed out after {timeout:?} waiting for {text:?}\n{screen}");
         }
+    }
+
+    /// Waits until a toast shows `text`: a note from an action, on `TOAST_ROW`.
+    /// Panics with the screen on timeout.
+    pub fn wait_for_toast(&self, text: &str, timeout: Duration) {
+        self.wait_for_screen(&format!("a toast saying {text:?}"), timeout, |screen| {
+            screen[usize::from(TOAST_ROW)].contains(text)
+        });
     }
 
     /// Waits until `text` is nowhere on screen. Panics with the screen on timeout.

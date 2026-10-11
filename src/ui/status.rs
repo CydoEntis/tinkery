@@ -17,12 +17,12 @@ use crate::ui::kit::{self, Look};
 /// Cells the brand block covers: ten on the accent ramp, then eight fading into
 /// the bar.
 const BLOCK_WIDTH: u16 = 18;
-/// Where the path (or a message in its place) starts.
+/// Where the path (or the diagnostic under the cursor in its place) starts.
 const PATH_X: u16 = 20;
 /// Between the right-hand segments (README §2.5).
 const GAP: &str = "    ";
 
-/// How a status message went, which picks its glyph and colour.
+/// How a note or diagnostic went, which picks its glyph and colour.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum Tone {
     #[default]
@@ -32,7 +32,7 @@ pub enum Tone {
 }
 
 impl Tone {
-    fn glyph(self) -> &'static str {
+    pub fn glyph(self) -> &'static str {
         match self {
             Tone::Ok => "✓",
             Tone::Warn => "⚠",
@@ -40,7 +40,7 @@ impl Tone {
         }
     }
 
-    fn color(self, theme: &Theme) -> Color {
+    pub fn color(self, theme: &Theme) -> Color {
         match self {
             Tone::Ok => theme.ok,
             Tone::Warn => theme.warn,
@@ -67,7 +67,8 @@ pub struct Status<'a> {
     pub path: &'a str,
     /// Unsaved changes, shown as ` •` after the name.
     pub dirty: bool,
-    /// Takes the path's place while set.
+    /// The diagnostic under the cursor, which takes the path's place. A note
+    /// from an action is a toast instead (`ui::toast`).
     pub message: Option<(Tone, &'a str)>,
     /// The cursor as 0-based (line, char column).
     pub position: (usize, usize),
@@ -184,7 +185,7 @@ fn block_bg(theme: &Theme, i: u16) -> Color {
     }
 }
 
-/// The path slot: a message with its glyph while there is one, else the path,
+/// The path slot: the diagnostic with its glyph while there is one, else the path,
 /// with its directory only when `dir`.
 fn left_runs(theme: &Theme, status: &Status, dir: bool) -> Vec<Run> {
     if let Some((tone, text)) = status.message {

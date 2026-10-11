@@ -4,7 +4,7 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
-use harness::{CAP_L, CAP_R, ROWS, Tinkery, buttons_text};
+use harness::{CAP_L, CAP_R, COLS, ROWS, TOAST_ROW, Tinkery, buttons_text};
 use tempfile::TempDir;
 use vt100::Color;
 
@@ -148,10 +148,11 @@ fn assert_exits(tinkery: &mut Tinkery) {
 }
 
 #[test]
-fn the_save_message_holds_the_path_slot_until_the_next_key() {
-    // aurora's `ok` and `strong`.
+fn the_save_message_is_a_toast_that_goes_away_by_itself() {
+    // aurora's `ok`, `strong` and `raised2`.
     const OK: vt100::Color = vt100::Color::Rgb(0x7f, 0xe3, 0xc9);
     const STRONG: vt100::Color = vt100::Color::Rgb(0xf4, 0xf2, 0xfb);
+    const RAISED2: vt100::Color = vt100::Color::Rgb(0x1e, 0x1b, 0x2a);
     let dir = tempfile::tempdir().expect("create temp dir");
     fs::write(dir.path().join("a.txt"), "hello").expect("write a.txt");
     let mut tinkery = Tinkery::spawn_in_with_config(dir.path(), "theme = \"aurora\"\n", &["a.txt"]);
@@ -161,16 +162,76 @@ fn the_save_message_holds_the_path_slot_until_the_next_key() {
 
     tinkery.type_text("x");
     tinkery.send_keys("ctrl+s");
-    tinkery.wait_for_text("✓ saved a.txt", WAIT);
-    assert_eq!(tinkery.text_col(status_row, "✓ saved a.txt"), Some(20));
-    assert_eq!(tinkery.fg_at(20, status_row), OK);
+    tinkery.wait_for_toast("✓ saved a.txt", WAIT);
+    // A pill one row below the top of the editor area, ending two cells short
+    // of its right edge: the glyph in `ok`, the text in `strong`, both bold.
+    let glyph = harness::toast_col("saved a.txt");
+    assert_eq!(
+        tinkery.text_col(TOAST_ROW, "✓ saved a.txt"),
+        Some(glyph),
+        "{:?}",
+        tinkery.screen()[usize::from(TOAST_ROW)]
+    );
+    assert_eq!(tinkery.text_col(TOAST_ROW, CAP_L), Some(glyph - 2));
+    assert_eq!(tinkery.text_col(TOAST_ROW, CAP_R), Some(COLS - 3));
+    assert_eq!(tinkery.fg_at(glyph - 2, TOAST_ROW), RAISED2);
+    assert_eq!(tinkery.fg_at(glyph, TOAST_ROW), OK);
+    assert_eq!(tinkery.fg_at(glyph + 2, TOAST_ROW), STRONG);
+    assert_eq!(
+        tinkery.bg_text(TOAST_ROW, RAISED2),
+        " ✓ saved a.txt ",
+        "the pill's fill"
+    );
+    assert_eq!(tinkery.bold_text(TOAST_ROW), " ✓ saved a.txt ");
+    // The path keeps its slot in the status bar.
+    assert_eq!(tinkery.text_col(status_row, "a.txt"), Some(20));
+    assert_eq!(tinkery.fg_at(20, status_row), STRONG);
 
-    // Any key gives the slot back to the path.
+    // A key doesn't take it down; it goes when its time is up.
     tinkery.send_keys("left");
     tinkery.wait_for_text("Ln 1, Col 1", WAIT);
     tinkery.wait_for_text_gone("saved a.txt", WAIT);
+    assert_eq!(tinkery.screen()[usize::from(TOAST_ROW)].trim(), "");
     assert_eq!(tinkery.text_col(status_row, "a.txt"), Some(20));
-    assert_eq!(tinkery.fg_at(20, status_row), STRONG);
+}
+
+#[test]
+fn a_new_note_replaces_the_toast_and_an_error_is_marked_as_one() {
+    // An unknown theme falls back to tinkery, whose `err` and `strong` these are.
+    let note = "theme: unknown theme \"solarized\", using tinkery";
+    let (_dir, mut tinkery) = open_a_with("theme = \"solarized\"\n", b"hello");
+    tinkery.wait_for_toast(&format!("✕ {note}"), WAIT);
+    let glyph = harness::toast_col(note);
+    assert_eq!(tinkery.text_col(TOAST_ROW, "✕ theme:"), Some(glyph));
+    assert_eq!(tinkery.fg_at(glyph, TOAST_ROW), ERR);
+    assert_eq!(tinkery.fg_at(glyph + 2, TOAST_ROW), STRONG);
+
+    // The save's note takes its place: one toast, never two.
+    tinkery.type_text("x");
+    tinkery.send_keys("ctrl+s");
+    tinkery.wait_for_toast("✓ saved a.txt", WAIT);
+    let screen = tinkery.screen();
+    assert!(!screen.join(" ").contains("theme:"), "{screen:#?}");
+    assert_eq!(
+        tinkery.text_col(TOAST_ROW, "✓ saved a.txt"),
+        Some(harness::toast_col("saved a.txt"))
+    );
+}
+
+#[test]
+fn in_mono_the_toast_is_reverse_video_without_caps() {
+    let (_dir, mut tinkery) = open_a_with("theme = \"mono\"\n", b"hello");
+    tinkery.type_text("x");
+    tinkery.send_keys("ctrl+s");
+    tinkery.wait_for_toast("✓ saved a.txt", WAIT);
+    tinkery.wait_for_reversed(TOAST_ROW, "  ✓ saved a.txt  ", WAIT);
+    let row = tinkery.screen()[usize::from(TOAST_ROW)].clone();
+    assert!(!row.contains(CAP_L) && !row.contains(CAP_R), "{row:?}");
+    assert_eq!(
+        tinkery.text_col(TOAST_ROW, "✓ saved a.txt"),
+        Some(harness::toast_col("saved a.txt")),
+        "{row:?}"
+    );
 }
 
 #[test]

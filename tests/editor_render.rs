@@ -137,13 +137,11 @@ fn non_utf8_file_is_not_opened() {
     fs::write(dir.path().join("bad.txt"), [b'o', b'k', 0xff, 0xfe, b'\n']).unwrap();
 
     let mut tinkery = Tinkery::spawn_in(dir.path(), &["bad.txt"]);
-    tinkery.wait_for_text("cannot open bad.txt: not UTF-8", START);
+    // The reason is a toast; the status line keeps the untitled buffer's name.
+    tinkery.wait_for_toast("✕ cannot open bad.txt: not UTF-8", START);
 
     let screen = tinkery.screen();
-    assert!(
-        status_line(&tinkery).contains("cannot open bad.txt: not UTF-8"),
-        "{screen:#?}"
-    );
+    assert!(status_line(&tinkery).contains("untitled"), "{screen:#?}");
     assert_eq!(screen[3].trim(), "1", "{screen:#?}");
 
     quit(&mut tinkery);
