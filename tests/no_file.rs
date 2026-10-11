@@ -1,15 +1,17 @@
 //! The key list the editor area shows whenever no file is open and the splash
 //! isn't up (tinkery-splash spec S11): after the last tab closes and after
-//! another folder is opened. Where it's drawn, that typing doesn't reach the
-//! untitled buffer under it, and what replaces it.
+//! another folder is opened. Where it's drawn, its keys as keycaps
+//! (tinkery-forge spec F20), that typing doesn't reach the untitled buffer
+//! under it, and what replaces it.
 
 mod harness;
 
 use std::fs;
 use std::time::Duration;
 
-use harness::{CAP_L, ROWS, Tinkery, pill_text};
+use harness::{CAP_L, CAP_R, COLS, ROWS, Tinkery, pill_text};
 use tempfile::TempDir;
+use vt100::Color;
 
 const START: Duration = Duration::from_secs(10);
 const WAIT: Duration = Duration::from_secs(5);
@@ -21,7 +23,9 @@ const PILL_ROW: u16 = 1;
 /// tab header) to the status line: 100 × 26. The list's header starts a third
 /// of the way down, on row 3 + 26 / 3 = 11, and its rows are two apart. The
 /// block is 35 wide (the label column at 10, then `cast · files and
-/// commands`), centred: (100 − 35) / 2 = 32.
+/// commands`), centred: (100 − 35) / 2 = 32. A keycap starts where the header
+/// does, so its key is a cell in, and `Ctrl+P`'s cap leaves two cells before
+/// the labels.
 const HEADER_ROW: u16 = 11;
 const KEY_ROWS: [u16; 4] = [13, 15, 17, 19];
 const X: u16 = 32;
@@ -34,16 +38,26 @@ const KEYS: [(&str, &str); 4] = [
     ("Ctrl+Q", "quit"),
 ];
 
+/// What a keycap reads: the key between its round ends.
+fn cap(key: &str) -> String {
+    format!("{CAP_L}{key}{CAP_R}")
+}
+
 /// A temp folder holding `proj/a.txt` ("alpha") and `proj/b.txt` ("bravo"),
 /// with tinkery started on `a.txt` inside `proj`, so the project is `proj` and
 /// the tree is hidden.
 fn open_file() -> (TempDir, Tinkery) {
+    open_file_with(harness::HYDRA)
+}
+
+/// The same under the config `toml`.
+fn open_file_with(toml: &str) -> (TempDir, Tinkery) {
     let dir = tempfile::tempdir().expect("create temp dir");
     let proj = dir.path().join("proj");
     fs::create_dir(&proj).expect("create proj");
     fs::write(proj.join("a.txt"), "alpha\n").expect("write a.txt");
     fs::write(proj.join("b.txt"), "bravo\n").expect("write b.txt");
-    let tinkery = Tinkery::spawn_in(&proj, &["a.txt"]);
+    let tinkery = Tinkery::spawn_in_with_config(&proj, toml, &["a.txt"]);
     tinkery.wait_for_text("1  alpha", START);
     (dir, tinkery)
 }
@@ -60,8 +74,10 @@ fn assert_key_list(tinkery: &Tinkery, folder: &str, x: u16, header: u16) {
     );
     for (i, (key, label)) in (0u16..).zip(KEYS) {
         let row = header + 2 + 2 * i;
-        assert_eq!(tinkery.text_col(row, key), Some(x), "{screen:#?}");
+        assert_eq!(tinkery.text_col(row, &cap(key)), Some(x), "{screen:#?}");
         assert_eq!(tinkery.text_col(row, label), Some(x + 10), "{screen:#?}");
+        // The key is bold, and nothing else on the row is.
+        assert_eq!(tinkery.bold_text(row), key, "{screen:#?}");
         // The rows are two apart, with nothing between.
         assert_eq!(
             screen[usize::from(row - 1)]
@@ -90,7 +106,7 @@ fn closing_the_last_tab_shows_the_key_list_under_an_empty_tab_bar() {
     tinkery.wait_for_text_gone("alpha", WAIT);
     assert_key_list(&tinkery, "proj", X, HEADER_ROW);
     for (row, (key, _)) in KEY_ROWS.into_iter().zip(KEYS) {
-        assert_eq!(tinkery.text_col(row, key), Some(X));
+        assert_eq!(tinkery.text_col(row, &cap(key)), Some(X));
     }
     assert_eq!(tinkery.text_col(KEY_ROWS[0], "cast"), Some(LABEL_X));
     assert_no_tabs(&tinkery);
@@ -98,6 +114,78 @@ fn closing_the_last_tab_shows_the_key_list_under_an_empty_tab_bar() {
     let status = tinkery.screen()[usize::from(STATUS)].clone();
     assert!(status.contains("proj"), "{status:?}");
     assert!(!status.contains("untitled"), "{status:?}");
+}
+
+#[test]
+fn each_key_is_a_keycap_with_its_label_in_text() {
+    // `tinkery`'s roles, the default theme.
+    const BG: Color = Color::Rgb(0x11, 0x0f, 0x0e);
+    const BTN: Color = Color::Rgb(0x33, 0x2a, 0x25);
+    const STRONG: Color = Color::Rgb(0xf8, 0xf0, 0xe6);
+    const TEXT: Color = Color::Rgb(0xb5, 0xa8, 0x9d);
+    const MUTED: Color = Color::Rgb(0x7d, 0x70, 0x67);
+
+    let (_dir, mut tinkery) = open_file_with("");
+    tinkery.send_keys("ctrl+w");
+    tinkery.wait_for_text_gone("alpha", WAIT);
+    assert_key_list(&tinkery, "proj", X, HEADER_ROW);
+    assert_eq!(tinkery.fg_at(X, HEADER_ROW), STRONG);
+    assert!(tinkery.bold_at(X, HEADER_ROW));
+    assert_eq!(tinkery.fg_at(X + 7, HEADER_ROW), MUTED);
+    for (row, (key, label)) in KEY_ROWS.into_iter().zip(KEYS) {
+        // Every default key is six cells long: `strong` bold on `btn`,
+        // between round ends in `btn` on the ground.
+        assert_eq!(key.len(), 6);
+        for end in [X, X + 7] {
+            assert_eq!(tinkery.fg_at(end, row), BTN, "{key} end");
+            assert_eq!(tinkery.bg_at(end, row), BG, "{key} end");
+        }
+        for x in X + 1..X + 7 {
+            assert_eq!(tinkery.fg_at(x, row), STRONG, "{key}");
+            assert_eq!(tinkery.bg_at(x, row), BTN, "{key}");
+            assert!(tinkery.bold_at(x, row), "{key}");
+        }
+        // Two cells of the ground, then the label in `text`.
+        assert_eq!(tinkery.bg_at(X + 8, row), BG, "{key}");
+        let width = u16::try_from(label.chars().count()).expect("a short label");
+        for x in LABEL_X..LABEL_X + width {
+            assert_eq!(tinkery.bg_at(x, row), BG, "{label}");
+            assert!(!tinkery.bold_at(x, row), "{label}");
+        }
+        assert_eq!(tinkery.fg_text(row, TEXT), label);
+    }
+}
+
+#[test]
+fn in_mono_a_keycap_is_the_key_in_bold_between_blanks() {
+    let (_dir, mut tinkery) = open_file_with("theme = \"mono\"\n");
+    tinkery.send_keys("ctrl+w");
+    tinkery.wait_for_text_gone("alpha", WAIT);
+    tinkery.wait_for_text("no file open", WAIT);
+    for (row, (key, label)) in KEY_ROWS.into_iter().zip(KEYS) {
+        // The same columns as with round ends.
+        assert_eq!(
+            tinkery.text_col(row, &format!(" {key}   {label}")),
+            Some(X),
+            "{:#?}",
+            tinkery.screen()
+        );
+        assert_eq!(tinkery.bold_text(row), key);
+    }
+    // The header is plain, there's no Nerd Font glyph, and nothing blended.
+    assert_eq!(tinkery.bold_text(HEADER_ROW), "");
+    let screen = tinkery.screen().join("\n");
+    assert!(
+        !screen.contains(CAP_L) && !screen.contains(CAP_R),
+        "{screen}"
+    );
+    for row in 0..ROWS {
+        for x in 0..COLS {
+            for color in [tinkery.fg_at(x, row), tinkery.bg_at(x, row)] {
+                assert!(!matches!(color, Color::Rgb(..)), "({x}, {row})");
+            }
+        }
+    }
 }
 
 #[test]

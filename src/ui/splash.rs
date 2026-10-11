@@ -1,7 +1,8 @@
 //! The splash Tinkery opens on when it's started with nothing to edit
 //! (tinkery-splash spec S2, as in `design/splash.png`): no card, just one block
-//! centred in the editor area: the `tinkery` wordmark in half-block letters on a
-//! soft glow, a ramp rule, the project path, and three actions to pick from.
+//! centred in the editor area: the `tinkery` wordmark in half-block letters, a
+//! ramp rule, the project path, and three buttons to pick from (tinkery-forge
+//! spec F20).
 
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
@@ -10,7 +11,7 @@ use ratatui::style::{Color, Modifier, Style};
 use unicode_width::UnicodeWidthStr;
 
 use crate::theme::{Theme, grad, mix};
-use crate::ui::glow_row;
+use crate::ui::kit::{self, ButtonKind, Look};
 use crate::ui::tree::{cut, cut_front};
 
 /// The wordmark: `tinkery` drawn in half-block pixels, two pixel rows per text
@@ -87,32 +88,24 @@ const WORDMARK: [&str; 5] = [
 /// The wordmark's width in cells.
 const WORD_W: u16 = 41;
 
-/// The least width the big wordmark is drawn in: it and a cell of glow on
+/// The least width the big wordmark is drawn in: it and two cells clear on
 /// either side.
 const WORD_ROOM: u16 = WORD_W + 4;
 
-/// The rule's width: as wide as the glow, so the two end together.
+/// The rule's width: it runs eleven cells past the wordmark on either side.
 const RULE_W: u16 = 63;
 
-/// How far the glow reaches from the wordmark's centre, in cells across and
-/// rows down; cells are about twice as tall as wide, so this is near round.
-const GLOW_RX: f64 = 34.0;
-const GLOW_RY: f64 = 4.5;
-
-/// How far a cell at the glow's centre is blended toward `accent2`. Kept low:
-/// the glow should read as light behind the letters, not a panel.
-const GLOW: f64 = 0.14;
-
-/// The action rows' width; the selected row's glow runs across all of it.
+/// The action rows' width: a click anywhere in it runs the row's action, and
+/// what a row holds is centred in it.
 const ROW_W: u16 = 56;
 
-/// Where a row's parts start, from its left: the `✦`, the label, the hint.
-const MARK_X: u16 = 2;
-const LABEL_X: u16 = 4;
-const HINT_X: u16 = 22;
+/// The width of the widest button, `Open directory o` between its two ends;
+/// the hints start in one column, `HINT_GAP` clear of it.
+const BUTTON_W: u16 = 18;
+const HINT_GAP: u16 = 2;
 
-/// Where the key sits, from the row's right edge.
-const KEY_FROM_RIGHT: u16 = 2;
+/// Where a row's hint starts, from its button's left end.
+const HINT_X: u16 = BUTTON_W + HINT_GAP;
 
 /// One of the splash's actions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -134,7 +127,7 @@ impl Item {
         }
     }
 
-    /// The letter shown at the row's right; the keymap binds the same one.
+    /// The letter shown on the button; the keymap binds the same one.
     pub fn key(self) -> &'static str {
         match self {
             Item::NewFile => "n",
@@ -143,7 +136,7 @@ impl Item {
         }
     }
 
-    /// What the row does, after its label: where a new file or folder goes.
+    /// What the row does, beside its button: where a new file or folder goes.
     fn hint(self, project: &str, room: usize) -> String {
         match self {
             Item::NewFile | Item::NewDirectory => {
@@ -291,6 +284,40 @@ impl Layout {
     }
 }
 
+/// What the action rows hold and where: the buttons share a left edge and the
+/// hints a column, and the block the two make is centred in the rows.
+struct Actions {
+    /// The buttons' left edge.
+    x: u16,
+    /// The column after the rows' last.
+    end: u16,
+    /// Each action's hint, in `Item::ALL`'s order; empty at a size without.
+    hints: [String; 3],
+}
+
+impl Actions {
+    fn new(layout: &Layout, project: &str) -> Actions {
+        let room = usize::from(layout.row_w.saturating_sub(HINT_X));
+        let hints = Item::ALL.map(|item| {
+            if layout.step.hints {
+                item.hint(project, room)
+            } else {
+                String::new()
+            }
+        });
+        let widest = hints.iter().map(|hint| hint.width()).max().unwrap_or(0);
+        let block = match u16::try_from(widest).unwrap_or(u16::MAX) {
+            0 => BUTTON_W,
+            hint => HINT_X.saturating_add(hint),
+        };
+        Actions {
+            x: layout.row_x + layout.row_w.saturating_sub(block) / 2,
+            end: layout.row_x + layout.row_w,
+            hints,
+        }
+    }
+}
+
 /// The x that centres something `width` wide in `area`.
 fn centred(area: Rect, width: u16) -> u16 {
     area.x + area.width.saturating_sub(width) / 2
@@ -336,7 +363,7 @@ impl Splash {
 
     /// Draws the splash centred in `area`, naming `project` (the brand label:
     /// the home folder shown as `~`) under the wordmark and in the hints.
-    pub fn render(&self, theme: &Theme, project: &str, frame: &mut Frame, area: Rect) {
+    pub fn render(&self, look: Look, theme: &Theme, project: &str, frame: &mut Frame, area: Rect) {
         let area = area.intersection(frame.area());
         if area.is_empty() {
             return;
@@ -351,9 +378,7 @@ impl Splash {
         }
         buf.set_style(area, Style::new().bg(theme.bg));
         let layout = Layout::new(area);
-        if layout.step.big() && theme.ramps() {
-            glow(theme, buf, area, layout.top);
-        }
+        let actions = Actions::new(&layout, project);
         for (y, line) in layout.rows(area) {
             match line {
                 Word(row) => wordmark_row(theme, buf, area, row, y),
@@ -361,79 +386,35 @@ impl Splash {
                 Rule => rule(theme, buf, area, y),
                 Blank => {}
                 Path => path(theme, buf, area, project, y),
-                Line::Item(item) => self.item_row(theme, buf, &layout, project, item, y),
+                Line::Item(item) => self.item_row(look, theme, buf, &actions, item, y),
             }
         }
     }
 
-    /// One action row: the label in `text`, the hint in `muted`, the key at the
-    /// right in `muted`. The selected row lies on the dialog glow with `✦` in
-    /// `accent2`, its label bold `strong` and its key bold `accent`.
+    /// One action row: the action as a button with its key on it, primary
+    /// when it's the selected one, and its hint in `muted` beside it. `mono`
+    /// has no fills, so there the selected button is reverse video.
     fn item_row(
         &self,
+        look: Look,
         theme: &Theme,
         buf: &mut Buffer,
-        layout: &Layout,
-        project: &str,
+        actions: &Actions,
         item: Item,
         y: u16,
     ) {
-        let selected = item == self.selected();
-        let (x0, x1) = (layout.row_x, layout.row_x + layout.row_w);
-        if selected {
-            glow_row(theme, buf, x0, x1, y);
-        }
-        // `mono` reverses the selected row, which only reads with no colours of
-        // its own on it.
-        let plain = selected && !theme.ramps();
-        let pick = |style: Style| if plain { Style::new() } else { style };
-        let bold_if = |style: Style| {
-            if selected {
-                style.add_modifier(Modifier::BOLD)
-            } else {
-                style
-            }
+        let kind = if item == self.selected() {
+            ButtonKind::Primary
+        } else {
+            ButtonKind::Normal
         };
-        let key_x = x1.saturating_sub(KEY_FROM_RIGHT);
-        let label_x = x0 + LABEL_X;
-        if label_x >= key_x {
-            return;
-        }
-        if selected {
-            buf.set_string(x0 + MARK_X, y, "✦", pick(Style::new().fg(theme.accent2)));
-        }
-        let label_fg = if selected { theme.strong } else { theme.text };
-        let room = usize::from(key_x.saturating_sub(label_x + 1));
-        let label = cut(item.label(), room);
-        buf.set_string(label_x, y, label, pick(bold_if(Style::new().fg(label_fg))));
-        let hint_x = x0 + HINT_X;
-        if layout.step.hints && hint_x + 2 < key_x {
-            let room = usize::from(key_x - hint_x - 2);
-            let hint = item.hint(project, room);
-            buf.set_string(hint_x, y, hint, pick(Style::new().fg(theme.muted)));
-        }
-        let key_fg = if selected { theme.accent } else { theme.muted };
-        buf.set_string(key_x, y, item.key(), pick(bold_if(Style::new().fg(key_fg))));
-    }
-}
-
-/// A soft light behind the wordmark: the ground blended toward `accent2`,
-/// strongest at the wordmark's centre and fading to nothing at an ellipse
-/// around it.
-fn glow(theme: &Theme, buf: &mut Buffer, area: Rect, top: u16) {
-    let cx = f64::from(centred(area, WORD_W)) + f64::from(WORD_W) / 2.0;
-    let cy = f64::from(top) + WORDMARK.len() as f64 / 2.0;
-    for y in area.top()..area.bottom() {
-        for x in area.left()..area.right() {
-            let dx = (f64::from(x) + 0.5 - cx) / GLOW_RX;
-            let dy = (f64::from(y) + 0.5 - cy) / GLOW_RY;
-            let d = (dx * dx + dy * dy).sqrt();
-            if d < 1.0 {
-                // Squared, so the light falls off fast near its edge rather
-                // than stopping at a visible line.
-                let t = GLOW * (1.0 - d).powi(2);
-                buf[(x, y)].set_bg(mix(theme.bg, theme.accent2, t));
-            }
+        let button = kit::button(look, theme, item.label(), item.key(), kind, false, theme.bg);
+        kit::put(buf, actions.x, y, &button, actions.end);
+        let hint = &actions.hints[item as usize];
+        let hint_x = actions.x.saturating_add(HINT_X);
+        if !hint.is_empty() && hint_x < actions.end {
+            let room = usize::from(actions.end - hint_x);
+            buf.set_stringn(hint_x, y, hint, room, Style::new().fg(theme.muted));
         }
     }
 }
@@ -446,8 +427,8 @@ fn word_color(theme: &Theme, col: u16) -> Color {
     )
 }
 
-/// One row of the big wordmark. Blank pixels are left alone so the glow shows
-/// through them; in `mono` the letters take the terminal's own colour.
+/// One row of the big wordmark, each column on the ramp; in `mono` the letters
+/// take the terminal's own colour.
 fn wordmark_row(theme: &Theme, buf: &mut Buffer, area: Rect, row: usize, y: u16) {
     let x0 = centred(area, WORD_W);
     for (col, c) in (0u16..).zip(WORDMARK[row].chars()) {
@@ -534,8 +515,22 @@ mod tests {
         h: u16,
     ) -> anyhow::Result<Buffer> {
         let mut terminal = Terminal::new(TestBackend::new(w, h))?;
-        terminal.draw(|frame| splash.render(theme, project, frame, Rect::new(0, 0, w, h)))?;
+        terminal.draw(|frame| {
+            let area = Rect::new(0, 0, w, h);
+            splash.render(Look::default(), theme, project, frame, area);
+        })?;
         Ok(terminal.backend().buffer().clone())
+    }
+
+    /// What a button reads between its round ends.
+    fn pill(item: Item) -> String {
+        format!(
+            "{}{} {}{}",
+            kit::CAP_L,
+            item.label(),
+            item.key(),
+            kit::CAP_R
+        )
     }
 
     fn draw(splash: &Splash, theme: &Theme, w: u16, h: u16) -> anyhow::Result<Buffer> {
@@ -584,6 +579,10 @@ mod tests {
     const WORD_X: u16 = 29;
     /// The action rows are centred too: (100 − 56) / 2.
     const ROW_X: u16 = 22;
+    /// With `~/src` the widest hint is `choose a folder`, so the buttons and
+    /// hints are 20 + 15 wide, centred in the rows: 22 + (56 − 35) / 2.
+    const BUTTON_X: u16 = 32;
+    const HINT_COL: u16 = BUTTON_X + HINT_X;
 
     #[test]
     fn selection_wraps_both_ways() {
@@ -628,27 +627,33 @@ mod tests {
     }
 
     #[test]
-    fn the_glow_leans_toward_accent2_and_fades_with_distance() -> anyhow::Result<()> {
+    fn the_widest_button_is_as_wide_as_the_column_kept_for_it() {
         let theme = Theme::default();
-        let buf = draw(&Splash::default(), &theme, 100, 26)?;
-        // Between the `k` and the `e`, at the centre: blended, toward accent2.
-        let near = buf[(WORD_X + 20, TOP + 2)].bg;
-        // Left of the `t`, about as far out as the rule's fade.
-        let mid = buf[(WORD_X - 4, TOP + 2)].bg;
-        let far = buf[(2, TOP + 2)].bg;
-        assert_ne!(near, theme.bg);
-        assert!(distance(near, theme.accent2) < distance(theme.bg, theme.accent2));
-        assert!(distance(near, theme.bg) > distance(mid, theme.bg));
-        assert_ne!(mid, theme.bg);
-        assert_eq!(far, theme.bg);
-        // Nor does it reach the action rows.
-        assert_eq!(buf[(ROW_X + 30, ITEM_YS[2])].bg, theme.bg);
+        let widths = Item::ALL.map(|item| {
+            let kind = ButtonKind::Normal;
+            let button = kit::button(
+                Look::default(),
+                &theme,
+                item.label(),
+                item.key(),
+                kind,
+                false,
+                theme.bg,
+            );
+            kit::width(&button)
+        });
+        assert_eq!(widths.into_iter().max(), Some(BUTTON_W));
+    }
 
-        let mono = Theme::named("mono").expect("mono exists");
-        let buf = draw(&Splash::default(), &mono, 100, 26)?;
-        for y in 0..ITEM_YS[0] {
-            for x in 0..100 {
-                assert_eq!(buf[(x, y)].bg, mono.bg, "({x}, {y})");
+    #[test]
+    fn nothing_glows_behind_the_wordmark() -> anyhow::Result<()> {
+        for theme in [Theme::default(), Theme::named("mono").expect("mono exists")] {
+            let buf = draw(&Splash::default(), &theme, 100, 26)?;
+            // Down to the path, every cell is on the editor ground.
+            for y in 0..ITEM_YS[0] {
+                for x in 0..100 {
+                    assert_eq!(buf[(x, y)].bg, theme.bg, "({x}, {y})");
+                }
             }
         }
         Ok(())
@@ -700,53 +705,89 @@ mod tests {
     }
 
     #[test]
-    fn the_actions_have_hints_and_keys_and_the_selected_one_glows() -> anyhow::Result<()> {
+    fn the_actions_are_buttons_with_hints_and_the_selected_one_is_primary() -> anyhow::Result<()> {
         let theme = Theme::default();
         let buf = draw(&Splash::default(), &theme, 100, 26)?;
-        let line = |label: &str, hint: &str, key: &str| {
-            format!("{:<18}{:<32}{key}", label, hint).trim().to_string()
+        // A button, then its hint in the column two clear of the widest one.
+        let line = |item: Item, hint: &str| {
+            let gap = usize::from(HINT_X) - pill(item).chars().count();
+            format!("{}{}{hint}", pill(item), " ".repeat(gap))
         };
-        assert_eq!(
-            row(&buf, ITEM_YS[0]),
-            format!("✦ {}", line("New file", "in ~/src", "n"))
-        );
-        assert_eq!(
-            row(&buf, ITEM_YS[1]),
-            line("New directory", "in ~/src", "d")
-        );
+        assert_eq!(row(&buf, ITEM_YS[0]), line(Item::NewFile, "in ~/src"));
+        assert_eq!(row(&buf, ITEM_YS[1]), line(Item::NewDirectory, "in ~/src"));
         assert_eq!(
             row(&buf, ITEM_YS[2]),
-            line("Open directory", "choose a folder", "o")
+            line(Item::OpenDirectory, "choose a folder")
         );
+        for (y, item) in ITEM_YS.into_iter().zip(Item::ALL) {
+            assert_eq!(col(&buf, y, &pill(item)), Some(BUTTON_X), "{item:?}");
+            assert_eq!(buf[(HINT_COL, y)].fg, theme.muted, "{item:?}");
+            assert_eq!(buf[(HINT_COL, y)].bg, theme.bg, "{item:?}");
+            // No `✦` and no glow: the row outside the button is the ground.
+            assert!(!row(&buf, y).contains('✦'), "{item:?}");
+            assert_eq!(buf[(ROW_X, y)].bg, theme.bg, "{item:?}");
+            assert_eq!(buf[(ROW_X + ROW_W - 1, y)].bg, theme.bg, "{item:?}");
+        }
+        // The selected one is primary: `acc_ink` on `accent`, key and all,
+        // between round ends in `accent` on the ground.
         let (y, other) = (ITEM_YS[0], ITEM_YS[1]);
-        // The selected row: dialog glow, `✦` in accent2, bold strong label,
-        // bold accent key.
-        let stops = [
-            mix(theme.raised, theme.accent, 0.3),
-            mix(theme.raised, theme.accent2, 0.12),
-            theme.raised,
-        ];
-        assert_eq!(buf[(ROW_X, y)].bg, stops[0]);
-        assert_eq!(buf[(ROW_X + MARK_X, y)].symbol(), "✦");
-        assert_eq!(buf[(ROW_X + MARK_X, y)].fg, theme.accent2);
-        let label = &buf[(ROW_X + LABEL_X, y)];
-        assert_eq!(label.fg, theme.strong);
-        assert!(label.modifier.contains(Modifier::BOLD));
-        assert_eq!(buf[(ROW_X + HINT_X, y)].fg, theme.muted);
-        let key = &buf[(ROW_X + ROW_W - 2, y)];
-        assert_eq!(key.symbol(), "n");
-        assert_eq!(key.fg, theme.accent);
+        let end = BUTTON_X + 11;
+        for x in [BUTTON_X, end] {
+            assert_eq!((buf[(x, y)].fg, buf[(x, y)].bg), (theme.accent, theme.bg));
+        }
+        for x in BUTTON_X + 1..end {
+            let cell = &buf[(x, y)];
+            assert_eq!((cell.fg, cell.bg), (theme.acc_ink, theme.accent), "{x}");
+            assert!(cell.modifier.contains(Modifier::BOLD), "{x}");
+        }
+        assert_eq!(buf[(end - 1, y)].symbol(), "n");
+        // The others are normal: `strong` on `btn`, the key in `accent`.
+        let end = BUTTON_X + 16;
+        for x in [BUTTON_X, end] {
+            let cell = &buf[(x, other)];
+            assert_eq!((cell.fg, cell.bg), (theme.btn, theme.bg));
+        }
+        for x in BUTTON_X + 1..end - 1 {
+            let cell = &buf[(x, other)];
+            assert_eq!((cell.fg, cell.bg), (theme.strong, theme.btn), "{x}");
+            assert!(cell.modifier.contains(Modifier::BOLD), "{x}");
+        }
+        let key = &buf[(end - 1, other)];
+        assert_eq!(key.symbol(), "d");
+        assert_eq!((key.fg, key.bg), (theme.accent, theme.btn));
         assert!(key.modifier.contains(Modifier::BOLD));
-        // The others: on the ground, label in text, hint and key in muted.
-        assert_eq!(buf[(ROW_X, other)].bg, theme.bg);
-        assert_eq!(buf[(ROW_X + LABEL_X, other)].fg, theme.text);
-        assert!(
-            !buf[(ROW_X + LABEL_X, other)]
-                .modifier
-                .contains(Modifier::BOLD)
-        );
-        assert_eq!(buf[(ROW_X + HINT_X, other)].fg, theme.muted);
-        assert_eq!(buf[(ROW_X + ROW_W - 2, other)].fg, theme.muted);
+
+        // Moving the selection moves the primary button with it.
+        let mut splash = Splash::default();
+        splash.move_by(1);
+        let buf = draw(&splash, &theme, 100, 26)?;
+        assert_eq!(buf[(BUTTON_X + 1, ITEM_YS[0])].bg, theme.btn);
+        assert_eq!(buf[(BUTTON_X + 1, ITEM_YS[1])].bg, theme.accent);
+        Ok(())
+    }
+
+    #[test]
+    fn the_buttons_and_hints_stay_centred_and_a_long_path_is_cut_to_the_row() -> anyhow::Result<()>
+    {
+        let theme = Theme::default();
+        // A path whose hint is wider than `choose a folder` moves the block
+        // left: 20 + `in ~/a/longer/project` (21) is 41 wide, from
+        // 22 + (56 − 41) / 2.
+        let buf = draw_with(&Splash::default(), &theme, "~/a/longer/project", 100, 26)?;
+        assert_eq!(col(&buf, ITEM_YS[0], &pill(Item::NewFile)), Some(29));
+        assert_eq!(col(&buf, ITEM_YS[0], "in ~/a/longer/project"), Some(49));
+        assert_eq!(col(&buf, ITEM_YS[2], "choose a folder"), Some(49));
+
+        // One too long for the row is cut at its start, and the block then
+        // fills the row from edge to edge.
+        let long = format!("~/{}last", "deep/".repeat(20));
+        let buf = draw_with(&Splash::default(), &theme, &long, 100, 26)?;
+        assert_eq!(col(&buf, ITEM_YS[0], &pill(Item::NewFile)), Some(ROW_X));
+        let shown = row(&buf, ITEM_YS[0]);
+        assert!(shown.ends_with("/deep/last"), "{shown}");
+        assert_eq!(col(&buf, ITEM_YS[0], "in …"), Some(ROW_X + HINT_X));
+        assert_eq!(buf[(ROW_X + ROW_W - 1, ITEM_YS[0])].symbol(), "t");
+        assert_eq!(buf[(ROW_X + ROW_W, ITEM_YS[0])].symbol(), " ");
         Ok(())
     }
 
@@ -773,20 +814,28 @@ mod tests {
         let shown = rows(&draw(&splash, &theme, 50, 13)?);
         assert_eq!(shown[0], "✦ tinkery");
         assert_eq!(shown[1], "~/src");
-        assert_eq!(shown[2], format!("✦ {:<44}n", "New file"));
+        assert_eq!(shown[2], pill(Item::NewFile));
         assert_eq!(shown.len(), 5, "{shown:?}");
+        // Without hints the buttons alone are centred: (50 − 18) / 2.
+        let buf = draw(&splash, &theme, 50, 13)?;
+        for (y, item) in [(6, Item::NewFile), (8, Item::NewDirectory)] {
+            assert_eq!(col(&buf, y, &pill(item)), Some(16), "{item:?}");
+        }
 
         // Too short for the path.
         let shown = rows(&draw(&splash, &theme, 100, 8)?);
         assert_eq!(shown.len(), 4, "{shown:?}");
         assert_eq!(shown[0], "✦ tinkery");
-        assert!(shown[1].starts_with("✦ New file"), "{shown:?}");
+        assert!(shown[1].starts_with(&pill(Item::NewFile)), "{shown:?}");
         assert!(!shown.iter().any(|r| r.contains("~/src")), "{shown:?}");
 
         // Shorter still: the rows close up.
         let shown = rows(&draw(&splash, &theme, 100, 4)?);
         assert_eq!(shown.len(), 4, "{shown:?}");
-        assert!(shown[3].starts_with("Open directory"), "{shown:?}");
+        assert!(
+            shown[3].starts_with(&pill(Item::OpenDirectory)),
+            "{shown:?}"
+        );
         Ok(())
     }
 
@@ -824,11 +873,19 @@ mod tests {
                 assert_eq!(Splash::item_at(area, Position::new(w / 2, y)), None);
             }
         }
-        // Beside a row, off its span, nothing.
+        // The whole row answers, not just the button; beside it, off its
+        // span, nothing.
         let area = Rect::new(0, 0, 100, 26);
+        for x in [ROW_X, ROW_X + 4, HINT_COL, ROW_X + ROW_W - 1] {
+            assert_eq!(
+                Splash::item_at(area, Position::new(x, ITEM_YS[1])),
+                Some(Item::NewDirectory),
+                "column {x}"
+            );
+        }
         assert_eq!(
-            Splash::item_at(area, Position::new(ROW_X + 4, ITEM_YS[1])),
-            Some(Item::NewDirectory)
+            Splash::item_at(area, Position::new(ROW_X + ROW_W, ITEM_YS[1])),
+            None
         );
         assert_eq!(
             Splash::item_at(area, Position::new(ROW_X - 1, ITEM_YS[1])),
@@ -842,7 +899,7 @@ mod tests {
     }
 
     #[test]
-    fn mono_has_no_glow_a_plain_wordmark_and_rule_and_a_reversed_row() -> anyhow::Result<()> {
+    fn mono_has_a_plain_wordmark_and_rule_and_a_reversed_bold_button() -> anyhow::Result<()> {
         let mono = Theme::named("mono").expect("mono exists");
         let buf = draw(&Splash::default(), &mono, 100, 26)?;
         for (y, bitmap) in (TOP..).zip(WORDMARK) {
@@ -855,16 +912,32 @@ mod tests {
         for x in 18..81 {
             assert_eq!(buf[(x, RULE_Y)].fg, Color::Reset);
         }
-        assert!(
-            buf[(ROW_X + 10, ITEM_YS[0])]
-                .modifier
-                .contains(Modifier::REVERSED)
-        );
-        assert!(
-            !buf[(ROW_X + 10, ITEM_YS[1])]
-                .modifier
-                .contains(Modifier::REVERSED)
-        );
+        // The buttons are text between blanks, in the columns the pills take:
+        // the selected one reverse video, all of them bold, no glyph a
+        // terminal's own font lacks, and no colour that isn't the terminal's.
+        assert_eq!(col(&buf, ITEM_YS[0], " New file n "), Some(BUTTON_X));
+        assert_eq!(col(&buf, ITEM_YS[1], " New directory d "), Some(BUTTON_X));
+        for (y, width, selected) in [(ITEM_YS[0], 12, true), (ITEM_YS[1], 17, false)] {
+            for x in BUTTON_X..BUTTON_X + width {
+                let cell = &buf[(x, y)];
+                assert!(cell.modifier.contains(Modifier::BOLD), "({x}, {y})");
+                assert_eq!(
+                    cell.modifier.contains(Modifier::REVERSED),
+                    selected,
+                    "({x}, {y})"
+                );
+            }
+            // The hint isn't part of the button.
+            assert!(buf[(HINT_COL, y)].modifier.is_empty(), "row {y}");
+        }
+        for y in 0..26 {
+            for x in 0..100 {
+                let cell = &buf[(x, y)];
+                assert!(![kit::CAP_L, kit::CAP_R].contains(&cell.symbol()));
+                assert!(!matches!(cell.fg, Color::Rgb(..)), "({x}, {y})");
+                assert!(!matches!(cell.bg, Color::Rgb(..)), "({x}, {y})");
+            }
+        }
         Ok(())
     }
 }

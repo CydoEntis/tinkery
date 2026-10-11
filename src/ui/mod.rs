@@ -95,6 +95,7 @@ pub fn dialog_card(theme: &Theme, frame: &mut Frame, card: Rect) {
 /// accent2 into `raised` (design README §3), or reverse video in `mono`, which
 /// has no ramps. Draw it before the row's text, and in `mono` give that text no
 /// colours of its own so the reverse video reads.
+#[cfg_attr(not(test), expect(dead_code, reason = "removed by #228"))]
 pub fn glow_row(theme: &Theme, buf: &mut Buffer, x0: u16, x1: u16, y: u16) {
     if theme.ramps() {
         let stops = [

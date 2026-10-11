@@ -4743,7 +4743,7 @@ impl App {
             // The splash has the editor area to itself: no pills over
             // it, and no cursor in a buffer that isn't shown.
             if let Some(splash) = &self.splash {
-                splash.render(theme, &self.project, frame, area.editor);
+                splash.render(self.look, theme, &self.project, frame, area.editor);
                 continue;
             }
             // The key list keeps the tab bar, with no tab on it, and has the
@@ -4760,7 +4760,7 @@ impl App {
                 );
                 let rows = nofile::rows(&self.keymap);
                 let folder = file_name(&absolute(self.tree.root()));
-                nofile::render(theme, &folder, &rows, frame, area.editor);
+                nofile::render(self.look, theme, &folder, &rows, frame, area.editor);
                 continue;
             }
             render_tabs(
