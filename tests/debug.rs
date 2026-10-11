@@ -17,6 +17,9 @@ const WAIT: Duration = Duration::from_secs(10);
 
 /// Aurora's `accent2`, which the paused line is marked in.
 const ACCENT2: vt100::Color = vt100::Color::Rgb(0x6e, 0xe7, 0xd8);
+/// The paused line's flat fill: Aurora's `bg` (`#0b0a10`) mixed 0.12 toward
+/// `accent2` (Tinkery Forge F13).
+const PAUSED_BG: vt100::Color = vt100::Color::Rgb(0x17, 0x25, 0x28);
 
 fn fake() -> &'static str {
     env!("CARGO_BIN_EXE_fake_dap")
@@ -221,9 +224,14 @@ fn a_stop_opens_the_top_frames_file_and_marks_the_paused_line() {
         screen[usize::from(row(3))].starts_with('▶')
     });
     tinkery.wait_for_fg_at(0, row(3), ACCENT2, WAIT);
+    // The line is one flat fill from the mark cell on, not a ramp.
+    tinkery.wait_for_bg(0, row(3), PAUSED_BG, WAIT);
+    assert_eq!(tinkery.bg_at(8, row(3)), PAUSED_BG);
+    assert_eq!(tinkery.bg_at(20, row(3)), PAUSED_BG);
     // Only the paused line is marked.
     let screen = tinkery.screen();
     assert!(!screen[usize::from(row(2))].starts_with('▶'));
+    assert_ne!(tinkery.bg_at(8, row(2)), PAUSED_BG);
     // The stack was asked of the thread that stopped.
     let requests = project.requests();
     let stack = requests

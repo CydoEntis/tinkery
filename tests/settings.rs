@@ -57,7 +57,7 @@ fn settings_creates_a_missing_config_from_the_template_and_opens_it() {
     tinkery.wait_for_text("# tab_width = 4", WAIT);
     tinkery.wait_for_text("# insert_spaces = true", WAIT);
     tinkery.wait_for_text("# auto_pairs = true", WAIT);
-    tinkery.wait_for_text("# theme = \"hydra\"", WAIT);
+    tinkery.wait_for_text("# theme = \"tinkery\"", WAIT);
     let written = fs::read_to_string(&config).expect("config.toml written");
     assert!(written.contains("[keys]"), "{written}");
     assert!(written.contains("# save = \"ctrl+s\""), "{written}");

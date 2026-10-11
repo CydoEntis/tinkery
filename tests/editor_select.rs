@@ -3,7 +3,7 @@ mod harness;
 use std::fs;
 use std::time::Duration;
 
-use harness::{ROWS, Tinkery};
+use harness::{HYDRA, ROWS, Tinkery};
 
 const START: Duration = Duration::from_secs(10);
 const WAIT: Duration = Duration::from_secs(5);
@@ -46,7 +46,7 @@ fn open_as(name: &str, text: &str) -> (tempfile::TempDir, Tinkery) {
     let path = dir.path().join(name);
     fs::write(&path, text).expect("write fixture");
     let path = path.to_str().expect("temp path is UTF-8").to_string();
-    let tinkery = Tinkery::spawn_with_config("", &[&path]);
+    let tinkery = Tinkery::spawn_with_config(HYDRA, &[&path]);
     tinkery.wait_for_text("Ln 1, Col 1", START);
     (dir, tinkery)
 }

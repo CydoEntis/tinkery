@@ -58,7 +58,7 @@ fn fixture_copy() -> std::io::Result<tempfile::TempDir> {
 fn open_in(dir: &Path) -> Tinkery {
     let tinkery = Tinkery::spawn_in_with_config(
         dir,
-        "[lsp.rust]\ncommand = \"tinkery-no-such-server\"\n",
+        "theme = \"hydra\"\n[lsp.rust]\ncommand = \"tinkery-no-such-server\"\n",
         &[],
     );
     tinkery.wait_for_text("Open directory", START);

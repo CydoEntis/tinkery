@@ -11,7 +11,7 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
-use harness::{COLS, ROWS, Tinkery, pill_text};
+use harness::{COLS, HYDRA, ROWS, Tinkery, pill_text};
 use tempfile::TempDir;
 use vt100::Color;
 
@@ -111,7 +111,7 @@ fn start_bare_with(toml: &str) -> (TempDir, Tinkery) {
 }
 
 fn start_bare() -> (TempDir, Tinkery) {
-    start_bare_with("")
+    start_bare_with(HYDRA)
 }
 
 #[test]

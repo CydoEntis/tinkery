@@ -22,6 +22,13 @@ use tempfile::{NamedTempFile, TempDir};
 pub const COLS: u16 = 100;
 pub const ROWS: u16 = 30;
 
+/// The config a test gets when it gives none: most tests' colour constants are
+/// `hydra`'s, from when it was the default theme. A test that passes its own
+/// config gets exactly that text, so one that reads hydra's colours starts its
+/// config with this line, and `""` is how a test asks for the real default.
+pub const HYDRA: &str = "theme = \"hydra\"
+";
+
 /// Whether `status` shows `position` (`Ln 3, Col 1`) whole: not as the start of
 /// a longer column like `Col 12`. The language follows the position, so it no
 /// longer ends the status line.
@@ -104,15 +111,16 @@ pub struct Tinkery {
 }
 
 impl Tinkery {
-    /// Starts tinkery in the current directory (the crate root under `cargo test`).
+    /// Starts tinkery in the current directory (the crate root under `cargo test`),
+    /// on `HYDRA`.
     pub fn spawn(args: &[&str]) -> Self {
         let dir = std::env::current_dir().expect("test process has a current directory");
         Self::spawn_in(&dir, args)
     }
 
-    /// Starts tinkery with `dir` as its working directory.
+    /// Starts tinkery with `dir` as its working directory, on `HYDRA`.
     pub fn spawn_in(dir: &Path, args: &[&str]) -> Self {
-        Self::spawn_in_with_config(dir, "", args)
+        Self::spawn_in_with_config(dir, HYDRA, args)
     }
 
     /// Starts tinkery in the current directory with `toml` as its `config.toml`.
@@ -126,10 +134,11 @@ impl Tinkery {
         Self::spawn_full(dir, toml, None, &[], args)
     }
 
-    /// Starts tinkery in `dir` with extra environment variables, e.g. a `PATH`
-    /// that holds a fixture's commands.
+    /// Starts tinkery in `dir` on `HYDRA` with extra environment variables, e.g. a
+    /// `PATH` that holds a fixture's commands. A `TINKERY_CONFIG` among them
+    /// replaces the config file whole.
     pub fn spawn_in_with_env(dir: &Path, env: &[(&str, OsString)], args: &[&str]) -> Self {
-        Self::spawn_full(dir, "", None, env, args)
+        Self::spawn_full(dir, HYDRA, None, env, args)
     }
 
     /// Starts tinkery in `dir` with `toml` as its config and extra environment
@@ -143,10 +152,10 @@ impl Tinkery {
         Self::spawn_full(dir, toml, None, env, args)
     }
 
-    /// Starts tinkery in `dir` with `data` as its data dir, which outlives this run
-    /// so a relaunch can find what the last one left there.
+    /// Starts tinkery in `dir` on `HYDRA` with `data` as its data dir, which
+    /// outlives this run so a relaunch can find what the last one left there.
     pub fn spawn_in_with_data(dir: &Path, data: &Path, args: &[&str]) -> Self {
-        Self::spawn_full(dir, "", Some(data.to_path_buf()), &[], args)
+        Self::spawn_full(dir, HYDRA, Some(data.to_path_buf()), &[], args)
     }
 
     fn spawn_full(

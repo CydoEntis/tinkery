@@ -30,6 +30,8 @@ Hydra's ten, and those ten render in the Aurora style too.
 - Overrides the v1 spec's "Hydra's look" Design section; v1's behaviour (R1–R35) stays,
   except R18 (Ctrl+P opens the cast palette) and R23 (replace all is Alt+A).
 - The default theme stays `hydra`, now drawn in the Aurora style (decided 2026-10-07).
+  Superseded 2026-10-11: the default is `tinkery`
+  ([Tinkery Forge intent](../tinkery-forge/intent.md)); `hydra` stays a theme.
 - Default keys avoid Ctrl+Shift (v1 spec Concerns): the palette is Ctrl+P only.
 - Rendering stays a pure function of `App`; no animation timer (decided 2026-10-07).
 - `mono` keeps working with terminal-native colours: same layout, flat `accent`, bold for
