@@ -48,8 +48,6 @@ const HOV: Color = Color::Rgb(0x3a, 0x30, 0x2a);
 const MUTED: Color = Color::Rgb(0x7d, 0x70, 0x67);
 const TEXT: Color = Color::Rgb(0xb5, 0xa8, 0x9d);
 const STRONG: Color = Color::Rgb(0xf8, 0xf0, 0xe6);
-/// hydra's glow at the start of the tree's selected row.
-const TREE_GLOW: Color = Color::Rgb(0x3c, 0x4e, 0x24);
 
 /// The keys on the browser's last row, as keycaps with round ends.
 fn hints() -> String {
@@ -388,7 +386,7 @@ fn opening_a_folder_makes_it_the_project() {
         &["sub"],
         &[("new-file.txt", ""), (".tinkery.toml", new_toml)],
     );
-    let mut tinkery = open_in(old.path(), HYDRA);
+    let mut tinkery = open_in(old.path(), DEFAULT);
     tinkery.wait_for_text("old-file.txt", WAIT);
     tinkery.send_keys("f5");
     tinkery.wait_for_screen("the old command running", WAIT, |screen| {
@@ -428,8 +426,10 @@ fn opening_a_folder_makes_it_the_project() {
             .any(|line| line.contains("Open directory")),
         "no splash after a switch"
     );
-    // The selected first row glows only while the tree has focus.
-    tinkery.wait_for_bg(0, 3, TREE_GLOW, WAIT);
+    // The selected first row is a marked pill only while the tree has focus.
+    tinkery.wait_for_bg(2, 3, HOV, WAIT);
+    assert_eq!(cell(&tinkery, 1, 3), CAP_L);
+    assert_eq!(cell(&tinkery, 2, 3), "›");
     tinkery.wait_for_screen("the old command stopped", WAIT, |screen| {
         screen[usize::from(TITLE_ROW)].contains("wait  stopped")
     });

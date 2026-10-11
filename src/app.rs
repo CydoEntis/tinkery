@@ -4013,8 +4013,10 @@ impl App {
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 self.focus = Focus::Tree;
-                // The brand rows above the nodes only take focus.
-                let row = (mouse.row >= nodes.y).then(|| usize::from(mouse.row - nodes.y));
+                // The brand rows above the nodes, and the card's edge below
+                // them, only take focus.
+                let on_node = (nodes.top()..nodes.bottom()).contains(&mouse.row);
+                let row = on_node.then(|| usize::from(mouse.row - nodes.y));
                 if let Some(index) = row.and_then(|line| self.tree.row_at(line)) {
                     self.tree.select(index);
                     self.activate_tree_row();
@@ -4809,7 +4811,7 @@ impl App {
                 active: active.as_deref(),
                 dirty: &dirty,
             };
-            let selected = render_tree(theme, &self.tree, &marks, focused, tree, frame);
+            let selected = render_tree(self.look, theme, &self.tree, &marks, focused, tree, frame);
             // The cursor marks the focused pane; `render_buffer` put it in the editor.
             if focused && let Some(at) = selected {
                 frame.set_cursor_position(at);

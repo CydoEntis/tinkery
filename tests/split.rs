@@ -20,6 +20,9 @@ const LEFT: usize = LEFT_X as usize;
 /// The tree rows of `a.txt` and `b.txt`, below its brand row.
 const A_ROW: u16 = 3;
 const B_ROW: u16 = 4;
+/// Where the terminal cursor sits on the tree's selected row: its marker, after
+/// the card's edge, a pill's end and the `›`.
+const TREE_MARKER_X: u16 = 3;
 /// Each split's header: a blank row, the pills, a blank row; then its editor.
 const PILL_ROW: u16 = 1;
 const UNDER_ROW: u16 = 2;
@@ -277,7 +280,7 @@ fn f6_cycles_tree_left_right_and_skips_the_hidden_tree() {
 
     // From the right split F6 wraps to the tree, where typing edits nothing...
     tinkery.send_keys("f6");
-    tinkery.wait_for_cursor(2, B_ROW, WAIT);
+    tinkery.wait_for_cursor(TREE_MARKER_X, B_ROW, WAIT);
     tinkery.type_text("0");
     // ...then the left split, then the right one.
     tinkery.send_keys("f6");
@@ -287,7 +290,7 @@ fn f6_cycles_tree_left_right_and_skips_the_hidden_tree() {
     tinkery.type_text("2");
     tinkery.wait_for_text("1  2bravo", WAIT);
     tinkery.send_keys("f6");
-    tinkery.wait_for_cursor(2, B_ROW, WAIT);
+    tinkery.wait_for_cursor(TREE_MARKER_X, B_ROW, WAIT);
 
     // With the tree hidden F6 goes left, right, left.
     tinkery.send_keys("ctrl+b");
