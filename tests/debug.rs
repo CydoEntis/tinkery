@@ -8,7 +8,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use harness::{ROWS, Tinkery};
+use harness::{CAP_L, CAP_R, ROWS, Tinkery, hints_text};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -387,6 +387,14 @@ fn paused_project() -> Project {
     project
 }
 
+/// At 100x30 the panel's title is row 20, its sides' labels row 21 and their
+/// lists start on row 22; the stack's side is columns 0 to 39.
+const PANEL_ROW: u16 = 20;
+const STACK_END: u16 = 39;
+/// The keys the paused panel's title offers, drawn as keycaps.
+const PAUSED_HINTS: &[(&str, &str)] =
+    &[("tab", "stack/variables"), ("F6", "focus"), ("F4", "hide")];
+
 /// Requests named `command` whose `key` argument is `value`.
 fn asked(project: &Project, command: &str, key: &str, value: i64) -> usize {
     project
@@ -409,6 +417,40 @@ fn the_debug_panel_takes_the_run_panels_slot_while_debugging() {
     tinkery.wait_for_text("▾ Locals", WAIT);
     tinkery.wait_for_text("n = 3  int", WAIT);
     tinkery.wait_for_text("▸ items = [7]  list", WAIT);
+    // The title's keys are keycaps, ending a cell short of the right edge.
+    let hints = hints_text(PAUSED_HINTS);
+    let title = &tinkery.screen()[usize::from(PANEL_ROW)];
+    assert!(title.starts_with(" ‖ debug main.py  paused "), "{title:?}");
+    assert!(title.ends_with(&format!("   {hints}")), "{title:?}");
+    assert_eq!(
+        tinkery.text_col(PANEL_ROW, &hints),
+        Some(harness::COLS - 1 - 46)
+    );
+    assert!(tinkery.bold_at(harness::COLS - 1 - 46 + 1, PANEL_ROW));
+    // The selected frame is a pill across the stack's side with `›` before
+    // its text; the frame under it isn't.
+    let stack = &tinkery.screen()[usize::from(PANEL_ROW) + 2];
+    assert!(
+        stack.starts_with(&format!("{CAP_L}› ▶ inner  main.py:3")),
+        "{stack:?}"
+    );
+    assert_eq!(tinkery.text_col(PANEL_ROW + 2, CAP_R), Some(STACK_END));
+    assert_ne!(
+        tinkery.bg_at(1, PANEL_ROW + 2),
+        tinkery.bg_at(1, PANEL_ROW + 3)
+    );
+    assert_eq!(
+        tinkery.bg_at(STACK_END - 1, PANEL_ROW + 2),
+        tinkery.bg_at(1, PANEL_ROW + 2)
+    );
+    assert!(
+        tinkery.bold_at(5, PANEL_ROW + 2),
+        "the selected frame's name"
+    );
+    assert!(!tinkery.bold_at(5, PANEL_ROW + 3));
+    // Without the keys the variables side shows no selection.
+    let lists = tinkery.screen()[usize::from(PANEL_ROW) + 2..usize::from(ROWS) - 1].concat();
+    assert_eq!(lists.matches('›').count(), 1, "{lists:?}");
 
     // F4 hides it and shows it again.
     tinkery.send_keys("f4");
@@ -420,6 +462,49 @@ fn the_debug_panel_takes_the_run_panels_slot_while_debugging() {
     tinkery.send_keys("alt+f6");
     tinkery.wait_for_text("debug main.py  stopped", WAIT);
     tinkery.wait_for_text_gone("call stack", WAIT);
+    tinkery.wait_for_text(
+        &hints_text(&[("alt+F5", "debug again"), ("F4", "hide")]),
+        WAIT,
+    );
+}
+
+#[test]
+fn in_mono_the_selected_rows_are_reverse_video_and_the_keycaps_bold_text() {
+    let project = paused_project();
+    let config = project.config(fake()).replace("aurora", "mono");
+    let mut tinkery = Tinkery::spawn_in_with_config(project.dir.path(), &config, &["main.py"]);
+    tinkery.wait_for_text("Ln 1, Col 1", START);
+    tinkery.send_keys("alt+f5");
+    tinkery.wait_for_text("▸ items = [7]  list", WAIT);
+    // The selected frame, edge to edge of the stack's side, and nothing else.
+    let frame = format!("{:<40}", " › ▶ inner  main.py:3");
+    tinkery.wait_for_reversed(PANEL_ROW + 2, &frame, WAIT);
+    for row in [PANEL_ROW, PANEL_ROW + 1, PANEL_ROW + 3, PANEL_ROW + 4] {
+        assert_eq!(tinkery.reversed_text(row), "", "{row}");
+    }
+    let title = &tinkery.screen()[usize::from(PANEL_ROW)];
+    assert!(
+        title.ends_with("    tab  stack/variables    F6  focus    F4  hide"),
+        "{title:?}"
+    );
+    assert_eq!(title.chars().count(), usize::from(harness::COLS) - 1);
+    assert_eq!(
+        tinkery.bold_text(PANEL_ROW).replace(' ', ""),
+        "debugmain.pytabF6F4"
+    );
+
+    // With the keys on the variables side, its selected row is reversed too.
+    tinkery.send_keys("f6");
+    tinkery.send_keys("tab");
+    tinkery.send_keys("down");
+    tinkery.send_keys("down");
+    let variable = format!("{:<59}", " ›   ▸ items = [7]  list");
+    tinkery.wait_for_reversed(PANEL_ROW + 4, &variable, WAIT);
+    assert_eq!(tinkery.reversed_text(PANEL_ROW + 2), frame);
+    for row in PANEL_ROW..ROWS - 1 {
+        let text = &tinkery.screen()[usize::from(row)];
+        assert!(!text.contains(CAP_L) && !text.contains(CAP_R), "{text:?}");
+    }
 }
 
 #[test]
@@ -434,8 +519,14 @@ fn f6_enters_the_panel_where_the_arrows_expand_and_collapse_values() {
     tinkery.send_keys("tab");
     tinkery.send_keys("down");
     tinkery.send_keys("down");
+    // With the keys, the variable they are on is a pill with `›` before it.
+    tinkery.wait_for_text(&format!("│{CAP_L}›   ▸ items = [7]  list"), WAIT);
+    assert_eq!(
+        tinkery.text_col(PANEL_ROW + 4, CAP_R),
+        Some(harness::COLS - 1)
+    );
     tinkery.send_keys("right");
-    tinkery.wait_for_text("▾ items = [7]  list", WAIT);
+    tinkery.wait_for_text(&format!("│{CAP_L}›   ▾ items = [7]  list"), WAIT);
     tinkery.wait_for_text("0 = 7  int", WAIT);
     assert_eq!(asked(&project, "variables", "variablesReference", 11), 1);
 

@@ -11,6 +11,7 @@ use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
 use crate::theme::Theme;
+use crate::ui::kit::{self, Look};
 
 /// Output lines the panel keeps; older ones are dropped.
 pub const MAX_LINES: usize = 10_000;
@@ -18,13 +19,16 @@ pub const MAX_LINES: usize = 10_000;
 /// Display columns a tab in the output takes.
 const TAB: &str = "    ";
 
+/// A title row's hints: each key and what it does.
+pub type Hints = [(&'static str, &'static str)];
+
 /// The keys the title row offers while the command runs, and once it's done
 /// (SPEC_V1_LAYOUT §9).
-const RUNNING_HINTS: &str = "shift+F5 stop   ctrl+F5 restart   F4 hide";
-const DONE_HINTS: &str = "F5 run again   F4 hide";
+const RUNNING_HINTS: &Hints = &[("shift+F5", "stop"), ("ctrl+F5", "restart"), ("F4", "hide")];
+const DONE_HINTS: &Hints = &[("F5", "run again"), ("F4", "hide")];
 /// The same for a debug session's output: Alt+F6 is what stops it.
-const DEBUG_RUNNING_HINTS: &str = "alt+F6 stop   F4 hide";
-const DEBUG_DONE_HINTS: &str = "alt+F5 debug again   F4 hide";
+const DEBUG_RUNNING_HINTS: &Hints = &[("alt+F6", "stop"), ("F4", "hide")];
+const DEBUG_DONE_HINTS: &Hints = &[("alt+F5", "debug again"), ("F4", "hide")];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunStatus {
@@ -169,7 +173,13 @@ fn themed(theme: &Theme, line: &Line<'static>) -> Line<'static> {
 
 /// Draws the panel in `area`: the title row on `surface`, then as many of the
 /// latest lines as fit, on `bg`.
-pub fn render_run_panel(theme: &Theme, run: Option<&RunView>, area: Rect, frame: &mut Frame) {
+pub fn render_run_panel(
+    look: Look,
+    theme: &Theme,
+    run: Option<&RunView>,
+    area: Rect,
+    frame: &mut Frame,
+) {
     if area.height == 0 || area.width == 0 {
         return;
     }
@@ -202,7 +212,7 @@ pub fn render_run_panel(theme: &Theme, run: Option<&RunView>, area: Rect, frame:
         }
         return;
     };
-    render_title(theme, run, title_row, frame);
+    render_title(look, theme, run, title_row, frame);
     render_output(theme, run, body, frame);
 }
 
@@ -237,9 +247,10 @@ pub fn render_output(theme: &Theme, run: &RunView, body: Rect, frame: &mut Frame
 /// The title row (SPEC_V1_LAYOUT §9): one cell in, the status glyph and a
 /// space, the name in `strong` bold, two spaces, the state word in the state's
 /// colour, three spaces, then the command in `muted`, cut short of the hints,
-/// which end one cell from the right edge. The hints are left out when the
-/// command wouldn't have even a couple of cells beside them.
-fn render_title(theme: &Theme, run: &RunView, row: Rect, frame: &mut Frame) {
+/// keycaps and their words on the row's `surface`, which end one cell from the
+/// right edge. The hints are left out when the command wouldn't have even a
+/// couple of cells beside them.
+fn render_title(look: Look, theme: &Theme, run: &RunView, row: Rect, frame: &mut Frame) {
     let out = frame.buffer_mut();
     let (glyph, word, color) = run.state(theme);
     let state = Style::new().fg(color);
@@ -266,15 +277,15 @@ fn render_title(theme: &Theme, run: &RunView, row: Rect, frame: &mut Frame) {
         (true, true) => DEBUG_RUNNING_HINTS,
         (true, false) => DEBUG_DONE_HINTS,
     };
-    let hints_width = u16::try_from(hints.width()).unwrap_or(u16::MAX);
-    let hints_x = right.saturating_sub(hints_width.saturating_add(1));
+    let hints = kit::hints(look, theme, hints, theme.surface);
+    let hints_x = right.saturating_sub(kit::width(&hints).saturating_add(1));
     let fits = hints_x >= x + 4;
     // Two blanks between the command and the hints.
     let command_end = if fits { hints_x - 2 } else { right };
     let room = usize::from(command_end.saturating_sub(x));
     out.set_stringn(x, row.y, &run.command, room, muted);
     if fits {
-        out.set_string(hints_x, row.y, hints, muted);
+        kit::put(out, hints_x, row.y, &hints, right);
     }
 }
 
@@ -289,11 +300,33 @@ mod tests {
     }
 
     fn draw(run: &RunView, width: u16, height: u16) -> anyhow::Result<Terminal<TestBackend>> {
-        let theme = Theme::default();
+        draw_in(&Theme::default(), run, width, height)
+    }
+
+    fn draw_in(
+        theme: &Theme,
+        run: &RunView,
+        width: u16,
+        height: u16,
+    ) -> anyhow::Result<Terminal<TestBackend>> {
         let mut terminal = Terminal::new(TestBackend::new(width, height))?;
-        terminal.draw(|frame| render_run_panel(&theme, Some(run), frame.area(), frame))?;
+        terminal.draw(|frame| {
+            render_run_panel(Look::default(), theme, Some(run), frame.area(), frame);
+        })?;
         Ok(terminal)
     }
+
+    /// What `hints` read as on the title row: each key between the two ends
+    /// of its cap, a blank and its word, three blanks between hints.
+    fn hint_text(hints: &Hints, (left, right): (&str, &str)) -> String {
+        let each: Vec<String> = hints
+            .iter()
+            .map(|(key, word)| format!("{left}{key}{right} {word}"))
+            .collect();
+        each.join("   ")
+    }
+
+    const CAPS: (&str, &str) = (kit::CAP_L, kit::CAP_R);
 
     fn row(terminal: &Terminal<TestBackend>, y: u16) -> String {
         let buffer = terminal.backend().buffer();
@@ -405,13 +438,96 @@ mod tests {
     #[test]
     fn the_hints_end_at_the_right_and_go_when_there_is_no_room() -> anyhow::Result<()> {
         let mut run = view();
-        let terminal = draw(&run, 80, 2)?;
-        assert!(row(&terminal, 0).ends_with(&format!("{RUNNING_HINTS} ")));
+        let ends_with = |run: &RunView, hints: &Hints| -> anyhow::Result<()> {
+            let title = row(&draw(run, 80, 2)?, 0);
+            let hints = hint_text(hints, CAPS);
+            assert!(title.ends_with(&format!("  {hints} ")), "{title:?}");
+            Ok(())
+        };
+        ends_with(&run, RUNNING_HINTS)?;
         run.status = RunStatus::Exited(Some(0));
-        let terminal = draw(&run, 80, 2)?;
-        assert!(row(&terminal, 0).ends_with(&format!("{DONE_HINTS} ")));
+        ends_with(&run, DONE_HINTS)?;
+        run.debug = true;
+        ends_with(&run, DEBUG_DONE_HINTS)?;
+        run.status = RunStatus::Running;
+        ends_with(&run, DEBUG_RUNNING_HINTS)?;
         let terminal = draw(&run, 30, 2)?;
         assert!(!row(&terminal, 0).contains("F4"), "{:?}", row(&terminal, 0));
+        Ok(())
+    }
+
+    #[test]
+    fn the_hints_give_way_before_the_command_does() -> anyhow::Result<()> {
+        let run = view();
+        // ` ● dev  running   ` is 18 cells; the command keeps two and the two
+        // blanks before the hints, which are 47 wide and end a cell short.
+        let hints = hint_text(RUNNING_HINTS, CAPS);
+        assert_eq!(hints.chars().count(), 47);
+        let title = row(&draw(&run, 70, 2)?, 0);
+        assert_eq!(title, format!(" ● dev  running   np  {hints} "));
+        let title = row(&draw(&run, 69, 2)?, 0);
+        assert!(
+            title.starts_with(" ● dev  running   npm run dev "),
+            "{title:?}"
+        );
+        assert!(!title.contains("F4"), "{title:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn the_hints_are_keycaps_on_the_title_rows_surface() -> anyhow::Result<()> {
+        let theme = Theme::default();
+        let mut run = view();
+        run.status = RunStatus::Exited(Some(0));
+        let terminal = draw(&run, 80, 2)?;
+        let buffer = terminal.backend().buffer();
+        // `F5 run again   F4 hide` between caps is 26 cells, ending at 78.
+        let at = 80 - 1 - 26;
+        let (left, key, right) = (&buffer[(at, 0)], &buffer[(at + 1, 0)], &buffer[(at + 3, 0)]);
+        assert_eq!(left.symbol(), kit::CAP_L);
+        assert_eq!((left.fg, left.bg), (theme.btn, theme.surface));
+        assert_eq!(right.symbol(), kit::CAP_R);
+        assert_eq!((right.fg, right.bg), (theme.btn, theme.surface));
+        assert_eq!(key.symbol(), "F");
+        assert_eq!((key.fg, key.bg), (theme.strong, theme.btn));
+        assert!(key.modifier.contains(Modifier::BOLD));
+        let word = &buffer[(at + 5, 0)];
+        assert_eq!(word.symbol(), "r");
+        assert_eq!((word.fg, word.bg), (theme.muted, theme.surface));
+        assert!(!word.modifier.contains(Modifier::BOLD));
+        // The state and the command keep their colours beside them.
+        assert_eq!(buffer[(1, 0)].fg, theme.ok);
+        assert_eq!(buffer[(19, 0)].fg, theme.muted);
+        Ok(())
+    }
+
+    #[test]
+    fn in_mono_the_keycaps_are_bold_text_with_no_cap_glyphs() -> anyhow::Result<()> {
+        let mono = Theme::named("mono").expect("mono exists");
+        let run = view();
+        let terminal = draw_in(&mono, &run, 80, 2)?;
+        let title = row(&terminal, 0);
+        // The same width as with colours: the caps are blanks.
+        let hints = hint_text(RUNNING_HINTS, (" ", " "));
+        assert!(title.ends_with(&format!("  {hints} ")), "{title:?}");
+        assert!(!title.contains(kit::CAP_L) && !title.contains(kit::CAP_R));
+        let buffer = terminal.backend().buffer();
+        let at = 80 - 1 - 47;
+        for x in at + 1..at + 9 {
+            let key = &buffer[(x, 0)];
+            assert!(key.modifier.contains(Modifier::BOLD), "{x}");
+            assert_eq!(key.fg, mono.strong, "{x}");
+        }
+        // The word isn't, and nothing on the row is a blended colour.
+        assert_eq!(buffer[(at + 11, 0)].symbol(), "s");
+        assert!(!buffer[(at + 11, 0)].modifier.contains(Modifier::BOLD));
+        for x in 0..80 {
+            let cell = &buffer[(x, 0)];
+            assert!(
+                !matches!(cell.fg, Color::Rgb(..)) && !matches!(cell.bg, Color::Rgb(..)),
+                "{x}"
+            );
+        }
         Ok(())
     }
 

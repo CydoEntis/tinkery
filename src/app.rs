@@ -4788,13 +4788,13 @@ impl App {
                         paused: debug.paused.is_some(),
                         focused: self.focus == Focus::Debug,
                     };
-                    let at = render_debug_panel(theme, &view, area, frame);
+                    let at = render_debug_panel(self.look, theme, &view, area, frame);
                     // The cursor marks the focused pane, as in the tree.
                     if let Some((x, y)) = at {
                         frame.set_cursor_position((x, y));
                     }
                 }
-                None => render_run_panel(theme, self.run.as_ref(), area, frame),
+                None => render_run_panel(self.look, theme, self.run.as_ref(), area, frame),
             }
         }
         let buffer = self.buffer();
