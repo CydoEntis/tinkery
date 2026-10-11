@@ -10,16 +10,19 @@ use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
-use unicode_width::UnicodeWidthStr;
 
 use crate::dap::{Scope, StackFrame, Variable};
 use crate::keymap::Action;
 use crate::theme::Theme;
-use crate::ui::glow_row;
-use crate::ui::run::{RunView, render_output};
+use crate::ui::kit::{self, Look, RowInk};
+use crate::ui::run::{Hints, RunView, render_output};
 
-const PAUSED_HINTS: &str = "tab stack/variables   F6 focus   F4 hide";
-const RUNNING_HINTS: &str = "alt+F6 stop   F4 hide";
+const PAUSED_HINTS: &Hints = &[("tab", "stack/variables"), ("F6", "focus"), ("F4", "hide")];
+const RUNNING_HINTS: &Hints = &[("alt+F6", "stop"), ("F4", "hide")];
+
+/// Where a row's text starts in its side: past the selected row's pill end,
+/// its mark and a blank.
+const TEXT_X: u16 = 3;
 
 /// How deep expanded values nest before the rest is left out: a value that
 /// contains itself would otherwise expand without end.
@@ -239,6 +242,7 @@ pub struct DebugView<'a> {
 /// variables while paused, or the program's output while it runs. Returns
 /// where the terminal cursor goes while the panel has focus.
 pub fn render_debug_panel(
+    look: Look,
     theme: &Theme,
     view: &DebugView,
     area: Rect,
@@ -250,7 +254,7 @@ pub fn render_debug_panel(
     let out = frame.buffer_mut();
     out.set_style(area, Style::new().bg(theme.bg).fg(theme.fg));
     let title = Rect { height: 1, ..area };
-    render_title(theme, view, title, out);
+    render_title(look, theme, view, title, out);
     let body = Rect {
         y: area.y + 1,
         height: area.height - 1,
@@ -282,8 +286,8 @@ pub fn render_debug_panel(
             out.set_string(divider, y, "│", Style::new().fg(theme.guide));
         }
     }
-    let stack_cursor = render_stack(theme, view, stack, out);
-    let vars_cursor = render_variables(theme, view, vars, out);
+    let stack_cursor = render_stack(look, theme, view, stack, out);
+    let vars_cursor = render_variables(look, theme, view, vars, out);
     if !view.focused {
         return None;
     }
@@ -294,8 +298,9 @@ pub fn render_debug_panel(
 }
 
 /// The title row, as the run panel's: the state glyph and word, the session's
-/// name in `strong` bold, and the keys ending one cell from the right.
-fn render_title(theme: &Theme, view: &DebugView, row: Rect, out: &mut Buffer) {
+/// name in `strong` bold, and the keys as keycap hints ending one cell from the
+/// right; they are left out when they would crowd the state word.
+fn render_title(look: Look, theme: &Theme, view: &DebugView, row: Rect, out: &mut Buffer) {
     out.set_style(row, Style::new().bg(theme.surface).fg(theme.text));
     let (glyph, word, color, hints) = if view.paused {
         ("‖", "paused", theme.accent2, PAUSED_HINTS)
@@ -319,10 +324,10 @@ fn render_title(theme: &Theme, view: &DebugView, row: Rect, out: &mut Buffer) {
         let room = usize::from(right.saturating_sub(x));
         x = out.set_stringn(x, row.y, text, room, style).0;
     }
-    let width = u16::try_from(hints.width()).unwrap_or(u16::MAX);
-    let hints_x = right.saturating_sub(width.saturating_add(1));
+    let hints = kit::hints(look, theme, hints, theme.surface);
+    let hints_x = right.saturating_sub(kit::width(&hints).saturating_add(1));
     if hints_x >= x + 3 {
-        out.set_string(hints_x, row.y, hints, Style::new().fg(theme.muted));
+        kit::put(out, hints_x, row.y, &hints, right);
     }
 }
 
@@ -343,14 +348,26 @@ fn first_row(selected: usize, height: usize) -> usize {
     (selected + 1).saturating_sub(height.max(1))
 }
 
-/// Where a row's text goes, and in what: the theme's colours, or none on a
-/// `mono` selection, whose reverse video would otherwise be undone.
-fn painter(theme: &Theme, selected: bool) -> impl Fn(Style) -> Style {
-    let plain = selected && !theme.ramps();
-    move |style| if plain { Style::new() } else { style }
+/// Draws row `y` of the list in `list`, the selected one as the kit's selected
+/// row on the panel's `bg`, and returns the styles its text goes in and the
+/// column that text stops before: a cell short of the side's edge, where the
+/// selected row's pill ends.
+fn list_row(
+    look: Look,
+    theme: &Theme,
+    out: &mut Buffer,
+    list: Rect,
+    y: u16,
+    selected: bool,
+) -> (RowInk, u16) {
+    let row = Rect::new(list.x, y, list.width, 1);
+    // Nothing reports the mouse's position yet, so no row is hovered.
+    let ink = kit::sel_row(look, theme, out, row, selected, false, theme.bg);
+    (ink, list.right().saturating_sub(1))
 }
 
 fn render_stack(
+    look: Look,
     theme: &Theme,
     view: &DebugView,
     area: Rect,
@@ -370,31 +387,29 @@ fn render_stack(
     for (index, stack_frame) in panel.frames.iter().enumerate().skip(first).take(height) {
         let y = list.y + u16::try_from(index - first).unwrap_or(u16::MAX);
         let selected = index == panel.stack_row;
+        let (ink, right) = list_row(look, theme, out, list, y, selected);
+        let mut x = list.x.saturating_add(TEXT_X).min(right);
         if selected {
-            glow_row(theme, out, list.x, list.right(), y);
-            cursor = Some((list.x + 1, y));
+            cursor = Some((x, y));
         }
-        let paint = painter(theme, selected);
-        let right = list.right();
-        let mut x = list.x + 1;
         let mut put = |text: &str, style: Style| {
             let room = usize::from(right.saturating_sub(x));
-            x = out.set_stringn(x, y, text, room, paint(style)).0;
+            x = out.set_stringn(x, y, text, room, style).0;
         };
         // The frame whose variables are shown, marked as the paused line is.
         if index == panel.shown {
-            put("▶ ", Style::new().fg(theme.accent2));
+            put("▶ ", ink.of(Style::new().fg(theme.accent2)));
         } else {
-            put("  ", Style::new());
+            put("  ", ink.of(Style::new()));
         }
         let name = if selected {
-            Style::new().fg(theme.strong).add_modifier(Modifier::BOLD)
+            ink.label
         } else {
-            Style::new().fg(theme.text)
+            ink.of(Style::new().fg(theme.text))
         };
         put(&stack_frame.name, name);
-        put("  ", Style::new());
-        put(&location(stack_frame), Style::new().fg(theme.muted));
+        put("  ", ink.of(Style::new()));
+        put(&location(stack_frame), ink.faint);
     }
     cursor
 }
@@ -412,6 +427,7 @@ fn location(frame: &StackFrame) -> String {
 }
 
 fn render_variables(
+    look: Look,
     theme: &Theme,
     view: &DebugView,
     area: Rect,
@@ -435,41 +451,43 @@ fn render_variables(
     for (index, row) in rows.iter().enumerate().skip(first).take(height) {
         let y = list.y + u16::try_from(index - first).unwrap_or(u16::MAX);
         // The variables side only shows a selection while it has the keys,
-        // so one glow says which side does.
+        // so one pill says which side does.
         let selected = lit && index == panel.var_row;
-        if selected {
-            glow_row(theme, out, list.x, list.right(), y);
-        }
-        let paint = painter(theme, selected);
-        let right = list.right();
+        let (ink, right) = list_row(look, theme, out, list, y, selected);
         let indent = u16::try_from(row.depth * 2).unwrap_or(u16::MAX);
-        let mut x = list.x.saturating_add(1).saturating_add(indent).min(right);
+        let mut x = list
+            .x
+            .saturating_add(TEXT_X)
+            .saturating_add(indent)
+            .min(right);
         if index == panel.var_row {
             cursor = Some((x, y));
         }
         let mut put = |text: &str, style: Style| {
             let room = usize::from(right.saturating_sub(x));
-            x = out.set_stringn(x, y, text, room, paint(style)).0;
+            x = out.set_stringn(x, y, text, room, style).0;
         };
         let chevron = match (row.reference != 0, row.expanded) {
             (false, _) => "  ",
             (true, false) => "▸ ",
             (true, true) => "▾ ",
         };
-        put(chevron, Style::new().fg(theme.muted));
+        put(chevron, ink.faint);
+        // The selected row's name is the row's label, whatever it rests in.
+        let name = |resting: Style| {
+            if selected { ink.label } else { ink.of(resting) }
+        };
         let Some(value) = &row.value else {
-            put(
-                &row.name,
-                Style::new().fg(theme.text).add_modifier(Modifier::BOLD),
-            );
+            let heading = Style::new().fg(theme.text).add_modifier(Modifier::BOLD);
+            put(&row.name, name(heading));
             continue;
         };
-        put(&row.name, Style::new().fg(theme.strong));
-        put(" = ", Style::new().fg(theme.muted));
-        put(value, Style::new().fg(theme.text));
+        put(&row.name, name(Style::new().fg(theme.strong)));
+        put(" = ", ink.faint);
+        put(value, ink.of(Style::new().fg(theme.text)));
         if let Some(kind) = row.kind.as_deref().filter(|k| !k.is_empty()) {
-            put("  ", Style::new());
-            put(kind, Style::new().fg(theme.muted));
+            put("  ", ink.of(Style::new()));
+            put(kind, ink.faint);
         }
     }
     cursor
@@ -591,17 +609,47 @@ mod tests {
     }
 
     fn draw(theme: &Theme, panel: &DebugPanel, focused: bool) -> anyhow::Result<Buffer> {
-        let mut terminal = Terminal::new(TestBackend::new(80, 6))?;
+        draw_at(theme, panel, (true, focused), 80)
+    }
+
+    fn draw_at(
+        theme: &Theme,
+        panel: &DebugPanel,
+        (paused, focused): (bool, bool),
+        width: u16,
+    ) -> anyhow::Result<Buffer> {
+        let mut terminal = Terminal::new(TestBackend::new(width, 6))?;
         let view = DebugView {
             panel,
             run: None,
-            paused: true,
+            paused,
             focused,
         };
         terminal.draw(|f| {
-            render_debug_panel(theme, &view, f.area(), f);
+            render_debug_panel(Look::default(), theme, &view, f.area(), f);
         })?;
         Ok(terminal.backend().buffer().clone())
+    }
+
+    /// What `hints` read as on the title row: each key between the two ends
+    /// of its cap, a blank and its word, three blanks between hints.
+    fn hint_text(hints: &Hints, (left, right): (&str, &str)) -> String {
+        let each: Vec<String> = hints
+            .iter()
+            .map(|(key, word)| format!("{left}{key}{right} {word}"))
+            .collect();
+        each.join("   ")
+    }
+
+    const CAPS: (&str, &str) = (kit::CAP_L, kit::CAP_R);
+    /// At 80 cells the stack side is columns 0 to 31, the divider column 32
+    /// and the variables side columns 33 to 79.
+    const STACK_END: u16 = 31;
+    const VARS_X: u16 = 33;
+    const VARS_END: u16 = 79;
+
+    fn is_rgb(color: ratatui::style::Color) -> bool {
+        matches!(color, ratatui::style::Color::Rgb(..))
     }
 
     fn row_text(buffer: &Buffer, y: u16) -> String {
@@ -623,8 +671,148 @@ mod tests {
         assert!(row_text(&buffer, 3).contains("main  main.py:9"));
         assert!(row_text(&buffer, 3).contains("n = 3  int"));
         assert!(row_text(&buffer, 4).contains("▸ items = [1, 2]  list"));
-        // The selected frame glows.
-        assert_ne!(buffer[(0, 2)].bg, theme.bg);
+        // Every row's text starts three cells into its side, after the mark.
+        let mark = kit::SEL_MARK;
+        assert!(
+            top.starts_with(&format!("{}{mark} ▶ inner", kit::CAP_L)),
+            "{top:?}"
+        );
+        assert!(row_text(&buffer, 3).starts_with("     main  main.py:9"));
+        assert_eq!(buffer[(VARS_X + 3, 2)].symbol(), "▾");
+        assert_eq!(buffer[(VARS_X + 7, 3)].symbol(), "n");
+        Ok(())
+    }
+
+    #[test]
+    fn the_selected_frame_is_a_pill_of_hov_on_the_panels_bg() -> anyhow::Result<()> {
+        let theme = Theme::default();
+        let buffer = draw(&theme, &paused(), false)?;
+        // Its two ends are the fill on the ground, at the edges of the side.
+        for (x, cap) in [(0, kit::CAP_L), (STACK_END, kit::CAP_R)] {
+            let end = &buffer[(x, 2)];
+            assert_eq!(end.symbol(), cap, "{x}");
+            assert_eq!((end.fg, end.bg), (theme.hov, theme.bg), "{x}");
+        }
+        for x in 1..STACK_END {
+            assert_eq!(buffer[(x, 2)].bg, theme.hov, "{x}");
+        }
+        let mark = &buffer[(1, 2)];
+        assert_eq!(mark.symbol(), kit::SEL_MARK);
+        assert_eq!(mark.fg, theme.accent);
+        assert!(mark.modifier.contains(Modifier::BOLD));
+        // The shown frame's marker keeps its colour, the name is `strong`
+        // bold, and the location `text`, which reads on the fill.
+        assert_eq!(buffer[(3, 2)].symbol(), "▶");
+        assert_eq!(buffer[(3, 2)].fg, theme.accent2);
+        assert_eq!(buffer[(5, 2)].symbol(), "i");
+        assert_eq!(buffer[(5, 2)].fg, theme.strong);
+        assert!(buffer[(5, 2)].modifier.contains(Modifier::BOLD));
+        assert_eq!(buffer[(12, 2)].symbol(), "m");
+        assert_eq!(buffer[(12, 2)].fg, theme.text);
+        // The divider is outside the pill, and the other frame rests on `bg`.
+        assert_eq!(buffer[(STACK_END + 1, 2)].symbol(), "│");
+        assert_eq!(buffer[(STACK_END + 1, 2)].bg, theme.bg);
+        for x in 0..=STACK_END {
+            assert_eq!(buffer[(x, 3)].bg, theme.bg, "{x}");
+        }
+        assert_eq!(buffer[(5, 3)].fg, theme.text);
+        assert!(!buffer[(5, 3)].modifier.contains(Modifier::BOLD));
+        assert_eq!(buffer[(11, 3)].symbol(), "m");
+        assert_eq!(buffer[(11, 3)].fg, theme.muted);
+        Ok(())
+    }
+
+    #[test]
+    fn a_variable_is_a_pill_only_while_its_side_has_the_keys() -> anyhow::Result<()> {
+        let theme = Theme::default();
+        let mut panel = paused();
+        panel.handle(Action::DebugSwitchPane);
+        panel.handle(Action::DebugDown);
+        let lit = |buffer: &Buffer, y: u16| {
+            (VARS_X..=VARS_END)
+                .filter(|&x| buffer[(x, y)].bg == theme.hov || buffer[(x, y)].fg == theme.hov)
+                .count()
+        };
+        // Without the keys the variables side shows no selection at all.
+        let buffer = draw(&theme, &panel, false)?;
+        for y in 2..5 {
+            assert_eq!(lit(&buffer, y), 0, "{y}");
+        }
+
+        let buffer = draw(&theme, &panel, true)?;
+        assert_eq!(lit(&buffer, 2), 0);
+        assert_eq!(lit(&buffer, 3), usize::from(VARS_END - VARS_X + 1));
+        assert_eq!(lit(&buffer, 4), 0);
+        for (x, cap) in [(VARS_X, kit::CAP_L), (VARS_END, kit::CAP_R)] {
+            let end = &buffer[(x, 3)];
+            assert_eq!(end.symbol(), cap, "{x}");
+            assert_eq!((end.fg, end.bg), (theme.hov, theme.bg), "{x}");
+        }
+        let mark = &buffer[(VARS_X + 1, 3)];
+        assert_eq!(mark.symbol(), kit::SEL_MARK);
+        assert_eq!((mark.fg, mark.bg), (theme.accent, theme.hov));
+        // `n = 3  int`, a level in: the name `strong` bold, the rest `text`.
+        let at = VARS_X + 7;
+        let text: String = (at..at + 10).map(|x| buffer[(x, 3)].symbol()).collect();
+        assert_eq!(text, "n = 3  int");
+        assert_eq!(buffer[(at, 3)].fg, theme.strong);
+        assert!(buffer[(at, 3)].modifier.contains(Modifier::BOLD));
+        for x in [at + 2, at + 4, at + 7] {
+            assert_eq!(buffer[(x, 3)].fg, theme.text, "{x}");
+            assert_eq!(buffer[(x, 3)].bg, theme.hov, "{x}");
+        }
+        // The stack keeps its selection beside it.
+        assert_eq!(buffer[(1, 2)].symbol(), kit::SEL_MARK);
+        assert_eq!(buffer[(5, 2)].bg, theme.hov);
+        // A resting variable keeps the colours it had.
+        assert_eq!(buffer[(VARS_X + 3, 2)].fg, theme.muted);
+        assert_eq!(buffer[(VARS_X + 5, 2)].fg, theme.text);
+        assert!(buffer[(VARS_X + 5, 2)].modifier.contains(Modifier::BOLD));
+        assert_eq!(buffer[(VARS_X + 7, 4)].fg, theme.strong);
+        assert!(!buffer[(VARS_X + 7, 4)].modifier.contains(Modifier::BOLD));
+        Ok(())
+    }
+
+    #[test]
+    fn the_titles_hints_are_keycaps_and_go_when_there_is_no_room() -> anyhow::Result<()> {
+        let theme = Theme::default();
+        let panel = paused();
+        let buffer = draw(&theme, &panel, false)?;
+        let hints = hint_text(PAUSED_HINTS, CAPS);
+        assert_eq!(hints.chars().count(), 46);
+        let title = row_text(&buffer, 0);
+        assert!(title.ends_with(&format!("   {hints} ")), "{title:?}");
+        // The state keeps its colour; a key is `strong` bold on `btn`, its
+        // ends `btn` on the row's `surface`, and its word `muted`.
+        assert_eq!(buffer[(1, 0)].fg, theme.accent2);
+        assert_eq!(buffer[(10, 0)].fg, theme.accent2);
+        let at = 80 - 1 - 46;
+        let (left, key, right) = (&buffer[(at, 0)], &buffer[(at + 1, 0)], &buffer[(at + 4, 0)]);
+        assert_eq!((left.symbol(), right.symbol()), CAPS);
+        assert_eq!((left.fg, left.bg), (theme.btn, theme.surface));
+        assert_eq!((right.fg, right.bg), (theme.btn, theme.surface));
+        assert_eq!(
+            (key.symbol(), key.fg, key.bg),
+            ("t", theme.strong, theme.btn)
+        );
+        assert!(key.modifier.contains(Modifier::BOLD));
+        let word = &buffer[(at + 6, 0)];
+        assert_eq!((word.symbol(), word.fg), ("s", theme.muted));
+        assert_eq!(word.bg, theme.surface);
+
+        // ` ‖ debug  paused` is 16 cells and the hints keep three clear of it.
+        let title = row_text(&draw_at(&theme, &panel, (true, false), 66)?, 0);
+        assert_eq!(title, format!(" ‖ debug  paused   {hints} "));
+        let title = row_text(&draw_at(&theme, &panel, (true, false), 65)?, 0);
+        assert_eq!(title.trim_end(), " ‖ debug  paused");
+
+        // Running, the keys are the ones that stop it.
+        let buffer = draw_at(&theme, &panel, (false, false), 80)?;
+        let title = row_text(&buffer, 0);
+        assert!(title.starts_with(" ● debug  running"), "{title:?}");
+        let hints = hint_text(RUNNING_HINTS, CAPS);
+        assert!(title.ends_with(&format!("   {hints} ")), "{title:?}");
+        assert_eq!(buffer[(1, 0)].fg, theme.warn);
         Ok(())
     }
 
@@ -633,8 +821,38 @@ mod tests {
         let mono = Theme::named("mono").expect("mono exists");
         let mut panel = paused();
         let buffer = draw(&mono, &panel, true)?;
-        assert!(buffer[(3, 2)].modifier.contains(Modifier::REVERSED));
-        assert!(!buffer[(3, 3)].modifier.contains(Modifier::REVERSED));
+        // The whole row, edge to edge of its side, with the mark and no caps.
+        for x in 0..=STACK_END {
+            assert!(buffer[(x, 2)].modifier.contains(Modifier::REVERSED), "{x}");
+            assert!(!buffer[(x, 3)].modifier.contains(Modifier::REVERSED), "{x}");
+        }
+        assert!(
+            !buffer[(STACK_END + 1, 2)]
+                .modifier
+                .contains(Modifier::REVERSED)
+        );
+        assert!(row_text(&buffer, 2).starts_with(&format!(" {} ▶ inner", kit::SEL_MARK)));
+        // The title's keycaps are bold text between blanks.
+        let title = row_text(&buffer, 0);
+        let hints = hint_text(PAUSED_HINTS, (" ", " "));
+        assert!(title.ends_with(&format!("   {hints} ")), "{title:?}");
+        let at = 80 - 1 - 46;
+        for x in at + 1..at + 4 {
+            assert!(buffer[(x, 0)].modifier.contains(Modifier::BOLD), "{x}");
+        }
+        assert!(!buffer[(at + 6, 0)].modifier.contains(Modifier::BOLD));
+        // No Nerd Font glyph and no blended colour anywhere in the panel.
+        for y in 0..6 {
+            let text = row_text(&buffer, y);
+            assert!(
+                !text.contains(kit::CAP_L) && !text.contains(kit::CAP_R),
+                "{text:?}"
+            );
+            for x in 0..80 {
+                let cell = &buffer[(x, y)];
+                assert!(!is_rgb(cell.fg) && !is_rgb(cell.bg), "{x},{y}");
+            }
+        }
 
         panel.handle(Action::DebugSwitchPane);
         panel.handle(Action::DebugDown);
