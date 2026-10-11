@@ -1,5 +1,6 @@
 //! The card `>keybindings` opens: every command with its keys and its name in
-//! `[keys]`, searchable, in the catalog card's style (tinkery-catalog spec C2).
+//! `[keys]`, searchable, in the catalog's style (tinkery-catalog spec C2), its
+//! keys drawn as keycaps (tinkery-forge spec F19).
 //! Commands that only work in one place (the tree, the splash…) come after the
 //! rest, under a heading naming that place.
 
@@ -7,23 +8,23 @@ use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
+use ratatui::text::Span;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::buffer::movement::Motion;
 use crate::keymap::{Action, Input, Keymap, Scope};
 use crate::theme::Theme;
+use crate::ui::kit::{self, Look, RowInk};
 use crate::ui::prompt::PromptBar;
-use crate::ui::{dialog_card, dim, footer, glow_row};
 
 /// The catalog's width and the row it drops from, so both cards read alike.
 const WIDTH: u16 = 86;
 const TOP: u16 = 4;
-/// The rows other than the list: the lit edge, a blank, the header and the
-/// rule above it; a blank and the footer below.
-const CHROME: u16 = 6;
-const HEADER: &str = "keybindings";
+/// The rows other than the list: the edge, a blank, the header's strip and a
+/// blank above it; a blank, the keys and the edge below.
+const CHROME: u16 = 7;
 // Delete, not Backspace, resets: Backspace keeps correcting the query.
-const FOOTER: &str = "⏎ rebind  del reset  esc close";
+const HINTS: [(&str, &str); 3] = [("⏎", "rebind"), ("Del", "reset"), ("Esc", "close")];
 /// What the selected row shows in place of its keys while Enter waits for one.
 pub const WAITING: &str = "press a key… (esc cancels)";
 /// What a command with no key shows in place of its keys.
@@ -62,15 +63,6 @@ pub struct Row {
 }
 
 impl Row {
-    /// The keys as the row shows them.
-    pub fn keys_label(&self) -> String {
-        if self.keys.is_empty() {
-            NO_KEY.to_string()
-        } else {
-            self.keys.join(", ")
-        }
-    }
-
     /// Whether every word of `query` is in the title, a key or the config
     /// name, ignoring case.
     fn matches(&self, query: &str) -> bool {
@@ -112,7 +104,7 @@ pub struct Keybindings {
     /// Index into `shown`.
     selected: usize,
     /// The first line of the list in view. It moves only when the selection
-    /// would leave the view, so ↑ moves the glow rather than the list.
+    /// would leave the view, so ↑ moves the selection rather than the list.
     top: usize,
     /// The command Enter is rebinding, while the card waits for its new key.
     /// The app hands that key over whole, as only the keymap can name it.
@@ -300,49 +292,31 @@ impl Keybindings {
         }
     }
 
-    /// Dims `area` and draws the card over it: the lit edge; `✦ keybindings`
-    /// and the query; a rule; the list, scrolled just far enough to keep the
-    /// selected row, on the glow row, in view; the footer. Returns where the
-    /// cursor goes, in the query.
-    pub fn render(&self, theme: &Theme, frame: &mut Frame, area: Rect) -> (u16, u16) {
-        dim(theme, frame.buffer_mut(), area);
+    /// Dims `area` and draws the panel over it: `Keybindings` in its top edge;
+    /// the query on the header's strip; the list, scrolled just far enough to
+    /// keep the selected row, a row pill, in view; a blank and the keys.
+    /// Returns where the cursor goes, in the query.
+    pub fn render(&self, look: Look, theme: &Theme, frame: &mut Frame, area: Rect) -> (u16, u16) {
+        let out = frame.buffer_mut();
+        kit::dim(theme, out, area);
         let card = self.card(area);
-        dialog_card(theme, frame, card);
-        if card.height <= CHROME || card.width < 40 {
+        let inside = kit::panel_at(look, theme, out, card, self.query.label);
+        if inside.is_empty() || card.height <= CHROME || card.width < 40 {
             return (card.x, card.y);
         }
-        let out = frame.buffer_mut();
         let left = card.x + 4;
         let right = card.right() - 4;
 
-        let header_y = card.y + 2;
-        out.set_string(
-            left,
-            header_y,
-            "✦",
-            Style::new().fg(theme.accent2).add_modifier(Modifier::BOLD),
-        );
-        out.set_string(left + 2, header_y, HEADER, Style::new().fg(theme.strong));
-        let query_x = left + 2 + width_of(HEADER) + 2;
-        let query = Rect::new(query_x, header_y, right.saturating_sub(query_x), 1);
-        let cursor = self
-            .query
-            .render_value(out, query, Style::new().fg(theme.strong));
+        let field = kit::header(look, theme, out, card, Vec::new());
+        let query = Style::new().fg(theme.strong).bg(theme.raised2);
+        let cursor = self.query.render_value(out, field, query);
 
-        for x in card.x + 2..card.right() - 2 {
-            out[(x, card.y + 3)].set_symbol("─").set_fg(theme.line2);
-        }
-
+        let quiet = Style::new().fg(theme.muted).bg(theme.raised);
         let room = usize::from(card.height - CHROME);
         let top = card.y + 4;
         let lines = self.lines();
         if lines.is_empty() {
-            out.set_string(
-                left,
-                top,
-                "no matching commands",
-                Style::new().fg(theme.muted),
-            );
+            out.set_string(left, top, "no matching commands", quiet);
         }
         // `top` was set for this screen; clamping again keeps the selection
         // in view after a resize.
@@ -352,69 +326,78 @@ impl Keybindings {
             match *line {
                 Line::Row(i) => {
                     let row = &self.rows[self.shown[i]];
-                    let selected = i == self.selected;
-                    let waiting = selected && self.waiting.is_some();
-                    render_row(theme, out, card, y, row, selected, waiting);
+                    let state = if i != self.selected {
+                        Lit::No
+                    } else if self.waiting.is_some() {
+                        Lit::Waiting
+                    } else {
+                        Lit::Selected
+                    };
+                    render_row(look, theme, out, card, y, row, state);
                 }
                 Line::Heading(heading) => {
-                    out.set_string(
-                        left,
-                        y,
-                        heading,
-                        Style::new().fg(theme.muted).add_modifier(Modifier::BOLD),
-                    );
+                    out.set_string(left, y, heading, quiet.add_modifier(Modifier::BOLD));
                 }
                 Line::Blank => {}
             }
         }
 
-        footer(theme, out, card, FOOTER);
+        let hints = kit::hints(look, theme, &HINTS, theme.raised);
+        kit::put(out, left, card.bottom() - 2, &hints, right);
         cursor
     }
 }
 
-/// The title, the config name in `muted`, and the keys at the right as the
-/// palette shows them. A selected row is on the glow row, its title in
-/// `strong`; in `mono` it carries no colours, so the reverse video reads.
-/// While it waits for a new key, `WAITING` stands in for its keys, in
-/// `accent`.
+/// Whether a row is the selected one, and whether it then waits for a key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Lit {
+    No,
+    Selected,
+    Waiting,
+}
+
+/// The title, the config name in `muted`, and the keys at the right as
+/// keycaps, on the row `sel_row` draws: a pill when selected, its title in
+/// `strong` bold. While it waits for a new key, `WAITING` stands in for its
+/// keys, in `accent`.
 fn render_row(
+    look: Look,
     theme: &Theme,
     out: &mut Buffer,
     card: Rect,
     y: u16,
     row: &Row,
-    selected: bool,
-    waiting: bool,
+    state: Lit,
 ) {
     let left = card.x + 4;
     let right = card.right() - 4;
-    if selected {
-        glow_row(theme, out, card.x, card.right(), y);
-    }
-    let plain = selected && !theme.ramps();
-    let pick = |style: Style| if plain { Style::new() } else { style };
+    let whole = Rect::new(card.x + 1, y, card.width.saturating_sub(2), 1);
+    // Nothing reports the mouse's position yet, so no row is hovered.
+    let selected = state != Lit::No;
+    let ink = kit::sel_row(look, theme, out, whole, selected, false, theme.raised);
 
     // The keys get what the title's minimum and two blanks leave, cut with
     // `…` beyond that.
     let title_min = width_of(row.title).min(TITLE_MIN);
     let keys_room = right.saturating_sub(left + title_min + 2);
-    let (label, fg) = if waiting {
-        (WAITING.to_string(), theme.accent)
+    let keys = if state == Lit::Waiting {
+        let accent = ink.of(Style::new().fg(theme.accent));
+        vec![Span::styled(cut(WAITING, keys_room), accent)]
+    } else if row.keys.is_empty() {
+        let plain = ink.of(Style::new().fg(theme.text));
+        vec![Span::styled(cut(NO_KEY, keys_room), plain)]
     } else {
-        (row.keys_label(), theme.text)
+        caps(look, theme, ink, &row.keys, keys_room)
     };
-    let keys = cut(&label, keys_room);
-    let keys_x = right.saturating_sub(width_of(&keys));
-    out.set_string(keys_x, y, &keys, pick(Style::new().fg(fg)));
+    let keys_x = right.saturating_sub(kit::width(&keys));
+    kit::put(out, keys_x, y, &keys, right);
 
-    let title = pick(Style::new().fg(if selected { theme.strong } else { theme.fg }));
     out.set_stringn(
         left,
         y,
         row.title,
         usize::from(keys_x.saturating_sub(left + 2)),
-        title,
+        ink.label,
     );
     // Two blanks short of the keys, so a long name never runs into them.
     let name_x = left + TITLE_WIDTH;
@@ -424,9 +407,49 @@ fn render_row(
             y,
             row.name,
             usize::from(keys_x - name_x - 2),
-            pick(Style::new().fg(theme.muted)),
+            ink.faint,
         );
     }
+}
+
+/// `keys` as keycaps on the row `ink` is for, a blank apart: as many whole
+/// ones as fit in `room` cells, then ` …` when some are left out. The caps sit
+/// on the row's own fill; where the row carries no colours (the selected row
+/// in `mono`, which is reverse video) they carry none either, and are the
+/// keys in bold.
+fn caps(look: Look, theme: &Theme, ink: RowInk, keys: &[String], room: u16) -> Vec<Span<'static>> {
+    const MORE: &str = "…";
+    // A cap is its key and two ends; a blank parts it from the one before,
+    // and one more with `MORE` follows unless it's the last.
+    let mut used: u16 = 0;
+    let mut fit = 0;
+    for (i, key) in keys.iter().enumerate() {
+        let gap = u16::from(i > 0);
+        let more = if i + 1 < keys.len() { 2 } else { 0 };
+        let cells = gap + width_of(key) + 2;
+        if used + cells + more > room {
+            break;
+        }
+        used += cells;
+        fit = i + 1;
+    }
+    let ground = ink.label.bg;
+    let shown = keys[..fit].join(" ");
+    let mut out = kit::keycaps(look, theme, &shown, ground.unwrap_or(theme.raised));
+    if ground.is_none() {
+        for span in &mut out {
+            span.style = ink.of(span.style);
+        }
+    }
+    if fit < keys.len() && used < room {
+        let more = if fit == 0 {
+            MORE.to_string()
+        } else {
+            format!(" {MORE}")
+        };
+        out.push(Span::styled(more, ink.faint));
+    }
+    out
 }
 
 /// How many cells `text` takes.
@@ -463,7 +486,7 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     use crate::config::{KeyBinding, KeysConfig};
-    use crate::theme::mix;
+    use crate::ui::kit::{CAP_L, CAP_R};
 
     fn fresh() -> Keybindings {
         Keybindings::new(&Keymap::default())
@@ -494,18 +517,14 @@ mod tests {
         let k = fresh();
         assert_eq!(k.rows().len(), Action::all().count());
         let save = row(&k, Action::Save);
-        assert_eq!(
-            (save.title, save.keys_label().as_str(), save.name),
-            ("Save", "Ctrl+S", "save")
-        );
+        assert_eq!((save.title, save.name), ("Save", "save"));
+        assert_eq!(save.keys, ["Ctrl+S"]);
         let keys = row(&k, Action::Keybindings);
-        assert_eq!(keys.keys_label(), "—");
+        assert!(keys.keys.is_empty());
         assert_eq!(keys.name, "keybindings");
         let tree = row(&k, Action::TreeNewFolder);
-        assert_eq!(
-            (tree.keys_label().as_str(), tree.scope),
-            ("Shift+A", Scope::Tree)
-        );
+        assert_eq!(tree.keys, ["Shift+A"]);
+        assert_eq!(tree.scope, Scope::Tree);
     }
 
     #[test]
@@ -517,7 +536,7 @@ mod tests {
         .into_iter()
         .collect();
         let k = Keybindings::new(&Keymap::new(&keys)?);
-        assert_eq!(row(&k, Action::Save).keys_label(), "Alt+W, Ctrl+S");
+        assert_eq!(row(&k, Action::Save).keys, ["Alt+W", "Ctrl+S"]);
         Ok(())
     }
 
@@ -662,21 +681,24 @@ mod tests {
         let theme = Theme::default();
         let card = k.card(SCREEN);
         let buffer = draw(&k, &theme)?;
-        let save = card_row(&buffer, card, card.y + 5);
-        assert!(save.starts_with("    Save "), "{save:?}");
-        assert!(save.ends_with(&format!("{WAITING}    ")), "{save:?}");
+        let save = text_row(&buffer, card, card.y + 5);
+        assert!(save.starts_with("Save "), "{save:?}");
+        assert!(save.ends_with(&format!(" {WAITING}")), "{save:?}");
+        // In the accent on the selected row's pill, and not a keycap.
         let at = card.right() - 4 - width_of(WAITING);
-        assert_eq!(buffer[(at, card.y + 5)].fg, theme.accent);
+        let asked = &buffer[(at, card.y + 5)];
+        assert_eq!((asked.fg, asked.bg), (theme.accent, theme.hov));
+        assert!(!save.contains(CAP_L), "{save:?}");
 
         k.stop_waiting();
         let keys: KeysConfig = [("save".to_string(), KeyBinding::One("alt+w".into()))]
             .into_iter()
             .collect();
         k.refresh(&Keymap::new(&keys)?);
-        assert_eq!(row(&k, Action::Save).keys_label(), "Alt+W");
+        assert_eq!(row(&k, Action::Save).keys, ["Alt+W"]);
         assert_eq!(k.selected_action(), Some(Action::Save));
-        let save = card_row(&draw(&k, &theme)?, card, card.y + 5);
-        assert!(save.ends_with("Alt+W    "), "{save:?}");
+        let save = text_row(&draw(&k, &theme)?, card, card.y + 5);
+        assert!(save.ends_with(&format!(" {CAP_L}Alt+W{CAP_R}")), "{save:?}");
         Ok(())
     }
 
@@ -691,47 +713,129 @@ mod tests {
     fn draw(k: &Keybindings, theme: &Theme) -> anyhow::Result<Buffer> {
         let mut terminal = Terminal::new(TestBackend::new(100, 30))?;
         terminal.draw(|frame| {
-            k.render(theme, frame, frame.area());
+            k.render(Look::default(), theme, frame, frame.area());
         })?;
         Ok(terminal.backend().buffer().clone())
     }
 
+    /// Row `y` of the card, edge to edge.
     fn card_row(buffer: &Buffer, card: Rect, y: u16) -> String {
         (card.x..card.right())
             .map(|x| buffer[(x, y)].symbol())
             .collect()
     }
 
+    /// The cells of row `y` a row's text takes: four in from either edge.
+    fn text_row(buffer: &Buffer, card: Rect, y: u16) -> String {
+        (card.x + 4..card.right() - 4)
+            .map(|x| buffer[(x, y)].symbol())
+            .collect()
+    }
+
+    fn text(spans: &[Span]) -> String {
+        spans.iter().map(|span| span.content.as_ref()).collect()
+    }
+
     #[test]
-    fn the_card_is_the_catalogs_with_header_rule_rows_and_footer() -> anyhow::Result<()> {
+    fn the_card_is_a_panel_with_the_query_on_a_strip_pill_rows_and_keycaps() -> anyhow::Result<()> {
         let k = fresh();
         let theme = Theme::default();
         let card = k.card(Rect::new(0, 0, 100, 30));
         assert_eq!(card, Rect::new(7, 4, 86, 25));
         let buffer = draw(&k, &theme)?;
-        assert_eq!(buffer[(card.x, card.y)].symbol(), "▀");
+        // The panel's edge in the accent, its title set into the top of it.
+        let top = card_row(&buffer, card, card.y);
+        assert!(top.starts_with(" ▁ Keybindings ▁"), "{top:?}");
+        assert_eq!(buffer[(card.x + 1, card.y)].fg, theme.accent);
+        let bottom = card_row(&buffer, card, card.bottom() - 1);
+        assert_eq!(bottom, format!(" {} ", "▔".repeat(84)));
+
+        // The header: a strip of `raised2`, the query, still empty, after `✦`.
         let header = card_row(&buffer, card, card.y + 2);
-        assert!(header.starts_with("    ✦ keybindings "), "{header:?}");
-        assert_eq!(buffer[(card.x + 4, card.y + 2)].fg, theme.accent2);
-        assert_eq!(buffer[(card.x + 5, card.y + 3)].symbol(), "─");
+        assert_eq!(header, format!("▕{CAP_L}  ✦ {:<76}  {CAP_R}▏", ""));
+        let mark = &buffer[(card.x + 4, card.y + 2)];
+        assert_eq!((mark.fg, mark.bg), (theme.accent2, theme.raised2));
+        assert_eq!(text_row(&buffer, card, card.y + 3).trim(), "");
 
+        // The first row is selected: a pill of `hov` with `›` in the accent,
+        // its title in `strong` bold, its key a keycap on the pill.
         let quit = card_row(&buffer, card, card.y + 4);
-        assert_eq!(quit, format!("    {:<35}{:<37}Ctrl+Q    ", "Quit", "quit"));
-        // The first row is selected: on the glow, its title in `strong`.
+        let words = format!("{:<35}{:<35}", "Quit", "quit");
         assert_eq!(
-            buffer[(card.x, card.y + 4)].bg,
-            mix(theme.raised, theme.accent, 0.3)
+            quit,
+            format!("▕{CAP_L}› {words}{CAP_L}Ctrl+Q{CAP_R}  {CAP_R}▏")
         );
-        assert_eq!(buffer[(card.x + 4, card.y + 4)].fg, theme.strong);
-        assert_eq!(buffer[(card.x + 39, card.y + 4)].fg, theme.muted);
-        let save = card_row(&buffer, card, card.y + 5);
-        assert!(save.starts_with("    Save "), "{save:?}");
-        assert_eq!(buffer[(card.x, card.y + 5)].bg, theme.raised);
-        assert_eq!(buffer[(card.x + 4, card.y + 5)].fg, theme.fg);
+        let mark = &buffer[(card.x + 2, card.y + 4)];
+        assert_eq!((mark.fg, mark.bg), (theme.accent, theme.hov));
+        let title = &buffer[(card.x + 4, card.y + 4)];
+        assert_eq!((title.fg, title.bg), (theme.strong, theme.hov));
+        assert!(title.modifier.contains(Modifier::BOLD));
+        // `muted` wouldn't read on the pill: the name is in `text` there.
+        let name = &buffer[(card.x + 39, card.y + 4)];
+        assert_eq!((name.fg, name.bg), (theme.text, theme.hov));
+        let right = card.right() - 4;
+        for x in [right - 8, right - 1] {
+            let end = &buffer[(x, card.y + 4)];
+            assert_eq!((end.fg, end.bg), (theme.btn, theme.hov), "{x}");
+        }
+        let key = &buffer[(right - 7, card.y + 4)];
+        assert_eq!((key.fg, key.bg), (theme.strong, theme.btn));
+        assert!(key.modifier.contains(Modifier::BOLD));
 
-        assert_eq!(card_row(&buffer, card, card.bottom() - 2).trim(), "");
-        let foot = card_row(&buffer, card, card.bottom() - 1);
-        assert!(foot.starts_with(&format!("  {FOOTER}")), "{foot:?}");
+        // Any other row is left on the card, its keycap on `raised`.
+        let save = card_row(&buffer, card, card.y + 5);
+        let words = format!("{:<35}{:<35}", "Save", "save");
+        assert_eq!(save, format!("▕   {words}{CAP_L}Ctrl+S{CAP_R}   ▏"));
+        for x in [card.x + 1, card.x + 2, card.x + 4] {
+            assert_eq!(buffer[(x, card.y + 5)].bg, theme.raised, "{x}");
+        }
+        assert_eq!(buffer[(card.x + 4, card.y + 5)].fg, theme.fg);
+        assert_eq!(buffer[(card.x + 39, card.y + 5)].fg, theme.muted);
+        let end = &buffer[(right - 8, card.y + 5)];
+        assert_eq!((end.fg, end.bg), (theme.btn, theme.raised));
+        let key = &buffer[(right - 7, card.y + 5)];
+        assert_eq!((key.fg, key.bg), (theme.strong, theme.btn));
+
+        // A blank, then the keys as keycaps on the card.
+        assert_eq!(text_row(&buffer, card, card.bottom() - 3).trim(), "");
+        let foot = text_row(&buffer, card, card.bottom() - 2);
+        let hints = text(&kit::hints(Look::default(), &theme, &HINTS, theme.raised));
+        assert_eq!(foot.trim_end(), hints, "{foot:?}");
+        assert_eq!(
+            hints,
+            format!("{CAP_L}⏎{CAP_R} rebind   {CAP_L}Del{CAP_R} reset   {CAP_L}Esc{CAP_R} close")
+        );
+        let key = &buffer[(card.x + 5, card.bottom() - 2)];
+        assert_eq!((key.fg, key.bg), (theme.strong, theme.btn));
+        Ok(())
+    }
+
+    #[test]
+    fn every_key_of_a_command_is_its_own_keycap() -> anyhow::Result<()> {
+        let keys: KeysConfig = [(
+            "save".to_string(),
+            KeyBinding::Many(vec!["ctrl+s".into(), "alt+w".into()]),
+        )]
+        .into_iter()
+        .collect();
+        let mut k = Keybindings::new(&Keymap::new(&keys)?);
+        type_text(&mut k, "save");
+        let theme = Theme::default();
+        let card = k.card(SCREEN);
+        let buffer = draw(&k, &theme)?;
+        let save = text_row(&buffer, card, card.y + 4);
+        assert!(
+            save.ends_with(&format!(" {CAP_L}Alt+W{CAP_R} {CAP_L}Ctrl+S{CAP_R}")),
+            "{save:?}"
+        );
+        // The blank between two caps is the row's fill, not the caps'.
+        let gap = &buffer[(card.right() - 4 - 9, card.y + 4)];
+        assert_eq!((gap.symbol(), gap.bg), (" ", theme.hov));
+        // The query is what the header's strip holds.
+        let header = text_row(&buffer, card, card.y + 2);
+        assert_eq!(header.trim_end(), "✦ save");
+        let typed = &buffer[(card.x + 6, card.y + 2)];
+        assert_eq!((typed.fg, typed.bg), (theme.strong, theme.raised2));
         Ok(())
     }
 
@@ -743,27 +847,32 @@ mod tests {
         let card = k.card(Rect::new(0, 0, 100, 30));
         let buffer = draw(&k, &theme)?;
         // Toggle and focus first, then the tree's own under its heading.
-        assert!(card_row(&buffer, card, card.y + 4).starts_with("    Toggle file tree"));
-        assert!(card_row(&buffer, card, card.y + 5).starts_with("    Focus file tree"));
-        assert_eq!(card_row(&buffer, card, card.y + 6).trim(), "");
-        let heading = card_row(&buffer, card, card.y + 7);
-        assert_eq!(heading.trim_end(), "    file tree", "{heading:?}");
-        assert_eq!(buffer[(card.x + 4, card.y + 7)].fg, theme.muted);
-        assert!(
-            buffer[(card.x + 4, card.y + 7)]
-                .modifier
-                .contains(Modifier::BOLD)
-        );
-        assert!(card_row(&buffer, card, card.y + 8).starts_with("    New file in tree"));
+        assert!(text_row(&buffer, card, card.y + 4).starts_with("Toggle file tree"));
+        assert!(text_row(&buffer, card, card.y + 5).starts_with("Focus file tree"));
+        assert_eq!(text_row(&buffer, card, card.y + 6).trim(), "");
+        let heading = text_row(&buffer, card, card.y + 7);
+        assert_eq!(heading.trim_end(), "file tree", "{heading:?}");
+        let cell = &buffer[(card.x + 4, card.y + 7)];
+        assert_eq!((cell.fg, cell.bg), (theme.muted, theme.raised));
+        assert!(cell.modifier.contains(Modifier::BOLD));
+        assert!(text_row(&buffer, card, card.y + 8).starts_with("New file in tree"));
 
         let mut k = fresh();
         type_text(&mut k, "keybindings");
         let buffer = draw(&k, &theme)?;
-        let row = card_row(&buffer, card, card.y + 4);
-        assert_eq!(
-            row,
-            format!("    {:<35}{:<42}—    ", "Keybindings", "keybindings")
-        );
+        let row = text_row(&buffer, card, card.y + 4);
+        assert_eq!(row, format!("{:<35}{:<42}—", "Keybindings", "keybindings"));
+        // Not a keycap: in `text`, on the selected row's pill.
+        let dash = &buffer[(card.right() - 5, card.y + 4)];
+        assert_eq!((dash.fg, dash.bg), (theme.text, theme.hov));
+
+        let mut k = fresh();
+        type_text(&mut k, "zzz");
+        let buffer = draw(&k, &theme)?;
+        let none = text_row(&buffer, card, card.y + 4);
+        assert_eq!(none.trim_end(), "no matching commands");
+        let cell = &buffer[(card.x + 4, card.y + 4)];
+        assert_eq!((cell.fg, cell.bg), (theme.muted, theme.raised));
         Ok(())
     }
 
@@ -776,15 +885,14 @@ mod tests {
         let theme = Theme::default();
         let card = k.card(Rect::new(0, 0, 100, 30));
         let buffer = draw(&k, &theme)?;
-        let last = card_row(&buffer, card, card.bottom() - 3);
+        // The last row of the list: a blank and the keys are under it.
+        let last = text_row(&buffer, card, card.bottom() - 4);
         assert!(
-            last.starts_with("    Debug panel: stack or variables"),
+            last.starts_with("Debug panel: stack or variables"),
             "{last:?}"
         );
-        assert_eq!(
-            buffer[(card.x, card.bottom() - 3)].bg,
-            mix(theme.raised, theme.accent, 0.3)
-        );
+        assert_eq!(buffer[(card.x + 2, card.bottom() - 4)].bg, theme.hov);
+        assert_eq!(text_row(&buffer, card, card.bottom() - 3).trim(), "");
         Ok(())
     }
 
@@ -797,27 +905,27 @@ mod tests {
             k.handle(Input::Action(Action::Move(Motion::Down)), SCREEN);
         }
         let scrolled = card_row(&draw(&k, &theme)?, card, card.y + 4);
-        let bottom = card.bottom() - 3;
-        let lit = mix(theme.raised, theme.accent, 0.3);
-        assert_eq!(draw(&k, &theme)?[(card.x, bottom)].bg, lit);
+        let bottom = card.bottom() - 4;
+        let lit = theme.hov;
+        assert_eq!(draw(&k, &theme)?[(card.x + 2, bottom)].bg, lit);
         for _ in 0..3 {
             k.handle(Input::Action(Action::Move(Motion::Up)), SCREEN);
         }
         let buffer = draw(&k, &theme)?;
         assert_eq!(card_row(&buffer, card, card.y + 4), scrolled);
-        assert_eq!(buffer[(card.x, bottom - 3)].bg, lit);
-        assert_eq!(buffer[(card.x, bottom)].bg, theme.raised);
+        assert_eq!(buffer[(card.x + 2, bottom - 3)].bg, lit);
+        assert_eq!(buffer[(card.x + 2, bottom)].bg, theme.raised);
         // Going on up past the top scrolls back a line at a time.
         for _ in 0..22 {
             k.handle(Input::Action(Action::Move(Motion::Up)), SCREEN);
         }
         let buffer = draw(&k, &theme)?;
-        assert!(card_row(&buffer, card, card.y + 4).starts_with("    Quit"));
+        assert!(text_row(&buffer, card, card.y + 4).starts_with("Quit"));
         Ok(())
     }
 
     #[test]
-    fn wide_keys_are_cut_with_an_ellipsis_and_the_title_keeps_its_room() -> anyhow::Result<()> {
+    fn keys_that_dont_fit_are_left_out_whole_and_the_title_keeps_its_room() -> anyhow::Result<()> {
         let keys: KeysConfig = [(
             "doc_start".to_string(),
             KeyBinding::Many(vec![
@@ -835,38 +943,92 @@ mod tests {
         assert_eq!(card.width, 41);
         let mut terminal = Terminal::new(TestBackend::new(45, 30))?;
         terminal.draw(|frame| {
-            k.render(&Theme::default(), frame, frame.area());
+            k.render(Look::default(), &Theme::default(), frame, frame.area());
         })?;
-        let row = card_row(terminal.backend().buffer(), card, card.y + 4);
-        // Twelve cells of the title, two blanks, then the keys cut to fit.
-        assert_eq!(row, "    Go to start   Ctrl+Alt+F12, Ctrl…    ");
-        assert!(row.ends_with("…    "), "{row:?}");
+        let row = text_row(terminal.backend().buffer(), card, card.y + 4);
+        // The title up to two blanks short of the keys; one whole keycap, and
+        // `…` for the two there's no room for.
+        assert_eq!(
+            row,
+            format!("Go to start of   {CAP_L}Ctrl+Alt+F12{CAP_R} …")
+        );
         assert_eq!(cut("abcdef", 4), "abc…");
         assert_eq!(cut("abc", 4), "abc");
         Ok(())
     }
 
     #[test]
-    fn mono_reverses_the_selected_row() -> anyhow::Result<()> {
+    fn caps_fit_whole_keys_into_their_room() {
+        let theme = Theme::default();
+        let look = Look {
+            pill_caps: false,
+            ..Look::default()
+        };
+        let mut buf = Buffer::empty(Rect::new(0, 0, 40, 1));
+        let area = buf.area;
+        let ink = kit::sel_row(look, &theme, &mut buf, area, false, false, theme.raised);
+        let keys = ["F5".to_string(), "Alt+W".to_string(), "Ctrl+S".to_string()];
+        let shown = |room: u16| text(&caps(look, &theme, ink, &keys, room));
+        // ` F5 `, a blank, ` Alt+W `, a blank, ` Ctrl+S `: 21 cells.
+        assert_eq!(shown(21), " F5   Alt+W   Ctrl+S ");
+        assert_eq!(shown(20), " F5   Alt+W  …");
+        assert_eq!(shown(14), " F5   Alt+W  …");
+        // The ` …` needs its two cells too.
+        assert_eq!(shown(13), " F5  …");
+        assert_eq!(shown(6), " F5  …");
+        assert_eq!(shown(5), "…");
+        assert_eq!(shown(0), "");
+        for room in 0..30 {
+            assert!(kit::width(&caps(look, &theme, ink, &keys, room)) <= room);
+        }
+    }
+
+    #[test]
+    fn mono_reverses_the_selected_row_and_its_keycaps_are_bold_without_a_fill() -> anyhow::Result<()>
+    {
         let mut k = fresh();
         let mono = Theme::named("mono").expect("mono exists");
         let card = k.card(Rect::new(0, 0, 100, 30));
         let buffer = draw(&k, &mono)?;
-        for x in [card.x, card.x + 4, card.right() - 6, card.right() - 1] {
-            assert!(
-                buffer[(x, card.y + 4)]
-                    .modifier
-                    .contains(Modifier::REVERSED),
-                "{x}"
-            );
+        // The card's inside from edge to edge, with the mark and no caps.
+        let quit = card_row(&buffer, card, card.y + 4);
+        let words = format!("{:<35}{:<35}", "Quit", "quit");
+        assert_eq!(quit, format!("▕ › {words} Ctrl+Q    ▏"));
+        let lit = &buffer[(card.x + 1, card.y + 4)];
+        for x in card.x + 1..card.right() - 1 {
+            let cell = &buffer[(x, card.y + 4)];
+            assert!(cell.modifier.contains(Modifier::REVERSED), "{x}");
+            // A keycap's fill would break the reverse video up.
+            assert_eq!((cell.fg, cell.bg), (lit.fg, lit.bg), "{x}");
         }
-        k.handle(Input::Action(Action::Move(Motion::Down)), SCREEN);
-        let buffer = draw(&k, &mono)?;
+        let right = card.right() - 4;
+        for x in right - 7..right - 1 {
+            assert!(buffer[(x, card.y + 4)].modifier.contains(Modifier::BOLD));
+        }
         assert!(
-            buffer[(card.x + 4, card.y + 5)]
+            !buffer[(right - 10, card.y + 4)]
                 .modifier
-                .contains(Modifier::REVERSED)
+                .contains(Modifier::BOLD)
         );
+        for x in [card.x, card.right() - 1] {
+            let edge = &buffer[(x, card.y + 4)];
+            assert!(!edge.modifier.contains(Modifier::REVERSED), "{x}");
+        }
+        // Off the selected row a keycap is bold on `btn`.
+        let key = &buffer[(right - 7, card.y + 5)];
+        assert!(key.modifier.contains(Modifier::BOLD));
+        assert!(!key.modifier.contains(Modifier::REVERSED));
+        assert_eq!((key.fg, key.bg), (mono.strong, mono.btn));
+
+        k.handle(Input::Action(Action::Move(Motion::Down)), SCREEN);
+        // Waiting for a key, the row asks for one in plain text.
+        k.handle(Input::Action(Action::Newline), SCREEN);
+        let buffer = draw(&k, &mono)?;
+        let save = text_row(&buffer, card, card.y + 5);
+        assert!(save.ends_with(&format!(" {WAITING}")), "{save:?}");
+        let asked = &buffer[(right - 3, card.y + 5)];
+        assert!(asked.modifier.contains(Modifier::REVERSED));
+        assert_eq!((asked.fg, asked.bg), (lit.fg, lit.bg));
         assert!(
             !buffer[(card.x + 4, card.y + 4)]
                 .modifier
