@@ -80,6 +80,11 @@ fn wait_for_selected(tinkery: &Tinkery, x: u16, row: u16) {
     });
 }
 
+/// What the name prompt says Enter and Esc do, each key a keycap.
+fn create_hint() -> String {
+    harness::hints_text(&[("⏎", "create"), ("esc", "cancel")])
+}
+
 fn wait_for_status(tinkery: &Tinkery, text: &str) {
     tinkery.wait_for_screen(&format!("status {text:?}"), WAIT, |screen| {
         screen[usize::from(STATUS)].contains(text)
@@ -352,20 +357,20 @@ fn new_file_creates_in_the_project_folder_and_opens_it() {
 
     // Esc in the name prompt comes back to the splash, which takes keys again.
     tinkery.type_text("n");
-    tinkery.wait_for_text("⏎ create   esc cancel", WAIT);
+    tinkery.wait_for_text(&create_hint(), WAIT);
     tinkery.send_keys("esc");
-    tinkery.wait_for_text_gone("⏎ create   esc cancel", WAIT);
+    tinkery.wait_for_text_gone(&create_hint(), WAIT);
     tinkery.wait_for_text("Open directory", WAIT);
 
     // A name that's taken, or not a plain name, is refused as in the tree.
     tinkery.send_keys("enter");
-    tinkery.wait_for_text("⏎ create   esc cancel", WAIT);
+    tinkery.wait_for_text(&create_hint(), WAIT);
     tinkery.type_text("a.txt");
     tinkery.send_keys("enter");
     wait_for_status(&tinkery, "a.txt already exists");
     tinkery.wait_for_text("Open directory", WAIT);
     tinkery.type_text("n");
-    tinkery.wait_for_text("⏎ create   esc cancel", WAIT);
+    tinkery.wait_for_text(&create_hint(), WAIT);
     tinkery.type_text("sub/b.txt");
     tinkery.send_keys("enter");
     wait_for_status(&tinkery, "invalid name");
@@ -373,7 +378,7 @@ fn new_file_creates_in_the_project_folder_and_opens_it() {
     assert_eq!(fs::read_dir(&root).expect("list proj").count(), 1);
 
     tinkery.type_text("n");
-    tinkery.wait_for_text("⏎ create   esc cancel", WAIT);
+    tinkery.wait_for_text(&create_hint(), WAIT);
     tinkery.type_text("b.txt");
     tinkery.send_keys("enter");
     wait_for_status(&tinkery, "created b.txt");
@@ -453,7 +458,7 @@ fn new_directory_creates_the_folder_and_opens_it_as_the_project() {
 
     // The tree has the keys: its `a` makes a file in the new folder.
     tinkery.type_text("a");
-    tinkery.wait_for_text("⏎ create   esc cancel", WAIT);
+    tinkery.wait_for_text(&create_hint(), WAIT);
     tinkery.type_text("b.txt");
     tinkery.send_keys("enter");
     tinkery.wait_for_files("b.txt in the new folder", WAIT, || {

@@ -52,6 +52,27 @@ pub fn pill_text(names: &[&str], active: usize) -> String {
         .to_string()
 }
 
+/// The Nerd Font half-circles a pill's two ends are drawn with while `[ui]
+/// pill_caps` is on and the theme isn't `mono`.
+pub const CAP_L: &str = "\u{e0b6}";
+pub const CAP_R: &str = "\u{e0b4}";
+
+/// What a hint line reads with round ends: each key between caps, a blank and
+/// what the key does, three blanks between one hint and the next.
+pub fn hints_text(pairs: &[(&str, &str)]) -> String {
+    pairs
+        .iter()
+        .map(|(key, what)| format!("{CAP_L}{key}{CAP_R} {what}"))
+        .collect::<Vec<_>>()
+        .join("   ")
+}
+
+/// What a strip running the whole of `row` holds between its two round ends,
+/// or `None` when the row doesn't start and end with them.
+pub fn strip_inside(row: &str) -> Option<&str> {
+    row.strip_prefix(CAP_L)?.strip_suffix(CAP_R)
+}
+
 type SharedWriter = Arc<Mutex<Box<dyn Write + Send>>>;
 
 /// Device status report "where is the cursor?".

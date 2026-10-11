@@ -14,8 +14,12 @@ const BAR_ROW: u16 = ROWS - 2;
 const RULE_X: u16 = COLS / 2;
 /// The Replace field runs from after the rule: ` Replace  ` and then its text.
 const REPLACE_TEXT_X: u16 = RULE_X + 11;
-/// hydra's `guide`, the rule between the fields.
-const GUIDE: vt100::Color = vt100::Color::Rgb(0x17, 0x22, 0x2e);
+/// hydra's `line2`, the rule between the fields.
+const LINE2: vt100::Color = vt100::Color::Rgb(0x1f, 0x2c, 0x3a);
+/// hydra's `raised2`, the bar's strip.
+const RAISED2: vt100::Color = vt100::Color::Rgb(0x18, 0x24, 0x2f);
+/// hydra's `bg`, the ground the strip's round ends sit on.
+const BG: vt100::Color = vt100::Color::Rgb(0x07, 0x0b, 0x10);
 /// hydra's `text`, the label of the field with focus.
 const TEXT: vt100::Color = vt100::Color::Rgb(0xa7, 0xb4, 0xc2);
 /// hydra's `muted`, the other label.
@@ -28,15 +32,20 @@ fn open(path: &str) -> Tinkery {
     tinkery
 }
 
+/// What the bar's strip holds between its round ends.
 fn bar(tinkery: &Tinkery) -> String {
-    tinkery.screen()[usize::from(BAR_ROW)].clone()
+    let row = &tinkery.screen()[usize::from(BAR_ROW)];
+    harness::strip_inside(row)
+        .unwrap_or_else(|| panic!("the bar is a strip with round ends: {row:?}"))
+        .to_string()
 }
 
-/// Waits for the find bar to end with `count`, as `n/m` or an error.
+/// Waits for the find bar to be a strip from edge to edge that ends with
+/// `count`, as `n/m` or an error.
 fn wait_for_count(tinkery: &Tinkery, count: &str) {
     tinkery.wait_for_screen(&format!("the find bar to show {count:?}"), WAIT, |lines| {
-        let bar = &lines[usize::from(BAR_ROW)];
-        bar.starts_with(" Find  ") && bar.ends_with(&format!("  {count}"))
+        harness::strip_inside(&lines[usize::from(BAR_ROW)])
+            .is_some_and(|bar| bar.starts_with(" Find  ") && bar.ends_with(&format!("  {count} ")))
     });
 }
 
@@ -70,21 +79,29 @@ fn ctrl_r_shows_find_and_replace_fields_and_tab_moves_between_them() {
     let row = bar(&tinkery);
     assert!(row.starts_with(" Find  "), "{row:?}");
     assert_eq!(tinkery.text_col(BAR_ROW, "│ Replace  "), Some(RULE_X));
-    assert_eq!(tinkery.fg_at(RULE_X, BAR_ROW), GUIDE);
+    assert_eq!(tinkery.fg_at(RULE_X, BAR_ROW), LINE2);
+    // Both fields are in one strip of `raised2`, its round ends on `bg`.
+    for x in [0, COLS - 1] {
+        assert_eq!(tinkery.fg_at(x, BAR_ROW), RAISED2, "{x}");
+        assert_eq!(tinkery.bg_at(x, BAR_ROW), BG, "{x}");
+    }
+    for x in [1, RULE_X - 1, RULE_X, RULE_X + 1, COLS - 2] {
+        assert_eq!(tinkery.bg_at(x, BAR_ROW), RAISED2, "{x}");
+    }
     // Typing starts in Find, whose label is lit while the other is quiet.
-    tinkery.wait_for_cursor(7, BAR_ROW, WAIT);
-    assert_eq!(tinkery.fg_at(1, BAR_ROW), TEXT);
+    tinkery.wait_for_cursor(8, BAR_ROW, WAIT);
+    assert_eq!(tinkery.fg_at(2, BAR_ROW), TEXT);
     assert_eq!(tinkery.fg_at(RULE_X + 2, BAR_ROW), MUTED);
     tinkery.type_text("foo");
     wait_for_count(&tinkery, "1/3");
-    tinkery.wait_for_cursor(10, BAR_ROW, WAIT);
+    tinkery.wait_for_cursor(11, BAR_ROW, WAIT);
     // The field stays put while the count changes width.
     assert_eq!(tinkery.text_col(BAR_ROW, "│ Replace  "), Some(RULE_X));
 
     tinkery.send_keys("tab");
     tinkery.wait_for_cursor(REPLACE_TEXT_X, BAR_ROW, WAIT);
     // Focus moved, and the labels' colours with it.
-    assert_eq!(tinkery.fg_at(1, BAR_ROW), MUTED);
+    assert_eq!(tinkery.fg_at(2, BAR_ROW), MUTED);
     assert_eq!(tinkery.fg_at(RULE_X + 2, BAR_ROW), TEXT);
     tinkery.type_text("xy");
     tinkery.wait_for_text(" Replace  xy", WAIT);
@@ -94,7 +111,7 @@ fn ctrl_r_shows_find_and_replace_fields_and_tab_moves_between_them() {
     wait_for_count(&tinkery, "1/3");
 
     tinkery.send_keys("tab");
-    tinkery.wait_for_cursor(10, BAR_ROW, WAIT);
+    tinkery.wait_for_cursor(11, BAR_ROW, WAIT);
     tinkery.type_text("x");
     wait_for_count(&tinkery, "0/0");
 }

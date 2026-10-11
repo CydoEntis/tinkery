@@ -8,7 +8,7 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
-use harness::{COLS, ROWS, Tinkery};
+use harness::{CAP_L, CAP_R, COLS, ROWS, Tinkery};
 use vt100::Color;
 
 const START: Duration = Duration::from_secs(10);
@@ -19,12 +19,18 @@ const FIRST: usize = 3;
 /// The prompt bar's row: just above the status line.
 const BAR: usize = ROWS as usize - 2;
 const STATUS: usize = ROWS as usize - 1;
-/// hydra's `raised`, the prompt bar's ground.
-const RAISED: Color = Color::Rgb(0x0f, 0x18, 0x21);
+/// hydra's `raised2`, the prompt bar's strip.
+const RAISED2: Color = Color::Rgb(0x18, 0x24, 0x2f);
+/// hydra's `bg`, the ground the strip's round ends sit on.
+const BG: Color = Color::Rgb(0x07, 0x0b, 0x10);
 /// hydra's `text`, the prompt bar's label.
 const BAR_TEXT: Color = Color::Rgb(0xa7, 0xb4, 0xc2);
-/// hydra's `muted`, the prompt bar's hint.
+/// hydra's `muted`, the words of the prompt bar's hint.
 const MUTED: Color = Color::Rgb(0x71, 0x80, 0x8f);
+/// hydra's `btn`, a keycap.
+const BTN: Color = Color::Rgb(0x1d, 0x2a, 0x37);
+/// hydra's `strong`, the key on a keycap.
+const STRONG: Color = Color::Rgb(0xf2, 0xf6, 0xf8);
 
 const TOP: &[&str] = &[
     "  ▸ docs",
@@ -50,9 +56,14 @@ fn copy_dir(from: &Path, to: &Path) {
 /// A temp copy of `tests/fixtures/project` with tinkery open on it, cwd inside it
 /// so paths stay short.
 fn open_copy() -> (tempfile::TempDir, Tinkery) {
+    open_copy_with("")
+}
+
+/// The same with `toml` as the config.
+fn open_copy_with(toml: &str) -> (tempfile::TempDir, Tinkery) {
     let dir = tempfile::tempdir().expect("create temp dir");
     copy_dir(Path::new("tests/fixtures/project"), dir.path());
-    let mut tinkery = Tinkery::spawn_in(dir.path(), &["."]);
+    let mut tinkery = Tinkery::spawn_in_with_config(dir.path(), toml, &["."]);
     tinkery.wait_for_text("Open directory", START);
     // The splash has the keys at launch and hides the tree; these tests work
     // in the tree.
@@ -95,29 +106,55 @@ fn wait_for_selected(tinkery: &Tinkery, row: u16, text: &str) {
     tinkery.wait_for_bg(27, row, Color::Rgb(0x0d, 0x14, 0x1b), WAIT);
 }
 
-/// Waits for the prompt bar to read ` Label  value` with what Enter and Esc do
-/// right-aligned so it ends at W-2, then checks its colours: all on `raised`,
-/// the label in `text`, the hint in `muted`.
-fn wait_for_bar(tinkery: &Tinkery, label: &str, value: &str) {
-    let hint = if label == "Rename" {
-        "⏎ rename   esc cancel"
+/// What Enter and Esc do in the bar for `label`.
+fn hint_for(label: &str) -> [(&'static str, &'static str); 2] {
+    let enter = if label == "Rename" {
+        "rename"
     } else {
-        "⏎ create   esc cancel"
+        "create"
     };
-    let hint_x = COLS - u16::try_from(hint.chars().count()).expect("short hint") - 1;
+    [("⏎", enter), ("esc", "cancel")]
+}
+
+/// Waits for the prompt bar to be a strip from edge to edge reading
+/// ` Label  value`, with what Enter and Esc do at the right, a cell short of
+/// the strip's end, then checks its colours: `raised2` with round ends on `bg`,
+/// the label in `text`, each key a `btn` keycap in `strong` bold, the words in
+/// `muted`.
+fn wait_for_bar(tinkery: &Tinkery, label: &str, value: &str) {
+    let hint = harness::hints_text(&hint_for(label));
+    let hint_x = COLS - u16::try_from(hint.chars().count()).expect("short hint") - 2;
     let field = format!(" {label}  {value}");
-    let expected = format!("{field:<width$}{hint}", width = usize::from(hint_x));
+    let expected = format!(
+        "{CAP_L}{field:<width$}{hint} {CAP_R}",
+        width = usize::from(hint_x) - 1
+    );
     tinkery.wait_for_screen(&format!("prompt bar {expected:?}"), WAIT, |screen| {
         screen[BAR] == expected
     });
     let row = BAR as u16;
+    // The strip's ends are its fill on the ground behind it.
+    for x in [0, COLS - 1] {
+        assert_eq!(tinkery.fg_at(x, row), RAISED2, "{x}");
+        assert_eq!(tinkery.bg_at(x, row), BG, "{x}");
+    }
+    assert_eq!(tinkery.fg_at(2, row), BAR_TEXT);
+    // The keys, and nothing else, are on `btn`, in `strong` and bold; their
+    // round ends are `btn` on the strip.
+    assert_eq!(tinkery.bg_text(row, BTN), "⏎esc");
+    assert_eq!(tinkery.bold_text(row), "⏎esc");
+    assert_eq!(tinkery.fg_at(hint_x + 1, row), STRONG);
+    // (A blank has no colour of its own to read, so only the glyphs count.)
+    let caps = format!("{CAP_L}{CAP_R}{CAP_L}{CAP_R}");
+    assert_eq!(tinkery.fg_text(row, BTN).replace(' ', ""), caps);
+    // Everything else between the strip's ends is on `raised2`.
     assert_eq!(
-        tinkery.bg_text(row, RAISED).chars().count(),
-        usize::from(COLS)
+        tinkery.bg_text(row, RAISED2).chars().count(),
+        usize::from(COLS) - 2 - "⏎esc".chars().count()
     );
-    assert_eq!(tinkery.fg_at(1, row), BAR_TEXT);
-    assert_eq!(tinkery.fg_at(hint_x, row), MUTED);
-    assert_eq!(tinkery.fg_at(COLS - 2, row), MUTED);
+    // ` create` and ` cancel`: the words follow their keycaps.
+    assert_eq!(tinkery.fg_at(hint_x + 4, row), MUTED);
+    assert_eq!(tinkery.fg_at(COLS - 3, row), MUTED);
 }
 
 fn wait_for_status(tinkery: &Tinkery, text: &str) {
@@ -136,7 +173,7 @@ fn a_creates_a_file_beside_the_selected_file_and_opens_it() {
 
     tinkery.send_keys("a");
     wait_for_bar(&tinkery, "New file", "");
-    tinkery.wait_for_cursor(11, BAR as u16, WAIT);
+    tinkery.wait_for_cursor(12, BAR as u16, WAIT);
     tinkery.type_text("notes.md");
     wait_for_bar(&tinkery, "New file", "notes.md");
     tinkery.send_keys("enter");
@@ -321,4 +358,72 @@ fn an_existing_or_invalid_name_changes_nothing() {
         !screen[BAR].contains("New file")
     });
     assert!(!dir.path().join("never.md").exists());
+}
+
+/// Opens the fixture copy with `toml` as the config and asks to rename
+/// `notes.txt`, returning once the prompt is up.
+fn renaming_with(toml: &str) -> (tempfile::TempDir, Tinkery) {
+    let (dir, mut tinkery) = open_copy_with(toml);
+    for _ in 0..3 {
+        tinkery.send_keys("down");
+    }
+    tinkery.wait_for_screen("notes.txt selected", WAIT, |screen| {
+        let line: String = screen[6].chars().take(TREE).collect();
+        line.trim_end() == "    notes.txt"
+    });
+    tinkery.send_keys("r");
+    tinkery.wait_for_text("Rename  notes.txt", WAIT);
+    (dir, tinkery)
+}
+
+/// The prompt bar with square ends: every pill end a blank, so the label, the
+/// keys and the words sit in the cells they have with round ends.
+const SQUARE_BAR: &str = "  Rename  notes.txt";
+const SQUARE_HINT: &str = " ⏎  rename    esc  cancel";
+
+fn wait_for_square_bar(tinkery: &Tinkery) {
+    let hint_x = usize::from(COLS) - SQUARE_HINT.chars().count() - 2;
+    let expected = format!("{SQUARE_BAR:<hint_x$}{SQUARE_HINT}");
+    tinkery.wait_for_screen(&format!("prompt bar {expected:?}"), WAIT, |screen| {
+        screen[BAR] == expected
+    });
+    // No Nerd Font glyph anywhere on the screen.
+    let screen = tinkery.screen().join("\n");
+    assert!(
+        !screen.contains(CAP_L) && !screen.contains(CAP_R),
+        "{screen}"
+    );
+    tinkery.wait_for_cursor(19, BAR as u16, WAIT);
+}
+
+#[test]
+fn pill_caps_off_squares_the_prompt_bar_and_its_keycaps() {
+    let (_dir, tinkery) = renaming_with("[ui]\npill_caps = false\n");
+    wait_for_square_bar(&tinkery);
+    let row = BAR as u16;
+    // A square end is a blank of the pill's own colour: the strip's are
+    // `raised2`, a keycap's `btn`.
+    for x in [0, COLS - 1] {
+        assert_eq!(tinkery.bg_at(x, row), RAISED2, "{x}");
+    }
+    assert_eq!(
+        tinkery.bg_text(row, RAISED2).chars().count(),
+        usize::from(COLS) - " ⏎  esc ".chars().count()
+    );
+    assert_eq!(tinkery.bg_text(row, BTN), " ⏎  esc ");
+    assert_eq!(tinkery.bold_text(row), "⏎esc");
+    assert_eq!(tinkery.fg_at(COLS - 3, row), MUTED);
+}
+
+#[test]
+fn mono_draws_the_prompt_bar_without_nerd_font_glyphs() {
+    // `mono` never rounds an end, whatever `pill_caps` says.
+    let (_dir, tinkery) = renaming_with("theme = \"mono\"\n[ui]\npill_caps = true\n");
+    wait_for_square_bar(&tinkery);
+    let row = BAR as u16;
+    // The keys are bold, and the words beside them are not the strip's own
+    // dark grey, which `mono`'s `muted` is.
+    assert_eq!(tinkery.bold_text(row), "⏎esc");
+    let word = COLS - 3;
+    assert_ne!(tinkery.fg_at(word, row), tinkery.bg_at(word, row));
 }

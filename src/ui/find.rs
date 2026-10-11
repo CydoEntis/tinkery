@@ -1,4 +1,4 @@
-//! The find bar: the one-row prompt bar with case and regex toggles, the match
+//! The find bar: the one-row prompt strip with case and regex chips, the match
 //! count and, for a bad regex, why it found nothing. Opened with Ctrl+R it has a
 //! Replace field beside the Find field, and Tab moves between them.
 
@@ -7,12 +7,13 @@ use std::ops::Range;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
+use ratatui::text::Span;
 use ropey::Rope;
-use unicode_width::UnicodeWidthStr;
 
 use crate::keymap::{Action, Input};
 use crate::search::{self, Query};
 use crate::theme::Theme;
+use crate::ui::kit::{self, Look};
 use crate::ui::prompt::{Outcome, PromptBar};
 
 /// What a key did to the find bar, for the editor to follow.
@@ -230,21 +231,27 @@ impl FindBar {
         }
     }
 
-    /// Draws ` Find  text` (and, when it's there, a `│` rule at the middle and
-    /// ` Replace  text` after it) on `raised` with, at the right, the ` Aa ` and
-    /// ` .* ` chips (filled with the accent while on) and the match count, and
-    /// returns where the cursor goes.
-    pub fn render(&self, theme: &Theme, frame: &mut Frame, area: Rect) -> (u16, u16) {
+    /// Draws a strip of `raised2` on the editor's ground holding ` Find  text`
+    /// (and, when it's there, a `│` rule at the middle and ` Replace  text` after
+    /// it) with, at the right, the `Aa` and `.*` chips (`acc_ink` on `accent`
+    /// while on, `muted` on `btn` while off) and the match count, and returns
+    /// where the cursor goes.
+    pub fn render(&self, look: Look, theme: &Theme, frame: &mut Frame, area: Rect) -> (u16, u16) {
         let status = self.status();
-        let base = Style::new().bg(theme.raised);
-        let chip = |on: bool| {
-            if on {
-                base.bg(theme.accent)
+        let fill = theme.raised2;
+        let base = Style::new().bg(fill);
+        let chip = |text: &str, on: bool| {
+            let style = if on {
+                Style::new()
+                    .bg(theme.accent)
                     .fg(theme.acc_ink)
                     .add_modifier(Modifier::BOLD)
             } else {
-                base.fg(theme.muted)
-            }
+                Style::new()
+                    .bg(theme.btn)
+                    .fg(kit::ink(theme, theme.muted, theme.btn))
+            };
+            kit::chip(look, theme, text, style, fill)
         };
         // A bad pattern is drawn in `err` along with the count saying why.
         let (pattern, status_style) = if self.error.is_some() {
@@ -252,19 +259,16 @@ impl FindBar {
         } else {
             (Style::new(), base.fg(theme.strong))
         };
-        // Right-aligned: ` Aa   .*   1/3 `.
-        let parts = [
-            (" Aa ", chip(self.case_sensitive)),
-            (" ", base),
-            (" .* ", chip(self.regex)),
-            ("  ", base),
-            (status.as_str(), status_style),
-            (" ", base),
-        ];
-        let width: usize = parts.iter().map(|(text, _)| text.width()).sum();
-        let width = u16::try_from(width).unwrap_or(u16::MAX);
+        // Right-aligned, each chip as wide as ` Aa `: ` Aa   .*   1/3 `.
+        let mut right = chip("Aa", self.case_sensitive);
+        right.push(Span::styled(" ", base));
+        right.extend(chip(".*", self.regex));
+        right.push(Span::styled("  ", base));
+        right.push(Span::styled(status, status_style));
+        right.push(Span::styled(" ", base));
+        let width = kit::width(&right);
         let buf = frame.buffer_mut();
-        buf.set_style(area, base);
+        let area = kit::strip(look, theme, buf, area, fill, theme.bg);
         let at = match &self.replace {
             None => {
                 let find_area = Rect {
@@ -291,21 +295,18 @@ impl FindBar {
                     self.bar
                         .render_field(theme, buf, find_area, !self.in_replace, pattern);
                 if half < area.width {
-                    buf.set_string(area.x + half, area.y, "│", base.fg(theme.guide));
+                    // `guide` is too close to the strip's fill to show on it.
+                    let rule = base.fg(kit::ink(theme, theme.line2, fill));
+                    buf.set_string(area.x + half, area.y, "│", rule);
                 }
                 let replace_at =
                     replace.render_field(theme, buf, replace_area, self.in_replace, Style::new());
                 if self.in_replace { replace_at } else { find_at }
             }
         };
-        let mut x = area.right().saturating_sub(width);
-        for (text, style) in parts {
-            let w = u16::try_from(text.width()).unwrap_or(0);
-            if x >= area.x {
-                buf.set_string(x, area.y, text, style);
-            }
-            x += w;
-        }
+        // A row too narrow for them cuts the count, not the chips.
+        let x = area.right().saturating_sub(width).max(area.x);
+        kit::put(buf, x, area.y, &right, area.right());
         at
     }
 }
@@ -432,6 +433,28 @@ mod tests {
         assert_eq!(find.current_match(), Some(6..9));
     }
 
+    const ROUND: Look = Look { pill_caps: true };
+    const SQUARE: Look = Look { pill_caps: false };
+
+    /// Draws `find` across a one-row screen `width` cells wide.
+    fn drawn(
+        find: &FindBar,
+        look: Look,
+        theme: &Theme,
+        width: u16,
+    ) -> anyhow::Result<(ratatui::buffer::Buffer, (u16, u16))> {
+        let mut terminal = Terminal::new(TestBackend::new(width, 1))?;
+        let mut at = (0, 0);
+        terminal.draw(|frame| at = find.render(look, theme, frame, frame.area()))?;
+        Ok((terminal.backend().buffer().clone(), at))
+    }
+
+    fn row(buffer: &ratatui::buffer::Buffer) -> String {
+        (0..buffer.area.width)
+            .map(|x| buffer[(x, 0)].symbol())
+            .collect()
+    }
+
     #[test]
     fn renders_find_and_replace_fields_side_by_side() -> anyhow::Result<()> {
         let theme = Theme::default();
@@ -439,27 +462,29 @@ mod tests {
         let mut find = FindBar::new("foo", 0, &rope);
         find.show_replace(true);
         find.paste("bar", &rope);
-        let mut terminal = Terminal::new(TestBackend::new(60, 1))?;
-        let mut at = (0, 0);
-        terminal.draw(|frame| at = find.render(&theme, frame, frame.area()))?;
-        let buffer = terminal.backend().buffer();
-        let row: String = (0..60).map(|x| buffer[(x, 0)].symbol()).collect();
-        // Find takes half the row, the rule sits at the middle, and Replace runs
-        // up to the chips.
+        let (buffer, at) = drawn(&find, ROUND, &theme, 62)?;
+        let (l, r) = (kit::CAP_L, kit::CAP_R);
+        // Between the strip's ends, Find takes half the row, the rule sits at
+        // the middle, and Replace runs up to the chips.
         assert_eq!(
-            row,
+            row(&buffer),
             format!(
-                "{:<30}│{:<14}{}",
-                " Find  foo", " Replace  bar", " Aa   .*   1/3 "
+                "{l}{:<30}│{:<14}{l}Aa{r} {l}.*{r}  1/3 {r}",
+                " Find  foo", " Replace  bar"
             )
         );
-        assert_eq!(at, (44, 0));
-        assert_eq!(buffer[(30, 0)].fg, theme.guide);
+        assert_eq!(at, (45, 0));
+        assert_eq!(buffer[(31, 0)].fg, theme.line2);
         // The focused field's label is `text`, the other one's `muted`.
-        assert_eq!(buffer[(1, 0)].fg, theme.muted);
-        assert_eq!(buffer[(32, 0)].fg, theme.text);
-        for x in 0..60 {
-            assert_eq!(buffer[(x, 0)].bg, theme.raised, "{x}");
+        assert_eq!(buffer[(2, 0)].fg, theme.muted);
+        assert_eq!(buffer[(33, 0)].fg, theme.text);
+        // The strip is `raised2` on the editor's ground.
+        for x in [0, 61] {
+            let end = &buffer[(x, 0)];
+            assert_eq!((end.fg, end.bg), (theme.raised2, theme.bg), "{x}");
+        }
+        for x in 1..46 {
+            assert_eq!(buffer[(x, 0)].bg, theme.raised2, "{x}");
         }
         Ok(())
     }
@@ -470,21 +495,73 @@ mod tests {
         let rope = rope();
         let mut find = FindBar::new("foo", 0, &rope);
         find.handle(Input::Action(Action::FindCase), &rope);
-        let mut terminal = Terminal::new(TestBackend::new(40, 1))?;
-        let mut at = (0, 0);
-        terminal.draw(|frame| at = find.render(&theme, frame, frame.area()))?;
-        let buffer = terminal.backend().buffer();
-        let row: String = (0..40).map(|x| buffer[(x, 0)].symbol()).collect();
-        assert_eq!(row, format!("{:<25}{}", " Find  foo", " Aa   .*   1/2 "));
-        assert_eq!(at, (10, 0));
-        // An `on` chip is `acc_ink` on `accent`, bold; an `off` one `muted`.
-        let on = &buffer[(25, 0)];
-        assert_eq!((on.fg, on.bg), (theme.acc_ink, theme.accent));
-        assert!(on.modifier.contains(Modifier::BOLD));
-        let off = &buffer[(30, 0)];
-        assert_eq!((off.fg, off.bg), (theme.muted, theme.raised));
-        assert_eq!(buffer[(36, 0)].fg, theme.strong);
-        assert_eq!(buffer[(7, 0)].fg, theme.strong);
+        let (buffer, at) = drawn(&find, ROUND, &theme, 40)?;
+        let (l, r) = (kit::CAP_L, kit::CAP_R);
+        assert_eq!(
+            row(&buffer),
+            format!("{l}{:<23}{l}Aa{r} {l}.*{r}  1/2 {r}", " Find  foo")
+        );
+        assert_eq!(at, (11, 0));
+        // An `on` chip is `acc_ink` on `accent`, bold, its ends `accent` on the
+        // strip.
+        for x in [25, 26] {
+            let on = &buffer[(x, 0)];
+            assert_eq!((on.fg, on.bg), (theme.acc_ink, theme.accent), "{x}");
+            assert!(on.modifier.contains(Modifier::BOLD), "{x}");
+        }
+        for x in [24, 27] {
+            let end = &buffer[(x, 0)];
+            assert_eq!((end.fg, end.bg), (theme.accent, theme.raised2), "{x}");
+        }
+        // An `off` one is `muted` on `btn`, its ends `btn` on the strip.
+        for x in [30, 31] {
+            let off = &buffer[(x, 0)];
+            assert_eq!((off.fg, off.bg), (theme.muted, theme.btn), "{x}");
+            assert!(!off.modifier.contains(Modifier::BOLD), "{x}");
+        }
+        for x in [29, 32] {
+            let end = &buffer[(x, 0)];
+            assert_eq!((end.fg, end.bg), (theme.btn, theme.raised2), "{x}");
+        }
+        // Between the chips, and round the count, is the strip.
+        for x in [28, 33, 34, 38] {
+            assert_eq!(buffer[(x, 0)].bg, theme.raised2, "{x}");
+        }
+        assert_eq!(buffer[(35, 0)].fg, theme.strong);
+        assert_eq!(buffer[(8, 0)].fg, theme.strong);
+        Ok(())
+    }
+
+    #[test]
+    fn without_pill_caps_or_in_mono_the_bar_has_no_cap_glyphs() -> anyhow::Result<()> {
+        let rope = rope();
+        let mut find = FindBar::new("foo", 0, &rope);
+        find.show_replace(true);
+        find.handle(Input::Action(Action::FindCase), &rope);
+        let mono = Theme::named("mono").expect("mono exists");
+        for (look, theme) in [(SQUARE, Theme::default()), (ROUND, mono)] {
+            let (buffer, at) = drawn(&find, look, &theme, 62)?;
+            // Every end is a blank of its fill, so nothing moved.
+            assert_eq!(
+                row(&buffer),
+                format!("{:<31}│{:<14} Aa   .*   1/2  ", "  Find  foo", " Replace  ")
+            );
+            assert_eq!(at, (42, 0));
+            for x in [0, 61] {
+                assert_eq!(buffer[(x, 0)].bg, theme.raised2, "{x}");
+            }
+            for x in 46..50 {
+                assert_eq!(buffer[(x, 0)].bg, theme.accent, "{x}");
+            }
+            for x in 51..55 {
+                assert_eq!(buffer[(x, 0)].bg, theme.btn, "{x}");
+            }
+            // Where a theme's quiet colours are its fills (`mono`), the `off`
+            // chip, the unfocused label and the rule still show.
+            for x in [2, 31, 52] {
+                assert_ne!(buffer[(x, 0)].fg, buffer[(x, 0)].bg, "{x}");
+            }
+        }
         Ok(())
     }
 
@@ -494,15 +571,26 @@ mod tests {
         let rope = rope();
         let mut find = FindBar::new("(", 0, &rope);
         find.handle(Input::Action(Action::FindRegex), &rope);
-        let mut terminal = Terminal::new(TestBackend::new(40, 1))?;
-        terminal.draw(|frame| {
-            find.render(&theme, frame, frame.area());
-        })?;
-        let buffer = terminal.backend().buffer();
-        let row: String = (0..40).map(|x| buffer[(x, 0)].symbol()).collect();
-        assert!(row.ends_with("  invalid regex "), "{row:?}");
-        assert_eq!(buffer[(7, 0)].fg, theme.err);
-        assert_eq!(buffer[(26, 0)].fg, theme.err);
+        let (buffer, _) = drawn(&find, ROUND, &theme, 40)?;
+        let row = row(&buffer);
+        let end = format!("  invalid regex {}", kit::CAP_R);
+        assert!(row.ends_with(&end), "{row:?}");
+        assert_eq!(buffer[(8, 0)].fg, theme.err);
+        for x in 25..38 {
+            assert_eq!(buffer[(x, 0)].fg, theme.err, "{x}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_bar_too_narrow_for_its_chips_stays_inside_its_strip() -> anyhow::Result<()> {
+        let theme = Theme::default();
+        let rope = rope();
+        let find = FindBar::new("foo", 0, &rope);
+        let (buffer, _) = drawn(&find, ROUND, &theme, 12)?;
+        let (l, r) = (kit::CAP_L, kit::CAP_R);
+        // The chips keep their place and the count is what gets cut.
+        assert_eq!(row(&buffer), format!("{l}{l}Aa{r} {l}.*{r} {r}"));
         Ok(())
     }
 }

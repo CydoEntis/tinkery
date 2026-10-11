@@ -48,6 +48,7 @@ use crate::ui::dirpicker::{Browsed, DirPicker};
 use crate::ui::find::{FindBar, Step};
 use crate::ui::hover::render_hover;
 use crate::ui::keybindings::{self, Keybindings};
+use crate::ui::kit::Look;
 use crate::ui::nofile;
 use crate::ui::picker::{self, Picked, Picker};
 use crate::ui::prompt::{Outcome, PromptBar};
@@ -193,14 +194,14 @@ enum BarOp {
 
 impl BarOp {
     /// What Enter and Esc do, shown at the right of the bar (SPEC_V1_LAYOUT §8).
-    fn hint(&self) -> &'static str {
-        match self {
-            BarOp::NewFile(_) | BarOp::NewFolder(_) | BarOp::NewProject(_) => {
-                "⏎ create   esc cancel"
-            }
-            BarOp::Rename(_) => "⏎ rename   esc cancel",
-            BarOp::SaveAs(_) => "⏎ save   esc cancel",
-        }
+    /// Each is a key and the word for what it does.
+    fn hint(&self) -> [(&'static str, &'static str); 2] {
+        let enter = match self {
+            BarOp::NewFile(_) | BarOp::NewFolder(_) | BarOp::NewProject(_) => "create",
+            BarOp::Rename(_) => "rename",
+            BarOp::SaveAs(_) => "save",
+        };
+        [("⏎", enter), ("esc", "cancel")]
     }
 }
 
@@ -895,6 +896,8 @@ pub struct App {
     keymap: Keymap,
     editor: EditorConfig,
     theme: Theme,
+    /// `[ui]`: how the chrome is drawn.
+    look: Look,
     tabs: Tabs,
     /// The terminal's size as of the last draw; movement needs the editor pane's
     /// height for paging and both dimensions for scrolling.
@@ -1075,6 +1078,12 @@ impl App {
     /// Draws with `theme` instead of the default.
     pub fn with_theme(mut self, theme: Theme) -> Self {
         self.theme = theme;
+        self
+    }
+
+    /// Draws the chrome as `[ui]` asks instead of with the defaults.
+    pub fn with_look(mut self, look: Look) -> Self {
+        self.look = look;
         self
     }
 
@@ -4236,7 +4245,7 @@ impl App {
         }
     }
 
-    /// Replaces the keymap, `[editor]` and theme with those `text` (a whole
+    /// Replaces the keymap, `[editor]`, `[ui]` and theme with those `text` (a whole
     /// `config.toml`) describes, and says `settings applied`. A language whose
     /// `[lsp.<lang>]` changed has its servers restarted; a changed
     /// `[debug.<lang>]` takes effect from the next debug session, as a running
@@ -4249,6 +4258,7 @@ impl App {
                 self.keymap = settings.keymap;
                 self.editor = settings.editor;
                 self.theme = settings.theme;
+                self.look = Look::of(&settings.ui);
                 let stopped = self
                     .lsp
                     .reconfigure(crate::lsp::servers::with_defaults(settings.lsp));
@@ -4910,13 +4920,12 @@ impl App {
             }
         }
         if let (Some(name_prompt), Some(area)) = (&self.name_prompt, panes.bar) {
-            let at = name_prompt
-                .bar
-                .render(theme, frame, area, name_prompt.op.hint());
+            let hint = name_prompt.op.hint();
+            let at = name_prompt.bar.render(self.look, theme, frame, area, &hint);
             frame.set_cursor_position(at);
         }
         if let (Some(find), Some(area)) = (&self.find, panes.bar) {
-            let at = find.render(theme, frame, area);
+            let at = find.render(self.look, theme, frame, area);
             frame.set_cursor_position(at);
         }
         if let Some(picker) = &self.picker {
@@ -5638,6 +5647,48 @@ mod tests {
         assert_eq!(app.editor.tab_width, 2);
         assert_eq!(app.theme, Theme::named("nord").unwrap());
         assert_eq!(app.keymap.key_label(Action::Save).as_deref(), Some("F2"));
+    }
+
+    #[test]
+    fn saving_the_config_file_applies_pill_caps() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = app_on_file(dir.path(), "config.toml", "");
+        assert!(app.look.pill_caps);
+        app.edit(|b| {
+            b.paste(
+                "[ui]
+pill_caps = false
+",
+            )
+        });
+        assert!(app.save());
+        assert_eq!(app.message.as_deref(), Some("settings applied"));
+        assert!(!app.look.pill_caps);
+        // Taking the line out brings the default back.
+        press(&mut app, &["ctrl+a"]);
+        app.edit(|b| {
+            b.paste(
+                "theme = \"nord\"
+",
+            )
+        });
+        assert!(app.save());
+        assert!(app.look.pill_caps);
+        // A file that doesn't parse keeps the look in use.
+        app.apply_config_text(
+            "[ui]
+pill_caps = false
+",
+        )
+        .unwrap();
+        assert!(
+            app.apply_config_text(
+                "[ui
+"
+            )
+            .is_err()
+        );
+        assert!(!app.look.pill_caps);
     }
 
     #[test]
