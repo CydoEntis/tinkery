@@ -246,7 +246,7 @@ fn esc_closes_the_picker_without_opening_anything() {
     tinkery.wait_for_text_gone(SCOPE, WAIT);
     tinkery.wait_for_text_gone("notes.txt", WAIT);
     // Nothing was opened, so the status bar is still the splash's.
-    assert!(status_line(&tinkery).contains("q quit"));
+    assert!(status_line(&tinkery).contains(&harness::hints_text(&[("q", "quit")])));
     // Nothing was opened, so the splash is back; leaving it, typing goes to the
     // editor, not to a hidden query.
     tinkery.wait_for_text("New file", WAIT);
@@ -267,7 +267,7 @@ fn a_click_outside_the_card_closes_it_and_one_inside_does_not() {
     tinkery.click(2, 20);
     tinkery.wait_for_text_gone(SCOPE, WAIT);
     // Nothing was opened, so the status bar is still the splash's.
-    assert!(status_line(&tinkery).contains("q quit"));
+    assert!(status_line(&tinkery).contains(&harness::hints_text(&[("q", "quit")])));
 }
 
 #[test]
@@ -330,7 +330,7 @@ fn gt_lists_only_commands_with_their_keys_and_enter_runs_one() {
     tinkery.send_keys("enter");
     tinkery.wait_for_text_gone("cast · commands", WAIT);
     // Two editors on the file, side by side; text starts on row 3, under the
-    // pills and the thread.
+    // pills and the blank row below them.
     tinkery.wait_for_screen("two splits", WAIT, |screen| {
         screen[3].matches("1  line 1").count() == 2
     });
