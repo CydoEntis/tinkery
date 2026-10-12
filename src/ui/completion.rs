@@ -14,7 +14,7 @@ use super::kit::{self, Look};
 use crate::lsp::CompletionItem;
 use crate::theme::Theme;
 
-/// Most items the popup shows at once.
+/// Most items the popup shows at once; the arrows scroll to the rest.
 pub const MAX_ITEMS: usize = 10;
 /// Widest a row's text gets inside the card.
 const MAX_TEXT_WIDTH: usize = 60;
@@ -26,10 +26,10 @@ const LEFT: u16 = 1 + MARK;
 /// The row pill's other end and the card's edge after it.
 const RIGHT: u16 = 2;
 
-/// How wide the kinds' column is for `shown`, and the blank after it: none
+/// How wide the kinds' column is for `items`, and the blank after it: none
 /// when no item has a kind.
-fn kind_column(shown: &[&CompletionItem]) -> (usize, usize) {
-    let width = shown.iter().map(|i| i.kind.width()).max().unwrap_or(0);
+fn kind_column(items: &[&CompletionItem]) -> (usize, usize) {
+    let width = items.iter().map(|i| i.kind.width()).max().unwrap_or(0);
     (width, usize::from(width > 0))
 }
 
@@ -68,8 +68,10 @@ pub struct Completion {
     /// relative to.
     asked_at: usize,
     items: Vec<CompletionItem>,
-    /// Index into the shown items.
+    /// Index into the items that match what is typed.
     selected: usize,
+    /// The match on the popup's first row: how far its rows have scrolled.
+    top: usize,
 }
 
 impl Completion {
@@ -80,40 +82,68 @@ impl Completion {
             asked_at,
             items,
             selected: 0,
+            top: 0,
         }
     }
 
-    /// The items whose filter text starts with `typed`, ignoring case, at most
-    /// `MAX_ITEMS`.
-    pub fn shown(&self, typed: &str) -> Vec<&CompletionItem> {
+    /// Every item whose filter text starts with `typed`, ignoring case.
+    fn matches(&self, typed: &str) -> Vec<&CompletionItem> {
         let typed = typed.to_lowercase();
         self.items
             .iter()
             .filter(|item| item.filter.to_lowercase().starts_with(&typed))
-            .take(MAX_ITEMS)
             .collect()
     }
 
+    /// Which of `len` matches is on the first of `rows` rows, and which is
+    /// selected. The rows are where they were scrolled to, moved only as far
+    /// as it takes to have the selected match on one of them: a card cut
+    /// short by the screen's edge has fewer rows than were scrolled by.
+    fn window(&self, len: usize, rows: usize) -> (usize, usize) {
+        let selected = self.selected.min(len.saturating_sub(1));
+        let top = self
+            .top
+            .min(len.saturating_sub(rows))
+            // Never more than `selected`, whatever `rows` is.
+            .clamp((selected + 1).saturating_sub(rows.max(1)), selected);
+        (top, selected)
+    }
+
+    /// The matches for `typed` on the popup's rows: at most `MAX_ITEMS`, from
+    /// the one its rows have scrolled to.
+    pub fn shown(&self, typed: &str) -> Vec<&CompletionItem> {
+        let mut matches = self.matches(typed);
+        let (top, _) = self.window(matches.len(), MAX_ITEMS);
+        matches.drain(..top);
+        matches.truncate(MAX_ITEMS);
+        matches
+    }
+
     pub fn selected(&self, typed: &str) -> Option<&CompletionItem> {
-        let shown = self.shown(typed);
-        shown
-            .get(self.selected.min(shown.len().saturating_sub(1)))
-            .copied()
+        let matches = self.matches(typed);
+        let (_, selected) = self.window(matches.len(), MAX_ITEMS);
+        matches.get(selected).copied()
     }
 
-    /// Moves the selection one row, stopping at either end.
+    /// Moves the selection one match, stopping at either end. The rows scroll
+    /// only when it would leave them: down from the last row, up from the
+    /// first.
     pub fn step(&mut self, typed: &str, down: bool) {
-        let last = self.shown(typed).len().saturating_sub(1);
+        let len = self.matches(typed).len();
+        let (top, selected) = self.window(len, MAX_ITEMS);
         self.selected = if down {
-            (self.selected + 1).min(last)
+            (selected + 1).min(len.saturating_sub(1))
         } else {
-            self.selected.min(last).saturating_sub(1)
+            selected.saturating_sub(1)
         };
+        self.top = top.clamp((self.selected + 1).saturating_sub(MAX_ITEMS), self.selected);
     }
 
-    /// Typing changed what's shown, so the best match is selected again.
+    /// Typing changed what matches, so the best match is selected again, on
+    /// the first row.
     pub fn reset(&mut self) {
         self.selected = 0;
+        self.top = 0;
     }
 
     /// The range accepting `item` replaces with the cursor at `cursor`: its
@@ -131,23 +161,26 @@ impl Completion {
         }
     }
 
-    /// The selected row, as a number that changes when the selection moves.
+    /// The selected match, as a number that changes when the selection moves.
+    /// It isn't a row: scrolling moves the selection and leaves it on the
+    /// row it was on.
     pub fn selected_index(&self) -> usize {
         self.selected
     }
 
     /// Where the card listing the items that match `typed` goes, anchored at
-    /// the cursor cell `cursor` inside `bounds`: as wide as its widest kind,
-    /// label and detail and a row per item. None when nothing matches or
-    /// there's no room for a row, and so nothing is drawn.
+    /// the cursor cell `cursor` inside `bounds`: as wide as the widest kind,
+    /// label and detail of every match, on its rows or not, so it keeps its
+    /// width as it scrolls, and a row per item up to `MAX_ITEMS`. None when
+    /// nothing matches or there's no room for a row, and so nothing is drawn.
     pub fn card(&self, typed: &str, cursor: (u16, u16), bounds: Rect) -> Option<Rect> {
-        let shown = self.shown(typed);
-        if shown.is_empty() {
+        let matches = self.matches(typed);
+        if matches.is_empty() {
             return None;
         }
-        let (kind_width, gap) = kind_column(&shown);
-        let label_width = shown.iter().map(|i| i.label.width()).max().unwrap_or(0);
-        let detail_width = shown.iter().map(|i| i.detail.width()).max().unwrap_or(0);
+        let (kind_width, gap) = kind_column(&matches);
+        let label_width = matches.iter().map(|i| i.label.width()).max().unwrap_or(0);
+        let detail_width = matches.iter().map(|i| i.detail.width()).max().unwrap_or(0);
         // Two blanks keep the detail apart from the longest label.
         let detail_room = if detail_width > 0 {
             detail_width + 2
@@ -155,7 +188,7 @@ impl Completion {
             0
         };
         let text_width = (kind_width + gap + label_width + detail_room).clamp(1, MAX_TEXT_WIDTH);
-        let rows = u16::try_from(shown.len()).unwrap_or(u16::MAX);
+        let rows = u16::try_from(matches.len().min(MAX_ITEMS)).unwrap_or(u16::MAX);
         let width = u16::try_from(text_width).unwrap_or(u16::MAX);
         let card = anchor(cursor, width + LEFT + RIGHT, rows + 2, bounds);
         (card.width > LEFT + RIGHT && card.height > 2).then_some(card)
@@ -166,8 +199,9 @@ impl Completion {
     /// with the typed prefix in `accent` bold, and its detail right-aligned in
     /// `muted`. The selected row is the kit's: a pill with its mark, the label
     /// in `strong` bold. `hovered` is the screen row the pointer is on, inside
-    /// the card (`kit::row_under`); the row drawn there is the pill alone.
-    /// Nothing when nothing matches.
+    /// the card (`kit::row_under`); the row drawn there is the pill alone,
+    /// whichever match the rows have scrolled onto it. Nothing when nothing
+    /// matches.
     #[allow(clippy::too_many_arguments)]
     pub fn render(
         &self,
@@ -182,20 +216,22 @@ impl Completion {
         let Some(card) = self.card(typed, cursor, bounds) else {
             return;
         };
-        let shown = self.shown(typed);
-        let selected = self.selected.min(shown.len().saturating_sub(1));
-        let (kind_width, gap) = kind_column(&shown);
+        let matches = self.matches(typed);
+        // The column is as wide as the card allowed for: every match's kind.
+        let (kind_width, gap) = kind_column(&matches);
         let out = frame.buffer_mut();
         let inner = popup_card(look, theme, out, card);
         if inner.is_empty() {
             return;
         }
+        let (top, selected) = self.window(matches.len(), usize::from(inner.height));
         // The text ends where the row pill's right end begins.
         let right = inner.right().saturating_sub(1);
         let x = inner.x + MARK;
         let room = usize::from(right.saturating_sub(x));
         let typed_chars = typed.chars().count();
-        for (index, (y, item)) in (inner.y..inner.bottom()).zip(&shown).enumerate() {
+        let rows = matches.iter().enumerate().skip(top);
+        for (y, (index, item)) in (inner.y..inner.bottom()).zip(rows) {
             let row = Rect::new(inner.x, y, inner.width, 1);
             let chosen = index == selected;
             let lit = hovered == Some(y);
@@ -301,6 +337,199 @@ mod tests {
             completion.selected("").map(|i| i.label.as_str()),
             Some("a1")
         );
+    }
+
+    /// Twelve matches, `m01` to `m12`; the last has the widest label and the
+    /// only detail.
+    fn twelve() -> Completion {
+        let mut items: Vec<CompletionItem> =
+            (1..=11).map(|n| item(&format!("m{n:02}"), None)).collect();
+        let mut last = item("m12_the_widest", None);
+        last.detail = "fn()".into();
+        items.push(last);
+        Completion::new(1, 0, 0, items)
+    }
+
+    /// The first three chars of each label on the popup's rows, and of the
+    /// selected one.
+    fn rows_of(completion: &Completion, typed: &str) -> (Vec<String>, String) {
+        let short = |i: &CompletionItem| i.label[..3].to_string();
+        (
+            completion.shown(typed).into_iter().map(short).collect(),
+            completion.selected(typed).map(short).unwrap_or_default(),
+        )
+    }
+
+    fn named(range: std::ops::RangeInclusive<usize>) -> Vec<String> {
+        range.map(|n| format!("m{n:02}")).collect()
+    }
+
+    #[test]
+    fn the_arrows_scroll_the_rows_once_the_selection_is_on_the_last_or_first() {
+        let mut completion = twelve();
+        assert_eq!(rows_of(&completion, ""), (named(1..=10), "m01".into()));
+        // Down to the tenth row scrolls nothing.
+        for _ in 0..9 {
+            completion.step("", true);
+        }
+        assert_eq!(rows_of(&completion, ""), (named(1..=10), "m10".into()));
+        // From there every row moves up one, and the eleventh match is
+        // selected on the last row.
+        completion.step("", true);
+        assert_eq!(rows_of(&completion, ""), (named(2..=11), "m11".into()));
+        completion.step("", true);
+        assert_eq!(rows_of(&completion, ""), (named(3..=12), "m12".into()));
+        // It stops at the last match, and doesn't wrap.
+        for _ in 0..3 {
+            completion.step("", true);
+            assert_eq!(rows_of(&completion, ""), (named(3..=12), "m12".into()));
+        }
+        // Up moves the selection over rows that stay where they are, until
+        // it is on the first one.
+        for at in (3..=11).rev() {
+            completion.step("", false);
+            assert_eq!(
+                rows_of(&completion, ""),
+                (named(3..=12), format!("m{at:02}"))
+            );
+        }
+        completion.step("", false);
+        assert_eq!(rows_of(&completion, ""), (named(2..=11), "m02".into()));
+        completion.step("", false);
+        assert_eq!(rows_of(&completion, ""), (named(1..=10), "m01".into()));
+        // And it stops at the first match.
+        completion.step("", false);
+        assert_eq!(rows_of(&completion, ""), (named(1..=10), "m01".into()));
+        assert_eq!(completion.selected_index(), 0);
+    }
+
+    #[test]
+    fn typing_or_backspace_goes_back_to_the_first_match_with_the_rows_unscrolled() {
+        let mut completion = twelve();
+        for _ in 0..11 {
+            completion.step("", true);
+        }
+        assert_eq!(rows_of(&completion, ""), (named(3..=12), "m12".into()));
+        // A letter typed: what `App::refilter` does, then the narrower word.
+        completion.reset();
+        assert_eq!(rows_of(&completion, "m1"), (named(10..=12), "m10".into()));
+        // Backspace: the same, with the wider word.
+        completion.step("m1", true);
+        completion.reset();
+        assert_eq!(rows_of(&completion, ""), (named(1..=10), "m01".into()));
+        assert_eq!(completion.selected_index(), 0);
+        // Scrolled again from there, as if it had only just opened.
+        for _ in 0..10 {
+            completion.step("", true);
+        }
+        assert_eq!(rows_of(&completion, ""), (named(2..=11), "m11".into()));
+    }
+
+    /// `completion` drawn for no typed word with the cursor at (2, 0) of a 40
+    /// by `height` screen and the pointer on screen row `hovered`: the frame,
+    /// and each of its rows as text.
+    fn scrolled(
+        completion: &Completion,
+        height: u16,
+        hovered: Option<u16>,
+    ) -> anyhow::Result<(Buffer, Vec<String>)> {
+        let theme = Theme::default();
+        let mut terminal = Terminal::new(TestBackend::new(40, height))?;
+        terminal.draw(|frame| {
+            completion.render(LOOKS[0], &theme, "", (2, 0), frame.area(), hovered, frame);
+        })?;
+        let buf = terminal.backend().buffer().clone();
+        let rows = (0..height).map(|y| cells(&buf, y, 0, 40)).collect();
+        Ok((buf, rows))
+    }
+
+    /// The screen rows of `buf` with the selection's mark on them.
+    fn marked(buf: &Buffer) -> Vec<u16> {
+        (0..buf.area.height)
+            .filter(|&y| (0..buf.area.width).any(|x| buf[(x, y)].symbol() == SEL_MARK))
+            .collect()
+    }
+
+    #[test]
+    fn a_scrolled_popup_keeps_its_card_and_lights_the_row_under_the_pointer() -> anyhow::Result<()>
+    {
+        let theme = Theme::default();
+        let bounds = Rect::new(0, 0, 40, 14);
+        let mut completion = twelve();
+        // Ten rows under the cursor's, as wide as the twelfth match needs
+        // though it isn't on them yet.
+        let card = completion.card("", (2, 0), bounds);
+        assert_eq!(card, Some(Rect::new(2, 1, 29, 12)));
+        let (rest, rows) = scrolled(&completion, 14, None)?;
+        assert!(rows[2].contains("fn m01") && rows[11].contains("fn m10"));
+        assert!(!rows.iter().any(|row| row.contains("m11")), "{rows:#?}");
+        assert_eq!(marked(&rest), [2]);
+
+        for _ in 0..11 {
+            completion.step("", true);
+        }
+        assert_eq!(completion.card("", (2, 0), bounds), card);
+        let (buf, rows) = scrolled(&completion, 14, None)?;
+        // The rows moved under a card that didn't: the same edges, the kind
+        // in the same column, and the pill on the last row alone.
+        assert!(rows[2].contains("fn m03"), "{rows:#?}");
+        assert!(rows[11].contains("fn m12_the_widest  fn()"), "{rows:#?}");
+        assert!(!rows.iter().any(|row| row.contains("m02")), "{rows:#?}");
+        assert_eq!(
+            (cells(&rest, 2, 6, 8), cells(&buf, 2, 6, 8)),
+            ("fn".into(), "fn".into())
+        );
+        assert_eq!(marked(&buf), [11]);
+        for y in [1, 12] {
+            assert_eq!(rows[usize::from(y)], cells(&rest, y, 0, 40), "{y}");
+        }
+        for y in 2..12 {
+            for x in [2, 30] {
+                assert_eq!(buf[(x, y)], rest[(x, y)], "{x},{y}");
+            }
+            let lit = (4..29).all(|x| buf[(x, y)].bg == theme.hov);
+            assert_eq!(lit, y == 11, "{y}");
+        }
+
+        // The pointer lights the screen row it is on, whichever match has
+        // scrolled onto it, and no other.
+        let (lit, lit_rows) = scrolled(&completion, 14, Some(4))?;
+        assert_eq!(marked(&lit), [11]);
+        assert!(lit_rows[4].contains("fn m05"));
+        for y in 2..12 {
+            let filled = (4..29).all(|x| lit[(x, y)].bg == theme.hov);
+            assert_eq!(filled, y == 4 || y == 11, "{y}");
+            if y != 4 {
+                for x in 0..40 {
+                    assert_eq!(lit[(x, y)], buf[(x, y)], "{x},{y}");
+                }
+            }
+        }
+        // On the selected row, scrolled to or not, it changes nothing.
+        assert_eq!(scrolled(&completion, 14, Some(11))?.0, buf);
+        Ok(())
+    }
+
+    #[test]
+    fn a_card_cut_short_by_the_screen_still_has_the_selected_row_on_it() -> anyhow::Result<()> {
+        // Six rows under the cursor's: the card's edges and four matches.
+        let mut completion = twelve();
+        let card = completion.card("", (2, 0), Rect::new(0, 0, 40, 7));
+        assert_eq!(card, Some(Rect::new(2, 1, 29, 6)));
+        for _ in 0..5 {
+            completion.step("", true);
+        }
+        let (buf, rows) = scrolled(&completion, 7, None)?;
+        assert!(rows[2].contains("fn m03"), "{rows:#?}");
+        assert!(rows[5].contains("fn m06"), "{rows:#?}");
+        assert_eq!(marked(&buf), [5]);
+        // A card this short has no rows for the selection to move back over:
+        // it stays on the last one, and the rows come down to it.
+        completion.step("", false);
+        let (buf, rows) = scrolled(&completion, 7, None)?;
+        assert!(rows[2].contains("fn m02"), "{rows:#?}");
+        assert_eq!(marked(&buf), [5]);
+        Ok(())
     }
 
     #[test]

@@ -1589,6 +1589,197 @@ fn typing_filters_and_the_arrows_move_the_selection() {
 }
 
 #[test]
+fn the_arrows_scroll_the_popup_through_every_match() {
+    let (project, mut tinkery) = completion_project(&completion_script(""));
+    open_completion(&project, &mut tinkery, 2);
+    tinkery.wait_for_cursor(12, 4, WAIT);
+    let last = ITEM_ROW + 9;
+    // The card as it opened: 42 wide from column 12.
+    let (left, right) = (12, 12 + 42 - 1);
+    let edges = |tinkery: &Tinkery| -> Vec<String> {
+        let screen = tinkery.screen();
+        (ITEM_ROW - 1..=last + 1)
+            .map(|row| {
+                let line = cells(&screen, row, left, right + 1);
+                let mut inside = line.chars();
+                let ends = (inside.next(), inside.next_back());
+                // The edge rows whole, an item's row by its two ends.
+                if row < ITEM_ROW || row > last {
+                    line
+                } else {
+                    format!("{ends:?}")
+                }
+            })
+            .collect()
+    };
+    let opened = edges(&tinkery);
+    // What a row shows from the kind column on, and which rows have the mark.
+    let at_kind = |tinkery: &Tinkery, row: u16, text: &str| -> bool {
+        tinkery.text_col(row, text) == Some(KIND_COL)
+    };
+    let marked = |tinkery: &Tinkery| -> Vec<u16> {
+        (ITEM_ROW..=last)
+            .filter(|&row| tinkery.text_col(row, "›").is_some())
+            .collect()
+    };
+
+    // Down to the tenth row scrolls nothing.
+    for _ in 0..9 {
+        tinkery.send_keys("down");
+    }
+    tinkery.wait_for_fg_at(LABEL_COL, last, STRONG, WAIT);
+    let screen = tinkery.screen();
+    assert!(at_kind(&tinkery, ITEM_ROW, "field  as_str"), "{screen:#?}");
+    assert!(at_kind(&tinkery, last, "method push"), "{screen:#?}");
+    assert!(
+        !screen.iter().any(|r| r.contains("push_str")),
+        "{screen:#?}"
+    );
+
+    // Down on the tenth row: every row moves up one and the eleventh match
+    // is selected on the last row. The first row's kind stays in its column
+    // and the card where it was.
+    tinkery.send_keys("down");
+    tinkery.wait_for_text("push_str", WAIT);
+    tinkery.wait_for_text_gone("as_str", WAIT);
+    let screen = tinkery.screen();
+    assert!(
+        at_kind(&tinkery, ITEM_ROW, "method capacity"),
+        "{screen:#?}"
+    );
+    assert!(at_kind(&tinkery, last - 1, "method push "), "{screen:#?}");
+    assert!(at_kind(&tinkery, last, "method push_str"), "{screen:#?}");
+    assert!(is_selected(&tinkery, last, 0, LABEL_COL), "{screen:#?}");
+    assert_eq!(marked(&tinkery), [last], "{screen:#?}");
+    assert_eq!(tinkery.text_col(last, CAP_R), Some(right - 1));
+    assert_eq!(edges(&tinkery), opened, "{screen:#?}");
+
+    // And again, to the twelfth and last.
+    tinkery.send_keys("down");
+    tinkery.wait_for_text("trim", WAIT);
+    tinkery.wait_for_text_gone("capacity", WAIT);
+    let screen = tinkery.screen();
+    assert!(at_kind(&tinkery, ITEM_ROW, "method chars"), "{screen:#?}");
+    assert!(at_kind(&tinkery, last, "fn     trim"), "{screen:#?}");
+    assert!(is_selected(&tinkery, last, 0, LABEL_COL), "{screen:#?}");
+    assert_eq!(marked(&tinkery), [last], "{screen:#?}");
+    assert_eq!(edges(&tinkery), opened, "{screen:#?}");
+    // `len`'s detail came up with its row, still against the right edge.
+    assert_eq!(
+        tinkery.text_col(ITEM_ROW + 5, "fn(&self) -> usize"),
+        Some(right - 1 - 18),
+        "{screen:#?}"
+    );
+
+    // The pointer lights the row it is on, whichever match scrolled there,
+    // and no other; the selection keeps its row.
+    let under = ITEM_ROW + 1;
+    tinkery.move_to(LABEL_COL, under);
+    tinkery.wait_for_bg(LABEL_COL, under, HOV, WAIT);
+    let screen = tinkery.screen();
+    assert!(at_kind(&tinkery, under, "method clear"), "{screen:#?}");
+    assert_eq!(tinkery.fg_at(LABEL_COL, under), FG);
+    for row in ITEM_ROW..=last {
+        let lit = tinkery.bg_at(LABEL_COL, row) == HOV;
+        assert_eq!(lit, row == under || row == last, "{row} {screen:#?}");
+    }
+    assert_eq!(marked(&tinkery), [last], "{screen:#?}");
+    tinkery.move_to(70, 22);
+    tinkery.wait_for_bg(LABEL_COL, under, CARD, WAIT);
+
+    // It stops at the last match: another Down changes nothing, so the Up
+    // after it lands on the row above, over rows that stay where they are.
+    tinkery.send_keys("down");
+    tinkery.send_keys("up");
+    tinkery.wait_for_fg_at(LABEL_COL, last - 1, STRONG, WAIT);
+    let screen = tinkery.screen();
+    assert!(is_selected(&tinkery, last - 1, 0, LABEL_COL), "{screen:#?}");
+    assert_eq!(marked(&tinkery), [last - 1], "{screen:#?}");
+    assert!(at_kind(&tinkery, ITEM_ROW, "method chars"), "{screen:#?}");
+    assert!(at_kind(&tinkery, last, "fn     trim"), "{screen:#?}");
+
+    // Up only scrolls back once the selection is on the first row.
+    for _ in 0..8 {
+        tinkery.send_keys("up");
+    }
+    tinkery.wait_for_fg_at(LABEL_COL, ITEM_ROW, STRONG, WAIT);
+    let screen = tinkery.screen();
+    assert!(is_selected(&tinkery, ITEM_ROW, 0, LABEL_COL), "{screen:#?}");
+    assert!(at_kind(&tinkery, ITEM_ROW, "method chars"), "{screen:#?}");
+    assert!(at_kind(&tinkery, last, "fn     trim"), "{screen:#?}");
+    tinkery.send_keys("up");
+    tinkery.wait_for_text("capacity", WAIT);
+    tinkery.wait_for_text_gone("trim", WAIT);
+    let screen = tinkery.screen();
+    assert!(
+        at_kind(&tinkery, ITEM_ROW, "method capacity"),
+        "{screen:#?}"
+    );
+    assert!(at_kind(&tinkery, last, "method push_str"), "{screen:#?}");
+    assert!(is_selected(&tinkery, ITEM_ROW, 0, LABEL_COL), "{screen:#?}");
+    assert_eq!(marked(&tinkery), [ITEM_ROW], "{screen:#?}");
+    assert_eq!(edges(&tinkery), opened, "{screen:#?}");
+    tinkery.send_keys("up");
+    tinkery.wait_for_text("as_str", WAIT);
+    tinkery.wait_for_text_gone("push_str", WAIT);
+    assert!(at_kind(&tinkery, ITEM_ROW, "field  as_str"));
+    assert!(is_selected(&tinkery, ITEM_ROW, 0, LABEL_COL));
+    // And it stops at the first match: another Up, then Down is the second.
+    tinkery.send_keys("up");
+    tinkery.send_keys("down");
+    tinkery.wait_for_fg_at(LABEL_COL, ITEM_ROW + 1, STRONG, WAIT);
+    let screen = tinkery.screen();
+    assert!(at_kind(&tinkery, ITEM_ROW, "field  as_str"), "{screen:#?}");
+    assert!(
+        at_kind(&tinkery, ITEM_ROW + 1, "method capacity"),
+        "{screen:#?}"
+    );
+    assert_eq!(marked(&tinkery), [ITEM_ROW + 1], "{screen:#?}");
+    // The cursor never moved.
+    assert!(status_line(&tinkery).contains("Ln 2, Col 7"));
+}
+
+#[test]
+fn enter_and_tab_insert_an_item_that_was_scrolled_to() {
+    let (project, mut tinkery) = completion_project(&completion_script(""));
+    // `trim` is the twelfth match: on no row until the popup has scrolled.
+    for (line, key) in [(2, "enter"), (3, "tab")] {
+        open_completion(&project, &mut tinkery, line);
+        let screen = tinkery.screen();
+        assert!(
+            !screen.iter().any(|r| r.contains("fn     trim")),
+            "{screen:#?}"
+        );
+        for _ in 0..11 {
+            tinkery.send_keys("down");
+        }
+        tinkery.wait_for_text("fn     trim", WAIT);
+        // The cursor is on row `line + 2`, so the tenth row is eleven under.
+        let last = line + 2 + 11;
+        tinkery.wait_for_fg_at(LABEL_COL, last, STRONG, WAIT);
+        assert!(is_selected(&tinkery, last, 0, LABEL_COL));
+        tinkery.send_keys(key);
+        tinkery.wait_for_text_gone("fn     trim", WAIT);
+        tinkery.wait_for_text(&format!("Ln {line}, Col 11"), WAIT);
+        let screen = tinkery.screen();
+        assert!(
+            screen[usize::from(line) + 2].ends_with("s.trim"),
+            "{key} {screen:#?}"
+        );
+        if line == 2 {
+            tinkery.send_keys("enter");
+            tinkery.wait_for_text("Ln 3, Col 5", WAIT);
+        }
+    }
+    tinkery.send_keys("ctrl+s");
+    tinkery.wait_for_text("saved", WAIT);
+    assert_eq!(
+        project.read("comp.rs"),
+        "fn main() {\n    s.trim\n    s.trim\n}\n"
+    );
+}
+
+#[test]
 fn enter_and_tab_insert_the_item_as_one_undo_step() {
     let (project, mut tinkery) = completion_project(&completion_script(""));
 
