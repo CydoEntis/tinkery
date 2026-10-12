@@ -57,6 +57,7 @@ fn settings_creates_a_missing_config_from_the_template_and_opens_it() {
     tinkery.wait_for_text("# tab_width = 4", WAIT);
     tinkery.wait_for_text("# insert_spaces = true", WAIT);
     tinkery.wait_for_text("# auto_pairs = true", WAIT);
+    tinkery.wait_for_text("# auto_complete = true", WAIT);
     tinkery.wait_for_text("# theme = \"tinkery\"", WAIT);
     tinkery.wait_for_text("# pill_caps = true", WAIT);
     tinkery.wait_for_text("# corners = \"flush\"", WAIT);

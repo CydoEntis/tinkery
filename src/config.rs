@@ -66,6 +66,9 @@ pub struct EditorConfig {
     pub insert_spaces: bool,
     /// Typed brackets bring their closers along (see `Buffer::type_char`).
     pub auto_pairs: bool,
+    /// Typing a letter opens the completion popup. Off, only a trigger
+    /// character or the completion key does.
+    pub auto_complete: bool,
 }
 
 impl Default for EditorConfig {
@@ -74,6 +77,7 @@ impl Default for EditorConfig {
             tab_width: 4,
             insert_spaces: true,
             auto_pairs: true,
+            auto_complete: true,
         }
     }
 }
@@ -281,6 +285,7 @@ pub const TEMPLATE: &str = r#"# Tinkery's settings. Remove the `#` in front of a
 # tab_width = 4
 # insert_spaces = true
 # auto_pairs = true
+# auto_complete = true
 
 [ui]
 # Round pill ends need a Nerd Font; false squares them off.
@@ -551,7 +556,7 @@ save =",
         assert_eq!(loaded.config.editor, EditorConfig::default());
         assert_eq!(loaded.config.theme.as_deref(), Some("tinkery"));
         assert!(crate::keymap::Keymap::new(&loaded.config.keys).is_ok());
-        for name in ["tab_width", "insert_spaces", "auto_pairs"] {
+        for name in ["tab_width", "insert_spaces", "auto_pairs", "auto_complete"] {
             assert!(TEMPLATE.contains(&format!("# {name} = ")), "{name}");
         }
         for theme in crate::theme::NAMES {
@@ -742,6 +747,17 @@ motion = \"slow\"
         assert!(loaded.error.is_none(), "{:?}", loaded.error);
         assert!(!loaded.config.editor.auto_pairs);
         assert!(loaded.config.editor.insert_spaces);
+    }
+
+    #[test]
+    fn auto_complete_defaults_to_true_and_can_be_turned_off() {
+        assert!(parse("").config.editor.auto_complete);
+        let loaded = parse("[editor]\nauto_complete = false\n");
+        assert!(loaded.error.is_none(), "{:?}", loaded.error);
+        assert!(!loaded.config.editor.auto_complete);
+        assert!(loaded.config.editor.auto_pairs);
+        // The template's line is the default, under `auto_pairs`.
+        assert!(TEMPLATE.contains("# auto_pairs = true\n# auto_complete = true\n"));
     }
 
     #[test]

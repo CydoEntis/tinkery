@@ -1584,11 +1584,9 @@ fn typing_filters_and_the_arrows_move_the_selection() {
     tinkery.wait_for_fg_at(LABEL_COL + 2, ITEM_ROW, STRONG, WAIT);
     assert!(status_line(&tinkery).contains("Ln 2, Col 8"));
 
-    // A filter matching nothing hides the popup; Backspace brings it back.
+    // A filter matching nothing closes the popup.
     tinkery.type_text("z");
     tinkery.wait_for_text_gone("push", WAIT);
-    tinkery.send_keys("backspace");
-    tinkery.wait_for_text("push_str", WAIT);
 }
 
 #[test]
@@ -2015,6 +2013,96 @@ fn after_esc_the_next_letter_of_the_word_opens_the_popup_again() {
         requests[1]["params"]["position"],
         serde_json::json!({"line": 1, "character": 6})
     );
+}
+
+#[test]
+fn an_answer_matching_nothing_typed_opens_no_popup() {
+    // A publish sent right after the answer marks when it has been handled.
+    let extra = format!(
+        r#", "notify": {{"textDocument/completion": [{}]}}"#,
+        publish(&[(0, 0, 2, 2, "after the completion")])
+    );
+    let (project, mut tinkery) = completion_project(&completion_script(&extra));
+    tinkery.type_text("z");
+    tinkery.wait_for_text("✕ 0  ⚠ 1", WAIT);
+    assert_eq!(completion_requests(&project).len(), 1);
+    assert!(completion_labels(&tinkery).is_empty());
+    // Nothing is open, to take Esc or to filter: Backspace on a popup hidden
+    // for want of a match would show every item.
+    tinkery.send_keys("backspace");
+    tinkery.wait_for_text("Ln 2, Col 5", WAIT);
+    let screen = tinkery.screen();
+    assert!(
+        !screen.iter().any(|r| r.contains("capacity")),
+        "{screen:#?}"
+    );
+    assert_eq!(completion_requests(&project).len(), 1);
+    // The next letter asks as the first one did.
+    tinkery.type_text("c");
+    tinkery.wait_for_text("capacity", WAIT);
+    assert_eq!(completion_requests(&project).len(), 2);
+}
+
+#[test]
+fn a_letter_that_filters_every_item_away_closes_the_popup() {
+    let (project, mut tinkery) = completion_project(&completion_script(""));
+    tinkery.type_text("c");
+    tinkery.wait_for_text("capacity", WAIT);
+    tinkery.type_text("z");
+    tinkery.wait_for_text_gone("capacity", WAIT);
+    tinkery.wait_for_text("Ln 2, Col 7", WAIT);
+    // Closed, not hidden: Backspace to a word that matches doesn't bring it
+    // back, and no popup is left to take Esc.
+    tinkery.send_keys("backspace");
+    tinkery.wait_for_text("Ln 2, Col 6", WAIT);
+    let screen = tinkery.screen();
+    assert!(
+        !screen.iter().any(|r| r.contains("capacity")),
+        "{screen:#?}"
+    );
+    assert_eq!(completion_requests(&project).len(), 1);
+    tinkery.send_keys("esc");
+    // The next letter of the word asks again, as it does after Esc.
+    tinkery.type_text("h");
+    tinkery.wait_for_text("chars", WAIT);
+    assert_eq!(completion_labels(&tinkery), ["chars"]);
+    assert_eq!(completion_requests(&project).len(), 2);
+}
+
+#[test]
+fn auto_complete_off_asks_on_a_trigger_character_and_alt_slash_only() {
+    let config = format!("{}[editor]\nauto_complete = false\n", rust_server(fake()));
+    let (project, mut tinkery) = completion_project_with(&completion_script(""), &config);
+    tinkery.type_text("ca");
+    tinkery.wait_for_text("Ln 2, Col 7", WAIT);
+    // The trigger character still asks, and its request is the first the
+    // server got: it reads its messages in order, so the letters sent none.
+    tinkery.type_text(".");
+    tinkery.wait_for_text("capacity", WAIT);
+    let requests = completion_requests(&project);
+    assert_eq!(requests.len(), 1, "{requests:#?}");
+    assert_eq!(
+        requests[0]["params"]["position"],
+        serde_json::json!({"line": 1, "character": 7})
+    );
+    tinkery.send_keys("esc");
+    tinkery.wait_for_text_gone("capacity", WAIT);
+
+    // Letters with the popup closed ask nothing; Alt+/ does, and the popup
+    // opens on the word typed so far.
+    tinkery.type_text("le");
+    tinkery.wait_for_text("Ln 2, Col 10", WAIT);
+    let screen = tinkery.screen();
+    assert!(!screen.iter().any(|r| r.contains("method")), "{screen:#?}");
+    tinkery.send_keys("alt+/");
+    tinkery.wait_for_text("method len", WAIT);
+    let requests = completion_requests(&project);
+    assert_eq!(requests.len(), 2, "{requests:#?}");
+    assert_eq!(
+        requests[1]["params"]["position"],
+        serde_json::json!({"line": 1, "character": 9})
+    );
+    assert!(tinkery.screen()[4].starts_with("   2      ca.le"));
 }
 
 #[test]

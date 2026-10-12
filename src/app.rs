@@ -1967,7 +1967,8 @@ impl App {
                 self.edit(|buffer| buffer.type_char(ch, auto_pairs));
                 let doc = self.tabs.active().id;
                 if self.lsp.is_trigger(doc, ch)
-                    || (completion::opens_on(ch)
+                    || (self.editor.auto_complete
+                        && completion::opens_on(ch)
                         && self.lsp.completes(doc)
                         && !self.completion_awaited())
                 {
@@ -2029,14 +2030,16 @@ impl App {
     }
 
     /// After the word under an open popup changed: back to the best match, or
-    /// closed once the cursor has left the word.
+    /// closed once the cursor has left the word or nothing matches it. A popup
+    /// with no rows draws nothing, and would still take the next Esc.
     fn refilter(&mut self) {
         let buffer = self.buffer();
-        let on_word = self.completion.as_ref().is_some_and(|c| {
-            completion::typed_word(&buffer.rope, c.start, buffer.cursor).is_some()
+        let matched = self.completion.as_ref().is_some_and(|c| {
+            completion::typed_word(&buffer.rope, c.start, buffer.cursor)
+                .is_some_and(|typed| !c.shown(&typed).is_empty())
         });
         match &mut self.completion {
-            Some(open) if on_word => open.reset(),
+            Some(open) if matched => open.reset(),
             _ => self.completion = None,
         }
     }
@@ -2096,22 +2099,25 @@ impl App {
     }
 
     /// Opens the popup with a completion answer, unless something else has the
-    /// keys, the buffer changed, or the cursor has left the word it was asked
-    /// about.
+    /// keys, the buffer changed, the cursor has left the word it was asked
+    /// about, or no item matches what is typed of that word by now: a popup
+    /// with no rows draws nothing, and would still take the next Esc.
     fn show_completion(&mut self, doc: u64, items: Vec<CompletionItem>) {
         let Some((asked_doc, start, asked_at)) = self.completion_for.take() else {
             return;
         };
         let buffer = self.buffer();
-        let on_word = completion::typed_word(&buffer.rope, start, buffer.cursor).is_some();
+        let Some(typed) = completion::typed_word(&buffer.rope, start, buffer.cursor) else {
+            return;
+        };
+        let open = Completion::new(doc, start, asked_at, items);
         if asked_doc == doc
             && self.tabs.active().id == doc
-            && on_word
             && self.focus == Focus::Editor
             && !self.modal_open()
-            && !items.is_empty()
+            && !open.shown(&typed).is_empty()
         {
-            self.completion = Some(Completion::new(doc, start, asked_at, items));
+            self.completion = Some(open);
         }
     }
 
@@ -6244,6 +6250,77 @@ corners = \"square\"
         });
         assert!(app.save());
         assert_eq!(app.look.corners, Corners::Flush);
+    }
+
+    #[test]
+    fn applying_a_config_turns_auto_complete_off_and_back_on() {
+        let mut app = App::default();
+        assert!(app.editor.auto_complete);
+        app.apply_config_text("[editor]\nauto_complete = false\n")
+            .unwrap();
+        assert!(!app.editor.auto_complete);
+        assert_eq!(app.message.as_deref(), Some("settings applied"));
+        // A file that doesn't parse keeps it off; one without the line is the
+        // default again.
+        assert!(app.apply_config_text("[editor\n").is_err());
+        assert!(!app.editor.auto_complete);
+        app.apply_config_text("[editor]\ntab_width = 2\n").unwrap();
+        assert!(app.editor.auto_complete);
+    }
+
+    /// `word` typed on an empty buffer, then the answer `labels` to a
+    /// completion asked after its first letter.
+    fn answered(word: &str, labels: &[&str]) -> App {
+        let mut app = app_with("", &FakeClipboard::default());
+        app.edit(|b| b.type_text(word));
+        let doc = app.tabs.active().id;
+        app.completion_for = Some((doc, 0, 1));
+        let items = labels.iter().map(|label| CompletionItem {
+            label: (*label).into(),
+            kind: "fn",
+            detail: String::new(),
+            filter: (*label).into(),
+            text: (*label).into(),
+            edit: None,
+        });
+        app.show_completion(doc, items.collect());
+        app
+    }
+
+    #[test]
+    fn an_answer_matching_nothing_typed_opens_no_popup_to_take_the_next_esc() {
+        // The control: an item that matches opens it, and Esc closes it.
+        let mut app = answered("ca", &["capacity", "len"]);
+        assert!(app.completion.is_some());
+        press(&mut app, &["esc"]);
+        assert!(app.completion.is_none());
+
+        // Nothing starts with `zq`: no popup, so Esc and Enter are the
+        // editor's, as they are with nothing open.
+        let mut app = answered("zq", &["capacity", "len"]);
+        assert!(app.completion.is_none());
+        assert!(app.completion_for.is_none());
+        press(&mut app, &["esc", "enter"]);
+        assert!(app.completion.is_none());
+        assert_eq!(app.buffer().rope.to_string(), "zq\n");
+        // An answer with no items at all is the same.
+        assert!(answered("ca", &[]).completion.is_none());
+    }
+
+    #[test]
+    fn a_letter_that_filters_every_row_away_closes_the_popup() {
+        let mut app = answered("c", &["capacity", "chars"]);
+        press(&mut app, &["h"]);
+        assert!(app.completion.is_some());
+        press(&mut app, &["z"]);
+        assert!(app.completion.is_none());
+        assert_eq!(app.buffer().rope.to_string(), "chz");
+        // Closed, not hidden: Backspace doesn't bring it back, and Enter is
+        // the editor's.
+        press(&mut app, &["backspace"]);
+        assert!(app.completion.is_none());
+        press(&mut app, &["enter"]);
+        assert_eq!(app.buffer().rope.to_string(), "ch\n");
     }
 
     #[test]
