@@ -1965,7 +1965,12 @@ impl App {
             Input::Text(ch) => {
                 let auto_pairs = self.editor.auto_pairs;
                 self.edit(|buffer| buffer.type_char(ch, auto_pairs));
-                if self.lsp.is_trigger(self.tabs.active().id, ch) {
+                let doc = self.tabs.active().id;
+                if self.lsp.is_trigger(doc, ch)
+                    || (completion::opens_on(ch)
+                        && self.lsp.completes(doc)
+                        && !self.completion_awaited())
+                {
                     self.request_completion();
                 }
             }
@@ -2073,6 +2078,21 @@ impl App {
         if self.lsp.completion(doc, cursor) {
             self.completion_for = Some((doc, start, cursor));
         }
+    }
+
+    /// Whether the word under the cursor already has a completion on its way:
+    /// the reply opens filtered by everything typed since, so the letters after
+    /// the first needn't ask again.
+    fn completion_awaited(&self) -> bool {
+        let doc = self.tabs.active().id;
+        let buffer = self.buffer();
+        let start = completion::word_start(&buffer.rope, buffer.cursor);
+        // The server's side is checked too: a request that died with its server
+        // leaves `completion_for` behind, and must not silence the word for good.
+        self.lsp.awaits_completion(doc)
+            && self
+                .completion_for
+                .is_some_and(|(asked_doc, asked_start, _)| (asked_doc, asked_start) == (doc, start))
     }
 
     /// Opens the popup with a completion answer, unless something else has the

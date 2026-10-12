@@ -1319,8 +1319,10 @@ fn open_completion(project: &Project, tinkery: &mut Tinkery, line: u16) {
     tinkery.type_text("s");
     tinkery.wait_for_text(&format!("Ln {line}, Col 6"), WAIT);
     tinkery.type_text(".");
-    tinkery.wait_for_files("a completion request", WAIT, || {
-        completion_requests(project).len() > asked
+    // The `s` asks too, as any letter does; no item starts with it, so the
+    // popup is the `.`'s.
+    tinkery.wait_for_files("the completion requests", WAIT, || {
+        completion_requests(project).len() >= asked + 2
     });
     tinkery.wait_for_text("capacity", WAIT);
 }
@@ -1338,17 +1340,18 @@ const LABEL_COL: u16 = 23;
 fn a_trigger_character_or_alt_slash_shows_up_to_ten_items_with_kinds() {
     let (project, mut tinkery) = completion_project(&completion_script(""));
     open_completion(&project, &mut tinkery, 2);
+    // One request for the `s`, as for any letter, then the `.`'s.
     let requests = completion_requests(&project);
-    assert_eq!(requests.len(), 1);
+    assert_eq!(requests.len(), 2);
     assert_eq!(
-        requests[0]["params"]["position"],
+        requests[1]["params"]["position"],
         serde_json::json!({"line": 1, "character": 6})
     );
     // The server heard about the `.` before being asked about the text after it.
     let log: Vec<Value> = project.log().into_iter().map(|(_, m)| m).collect();
     let asked = log
         .iter()
-        .position(|m| method(m) == "textDocument/completion")
+        .rposition(|m| method(m) == "textDocument/completion")
         .expect("completion logged");
     let last_change = log[..asked]
         .iter()
@@ -1432,9 +1435,9 @@ fn a_trigger_character_or_alt_slash_shows_up_to_ten_items_with_kinds() {
     tinkery.send_keys("alt+/");
     tinkery.wait_for_text("capacity", WAIT);
     let requests = completion_requests(&project);
-    assert_eq!(requests.len(), 2);
+    assert_eq!(requests.len(), 3);
     assert_eq!(
-        requests[1]["params"]["position"],
+        requests[2]["params"]["position"],
         serde_json::json!({"line": 1, "character": 6})
     );
 }
@@ -1870,10 +1873,12 @@ fn a_late_answer_after_the_cursor_left_the_word_is_dropped() {
         publish(&[(0, 0, 2, 2, "after the completion")])
     );
     let (project, mut tinkery) = completion_project(&completion_script(&extra));
-    tinkery.type_text("s");
-    tinkery.wait_for_text("Ln 2, Col 6", WAIT);
+    // Only the `.`: a letter before it would ask too, and that request's publish
+    // would come before the answer this test is about.
     tinkery.type_text(".");
+    tinkery.wait_for_text("Ln 2, Col 6", WAIT);
     project.wait_for(&tinkery, "textDocument/completion", "comp.rs");
+    assert_eq!(completion_requests(&project).len(), 1);
     tinkery.send_keys("down");
     tinkery.wait_for_text("Ln 3, Col 2", WAIT);
 
@@ -1886,11 +1891,205 @@ fn a_late_answer_after_the_cursor_left_the_word_is_dropped() {
     assert!(status_line(&tinkery).contains("Ln 3, Col 2"));
     // Back on the word, the dropped answer doesn't come back either.
     tinkery.send_keys("up");
-    tinkery.wait_for_text("Ln 2, Col 7", WAIT);
+    tinkery.wait_for_text("Ln 2, Col 6", WAIT);
     let screen = tinkery.screen();
     assert!(
         !screen.iter().any(|r| r.contains("capacity")),
         "{screen:#?}"
+    );
+}
+
+/// The labels on the popup's rows from `ITEM_ROW` down, wherever its card sits.
+fn completion_labels(tinkery: &Tinkery) -> Vec<String> {
+    tinkery
+        .screen()
+        .iter()
+        .skip(usize::from(ITEM_ROW))
+        .map_while(|row| {
+            let (_, item) = row.split_once("method ")?;
+            // The selected row's pill ends in a cap right after a full-width label.
+            let label: String = item
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            Some(label)
+        })
+        .collect()
+}
+
+#[test]
+fn typing_a_letter_opens_the_popup_filtered_by_the_word() {
+    let (project, mut tinkery) = completion_project(&completion_script(""));
+    tinkery.type_text("c");
+    tinkery.wait_for_text("capacity", WAIT);
+    // Asked once, at the cursor after the `c`, which the server had heard of.
+    let requests = completion_requests(&project);
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0]["params"]["position"],
+        serde_json::json!({"line": 1, "character": 5})
+    );
+    let log: Vec<Value> = project.log().into_iter().map(|(_, m)| m).collect();
+    let asked = log
+        .iter()
+        .position(|m| method(m) == "textDocument/completion")
+        .expect("completion logged");
+    let last_change = log[..asked]
+        .iter()
+        .rfind(|m| method(m) == "textDocument/didChange")
+        .expect("a change before the request");
+    assert_eq!(last_change["params"]["contentChanges"][0]["text"], "c");
+
+    // Only the items starting with `c`, the typed letter `accent` bold in each.
+    let screen = tinkery.screen();
+    assert_eq!(
+        completion_labels(&tinkery),
+        ["capacity", "chars", "clear", "contains"],
+        "{screen:#?}"
+    );
+    // The card is under the cursor, a cell left of where it is after `s.`.
+    let label = LABEL_COL - 1;
+    for (row, name) in (ITEM_ROW..).zip(["capacity", "chars", "clear", "contains"]) {
+        assert_eq!(
+            tinkery.text_col(row, &format!("method {name}")),
+            Some(KIND_COL - 1),
+            "{screen:#?}"
+        );
+        assert_eq!(tinkery.fg_at(label, row), ACCENT, "{name}");
+        assert!(tinkery.bold_at(label, row), "{name}");
+    }
+    // The first row is the selected one, the rest of its label `strong` bold.
+    assert_eq!(tinkery.text_col(ITEM_ROW, "›"), Some(KIND_COL - 3));
+    assert_eq!(tinkery.bg_at(label + 1, ITEM_ROW), HOV);
+    assert_eq!(tinkery.fg_at(label + 1, ITEM_ROW), STRONG);
+    assert!(tinkery.bold_at(label + 1, ITEM_ROW));
+    assert_eq!(tinkery.text_col(ITEM_ROW + 1, "›"), None);
+    assert_eq!(tinkery.fg_at(label + 1, ITEM_ROW + 1), FG);
+    assert!(!tinkery.bold_at(label + 1, ITEM_ROW + 1));
+    assert!(screen[4].starts_with("   2      c"), "{screen:#?}");
+    assert!(status_line(&tinkery).contains("Ln 2, Col 6"));
+}
+
+#[test]
+fn more_letters_before_the_answer_ask_once_and_filter_it() {
+    let extra = r#", "delay": {"textDocument/completion": 1500}"#;
+    let (project, mut tinkery) = completion_project(&completion_script(extra));
+    tinkery.type_text("c");
+    project.wait_for(&tinkery, "textDocument/completion", "comp.rs");
+    tinkery.type_text("a");
+    tinkery.wait_for_text("Ln 2, Col 7", WAIT);
+    let screen = tinkery.screen();
+    assert!(
+        !screen.iter().any(|r| r.contains("capacity")),
+        "the answer came before the `a`: {screen:#?}"
+    );
+
+    tinkery.wait_for_text("capacity", WAIT);
+    let screen = tinkery.screen();
+    assert_eq!(completion_labels(&tinkery), ["capacity"], "{screen:#?}");
+    assert!(screen[4].starts_with("   2      ca"), "{screen:#?}");
+    // A third letter filters the open popup, which never asks.
+    tinkery.type_text("p");
+    tinkery.wait_for_text("Ln 2, Col 8", WAIT);
+    assert_eq!(completion_labels(&tinkery), ["capacity"]);
+    assert_eq!(completion_requests(&project).len(), 1);
+}
+
+#[test]
+fn after_esc_the_next_letter_of_the_word_opens_the_popup_again() {
+    let (project, mut tinkery) = completion_project(&completion_script(""));
+    tinkery.type_text("c");
+    tinkery.wait_for_text("capacity", WAIT);
+    tinkery.send_keys("esc");
+    tinkery.wait_for_text_gone("capacity", WAIT);
+    assert_eq!(completion_requests(&project).len(), 1);
+
+    tinkery.type_text("h");
+    tinkery.wait_for_text("chars", WAIT);
+    let screen = tinkery.screen();
+    assert_eq!(completion_labels(&tinkery), ["chars"], "{screen:#?}");
+    assert!(screen[4].starts_with("   2      ch"), "{screen:#?}");
+    let requests = completion_requests(&project);
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[1]["params"]["position"],
+        serde_json::json!({"line": 1, "character": 6})
+    );
+}
+
+#[test]
+fn a_digit_a_space_and_other_punctuation_ask_nothing() {
+    let (project, mut tinkery) = completion_project(&completion_script(""));
+    tinkery.type_text("7 ;");
+    tinkery.wait_for_text("Ln 2, Col 8", WAIT);
+    // The trigger character still asks, and its request is the only one: the
+    // server reads its messages in order, so nothing came before it.
+    tinkery.type_text(".");
+    tinkery.wait_for_text("capacity", WAIT);
+    let requests = completion_requests(&project);
+    assert_eq!(requests.len(), 1, "{requests:#?}");
+    assert_eq!(
+        requests[0]["params"]["position"],
+        serde_json::json!({"line": 1, "character": 8})
+    );
+}
+
+#[test]
+fn a_server_without_a_completion_provider_is_never_asked_by_typing() {
+    // The fake's own `initialize` answer has no `completionProvider`.
+    let script = r#"{"responses": {"textDocument/completion": {"isIncomplete": false,
+        "items": [{"label": "capacity", "kind": 2}]}}}"#;
+    let (project, mut tinkery) = completion_project(script);
+    tinkery.type_text("ca");
+    tinkery.wait_for_text("Ln 2, Col 7", WAIT);
+    // Alt+/ asks whatever the server said, as it always has, and that request
+    // is the first the server got.
+    tinkery.send_keys("alt+/");
+    tinkery.wait_for_text("capacity", WAIT);
+    let requests = completion_requests(&project);
+    assert_eq!(requests.len(), 1, "{requests:#?}");
+    assert_eq!(
+        requests[0]["params"]["position"],
+        serde_json::json!({"line": 1, "character": 6})
+    );
+}
+
+#[test]
+fn typing_into_the_find_bar_a_prompt_or_the_palette_asks_nothing() {
+    let (project, mut tinkery) = completion_project(&completion_script(""));
+    tinkery.send_keys("ctrl+f");
+    tinkery.wait_for_text("Find", WAIT);
+    tinkery.type_text("cap");
+    tinkery.wait_for_text("cap", WAIT);
+    tinkery.send_keys("esc");
+    tinkery.wait_for_text_gone("cap", WAIT);
+
+    // Save as is a prompt; its bar holds what is typed.
+    tinkery.send_keys("alt+s");
+    tinkery.wait_for_text("Save as", WAIT);
+    tinkery.type_text("cap");
+    tinkery.wait_for_text("cap", WAIT);
+    tinkery.send_keys("esc");
+    tinkery.wait_for_text_gone("cap", WAIT);
+
+    tinkery.send_keys("ctrl+p");
+    tinkery.wait_for_text("cast · files · commands", WAIT);
+    tinkery.type_text("cap");
+    tinkery.wait_for_text("cap", WAIT);
+    tinkery.send_keys("esc");
+    tinkery.wait_for_text_gone("cast ·", WAIT);
+
+    // Nothing was typed into the file, and Alt+/ in the editor sends the first
+    // request the server got.
+    let screen = tinkery.screen();
+    assert_eq!(screen[4].trim_end(), "   2", "{screen:#?}");
+    tinkery.send_keys("alt+/");
+    tinkery.wait_for_text("capacity", WAIT);
+    let requests = completion_requests(&project);
+    assert_eq!(requests.len(), 1, "{requests:#?}");
+    assert_eq!(
+        requests[0]["params"]["position"],
+        serde_json::json!({"line": 1, "character": 4})
     );
 }
 

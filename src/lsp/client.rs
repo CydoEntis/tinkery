@@ -50,6 +50,9 @@ pub struct Client {
     /// The characters that open completion when typed, from the server's
     /// `completionProvider`; empty until it's initialized, or when it has none.
     pub triggers: Vec<String>,
+    /// The server said it completes (it has a `completionProvider`), so typing
+    /// a word may ask it; `false` until it's initialized.
+    pub completes: bool,
     /// The server said it formats whole documents (`documentFormattingProvider`).
     pub formats: bool,
     /// The process was spawned, so a failure later is a crash rather than a
@@ -92,6 +95,7 @@ impl Client {
             pending: HashMap::new(),
             shutting_down: false,
             triggers: Vec::new(),
+            completes: false,
             formats: false,
             spawned,
             reason: None,
@@ -245,17 +249,19 @@ impl Client {
             }
         });
         self.state = State::Ready { sync };
-        self.triggers =
-            response["result"]["capabilities"]["completionProvider"]["triggerCharacters"]
-                .as_array()
-                .map(|list| {
-                    list.iter()
-                        .filter_map(Value::as_str)
-                        .filter(|t| !t.is_empty())
-                        .map(str::to_owned)
-                        .collect()
-                })
-                .unwrap_or_default();
+        let provider = &response["result"]["capabilities"]["completionProvider"];
+        // Its options are an object, and an empty one still means yes.
+        self.completes = provider.is_object();
+        self.triggers = provider["triggerCharacters"]
+            .as_array()
+            .map(|list| {
+                list.iter()
+                    .filter_map(Value::as_str)
+                    .filter(|t| !t.is_empty())
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
         // `true` or an options object both mean yes.
         let provider = &response["result"]["capabilities"]["documentFormattingProvider"];
         self.formats = provider.is_object() || provider.as_bool() == Some(true);
@@ -645,6 +651,7 @@ mod tests {
             "textDocumentSync": 2, "completionProvider": {"triggerCharacters": [".", ":", ""]}}}});
         client.handle(reply);
         assert_eq!(client.triggers, [".", ":"]);
+        assert!(client.completes);
         drain(&mut rx);
         let id = client.completion(&uri(), Position::new(2, 5));
         let sent = drain(&mut rx);
@@ -654,9 +661,11 @@ mod tests {
             sent[0]["params"]["position"],
             json!({"line": 2, "character": 5})
         );
-        // A server without a completion provider has no triggers.
+        // A server without a completion provider has no triggers, and isn't
+        // one to ask as a word is typed.
         let (client, _) = ready(json!(2));
         assert!(client.triggers.is_empty());
+        assert!(!client.completes);
     }
 
     #[test]
