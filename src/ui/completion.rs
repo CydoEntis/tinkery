@@ -38,6 +38,13 @@ pub fn is_word_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 
+/// Whether typing `c` with the popup closed asks for completions: a letter or
+/// `_`, which start or carry on a name. A digit is a word char but more often a
+/// number.
+pub fn opens_on(c: char) -> bool {
+    c.is_alphabetic() || c == '_'
+}
+
 /// Where the word ending at char index `cursor` starts: back over word chars.
 pub fn word_start(rope: &Rope, cursor: usize) -> usize {
     let mut start = cursor.min(rope.len_chars());
@@ -280,6 +287,16 @@ mod tests {
     use super::*;
     use crate::config::Corners;
     use crate::ui::kit::{CAP_L, CAP_R, SEL_MARK};
+
+    #[test]
+    fn letters_and_underscore_open_it_and_digits_and_punctuation_do_not() {
+        for c in ['c', 'Z', '_', 'é'] {
+            assert!(opens_on(c), "{c}");
+        }
+        for c in ['7', ' ', '.', '(', '-'] {
+            assert!(!opens_on(c), "{c}");
+        }
+    }
 
     fn item(label: &str, edit: Option<Range<usize>>) -> CompletionItem {
         CompletionItem {

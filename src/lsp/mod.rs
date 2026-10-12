@@ -898,6 +898,21 @@ impl Lsp {
             .is_some_and(|c| c.triggers.iter().any(|t| t == ch))
     }
 
+    /// Whether typing a word in buffer `doc` should ask for completions: the
+    /// ready server following the buffer offers them.
+    pub fn completes(&self, doc: u64) -> bool {
+        self.docs
+            .get(&doc)
+            .filter(|d| d.opened)
+            .and_then(|attached| self.servers.get(&attached.server))
+            .is_some_and(|c| c.is_ready() && c.completes)
+    }
+
+    /// Whether a completion asked for buffer `doc` is still unanswered.
+    pub fn awaits_completion(&self, doc: u64) -> bool {
+        self.completion.as_ref().is_some_and(|p| p.doc == doc)
+    }
+
     /// Asks the server following buffer `doc` to format it with the editor's
     /// indentation, when its language has `format_on_save`.
     pub fn format_on_save(
