@@ -2061,8 +2061,9 @@ fn a_letter_that_filters_every_item_away_closes_the_popup() {
         "{screen:#?}"
     );
     assert_eq!(completion_requests(&project).len(), 1);
-    tinkery.send_keys("esc");
-    // The next letter of the word asks again, as it does after Esc.
+    // The next letter of the word asks again, as it does after Esc. No Esc is
+    // sent here: it would change nothing on screen to wait for, and off
+    // Windows an Esc byte with a letter right behind it reads as Alt+letter.
     tinkery.type_text("h");
     tinkery.wait_for_text("chars", WAIT);
     assert_eq!(completion_labels(&tinkery), ["chars"]);
